@@ -178,6 +178,7 @@ Once a decision is reviewed, record the date and the outcome here.
 | 23 | **Compose host ports moved off the defaults.** A PostgreSQL instance is already listening on 5432 on the implementation machine, so the original mapping would have collided on first `up`. | Avoided | PostgreSQL now publishes on host 5433 and Redis on 6380, both overridable. Container-to-container traffic is unchanged. |
 | 24 | **`uv run pip-audit --strict` fails on the local project**, which is not on PyPI. | Avoided | `--strict` dropped from CI and `check-all.sh`, with the reason in a comment. Verified empirically that plain `pip-audit` still exits 1 on a real vulnerability (reproduced with pytest 8.4.2, 2 findings) and 0 when clean. |
 | 25 | **One upstream deprecation warning remains** in the backend suite: starlette advises `httpx2` for `TestClient`. Left visible rather than silenced, as a migration signal. | Cosmetic | Revisit when `httpx2` is stable. |
+| 27 | **Fixed 2026-10-13: no `.gitattributes`, so a Windows checkout produced CRLF and `npm run format:check` failed on 14 files** while Linux CI passed — a check that fails only on some machines. The shell scripts would have broken the same way on Linux (`bash: : command not found`). Found by running the checks from a fresh clone, not from the working tree. | Was blocking local verification | `.gitattributes` with `* text=auto eol=lf` added (`ef1de2b`); working tree renormalised. Committed blobs were already LF, so no file content changed. Re-verified from a fresh clone: LF checkout, all frontend and backend checks pass. |
 | 26 | **The secret scanner, image scan and Compose smoke gate are unverified locally.** `pre-commit`, `gitleaks` and `trivy` are not installed on the implementation machine, so the M1.1 criterion "the scanner fails on a planted test secret" has **not** been demonstrated. The hooks and CI jobs are configured but unproven. | Verification gap | Run `pre-commit install && pre-commit run --all-files`, plant a test secret, confirm it fails, then record it here. |
 
 ---
@@ -221,6 +222,24 @@ Frontend: `App` 7, `ThemeToggle` 6.
 | Fail-fast on a typo'd variable | run with `DCP_DEMOMODE=true` | **refuses to start**: "Unrecognised DCP_* environment variable(s)" |
 | Compose file validity | `docker compose --profile core config --quiet` | **exit 0** — parses and resolves without a daemon |
 | `pip-audit` really does gate | temporarily pinned pytest 8.4.2 | **exit 1**, 2 PYSEC findings; exit 0 after reverting |
+
+### Executed — post-merge verification from a clean clone (2026-10-13)
+
+Run after the M1.1 merge (`f9a21ca`) by cloning the repository to a scratch
+directory, because a working tree can pass checks that a fresh clone fails.
+
+| Check | Result |
+|---|---|
+| Clone file inventory vs working tree | **identical** (68 tracked files) |
+| `uv sync --frozen` | **pass** — `uv.lock` is consistent with `pyproject.toml`, which is what CI asserts |
+| `npm ci` | **pass** — `package-lock.json` consistent with `package.json` |
+| Backend ruff / format / mypy / bandit / pytest from the clone | **pass** — 77 tests |
+| Frontend lint / typecheck / tests / build / audit from the clone | **pass** — 13 tests |
+| Frontend `format:check` from the clone | **FAILED on 14 files** → root-caused and fixed, see issue 27 |
+| Committed blobs are LF (so Linux CI is unaffected) | **confirmed** for every tracked text file |
+| `.env.example` tracked despite the `.env.*` ignore rule | **confirmed** — the `!.env.example` negation works |
+| Lockfiles committed; `.venv` / `node_modules` / `dist` ignored | **confirmed** |
+| Re-verified from a second fresh clone after the fix | **LF checkout; all checks pass** |
 
 ### NOT executed — no result may be claimed
 
