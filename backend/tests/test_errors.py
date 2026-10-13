@@ -21,7 +21,32 @@ def test_404_uses_the_standard_envelope(client: TestClient) -> None:
 
 
 def test_405_is_mapped(client: TestClient) -> None:
-    assert client.post("/healthz").json()["error"]["code"] == "method_not_allowed"
+    """A wrong method on an existing route maps to ``method_not_allowed``.
+
+    The CSRF credentials are supplied because M1.3 put ``CsrfMiddleware``
+    outside the router: a state-changing request is rejected with ``403``
+    *before* routing, so without them this would never reach the 405. That
+    precedence is deliberate — no handler and no database session should be
+    created for a request that fails CSRF — and it is asserted directly by
+    ``test_csrf_is_checked_before_routing`` below.
+    """
+    client.cookies.set("dcp_csrf", "a-token")
+    response = client.post(
+        "/healthz", headers={"Origin": "http://testserver", "X-CSRF-Token": "a-token"}
+    )
+    assert response.json()["error"]["code"] == "method_not_allowed"
+
+
+def test_csrf_is_checked_before_routing(client: TestClient) -> None:
+    """A state-changing request without CSRF is refused whatever the path.
+
+    Including a path that does not exist — so probing for routes with POST
+    reveals nothing about which ones are real.
+    """
+    for path in ("/healthz", "/no-such-route", "/api/v1/auth/logout"):
+        response = client.post(path)
+        assert response.status_code == 403, path
+        assert response.json()["error"]["code"] == "forbidden"
 
 
 def test_correlation_id_is_present_in_the_envelope(client: TestClient) -> None:

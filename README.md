@@ -2,7 +2,7 @@
 
 Centralized monitoring and management portal for servers and applications across AWS, Azure and on-premises environments.
 
-**Current state: milestone M1.2 — database schema.** The application does not monitor anything, has no authentication, and has no cloud, Jenkins, Prometheus or Loki integration. What exists is the toolchain, the health endpoints, and the PostgreSQL schema with its migrations. [`PROGRESS.md`](PROGRESS.md) is the authoritative statement of what works.
+**Current state: milestone M1.3 — OIDC authentication and sessions.** You can sign in, see your identity, and sign out. The application does not **authorise** anything yet — there is no permission enforcement, so a signed-in user has no roles and can reach nothing beyond the auth endpoints. It monitors nothing and has no cloud, Jenkins, Prometheus or Loki integration. Authentication has been verified only against a local **mock** identity provider that checks no password (`OPEN-01`). [`PROGRESS.md`](PROGRESS.md) is the authoritative statement of what works.
 
 ## Documentation
 
@@ -32,12 +32,36 @@ Centralized monitoring and management portal for servers and applications across
 
 ```bash
 cp .env.example .env
-docker compose -f infra/compose/docker-compose.yml --profile core up --build
+docker compose -f infra/compose/docker-compose.yml --profile core --profile mocks up --build
 ```
 
 Then: frontend on <http://localhost:5173>, API on <http://localhost:8000>, API docs on <http://localhost:8000/docs> (local only).
 
-> **The Compose stack has never been started.** The Docker daemon was unavailable when M1.1 was implemented, so `docker compose up` and [`scripts/smoke-test.sh`](scripts/smoke-test.sh) are unexecuted. Expect to fix something the first time you run them, and please record the outcome in `PROGRESS.md`.
+**Sign in at <http://localhost:5173>.** The `mocks` profile is what makes that work: it runs a
+[mock OIDC provider](infra/compose/mock-idp/README.md) that checks no password and offers three
+synthetic accounts. Without that profile the app still starts and `/api/v1/auth/login` answers
+`503 not_configured` — which is the honest answer, not a failure.
+
+All three accounts begin with **no roles**, so you can sign in and see nothing until a role is
+granted. There is no bootstrap administrator by design; role administration arrives in M1.4, so
+until then a grant is a manual `INSERT` into `user_roles`.
+
+> **Two things to know about this Compose setup.**
+>
+> - `mock-idp` shares the `backend` container's network namespace, so that one issuer URL
+>   (`http://localhost:9000`) resolves both from your browser and from inside the backend. The
+>   `iss` claim is compared literally, so a single URL that works on both sides is the only way
+>   to avoid weakening the check that discovered endpoints stay on the issuer's origin. The
+>   consequence: if you recreate `backend` on its own, recreate `mock-idp` too. A plain
+>   `up -d` with both profiles does that for you.
+> - `DCP_OIDC_REDIRECT_URL` points at the **frontend** origin (`:5173`), not the backend's. In
+>   production the SPA and the API share one origin behind the reverse proxy (AD-02) and the dev
+>   server's proxy reproduces that, so the login flow and the redirect at the end of it stay on
+>   the origin you are browsing.
+
+> **`scripts/smoke-test.sh` is still unexecuted**, so the M1.1 criterion "every service starts
+> healthy" is not formally verified — though the `core` and `mocks` services have now been
+> started and used. See `PROGRESS.md`.
 
 ## Quick start — without Docker
 
@@ -57,7 +81,11 @@ To serve the API, export the variables from `.env.example` (pointing at `localho
 cd backend && uv run uvicorn app.main:app --reload
 ```
 
-> **On Windows, keep `--reload`.** uvicorn picks its event loop by platform: without `--reload` it uses `ProactorEventLoop`, which psycopg's async driver cannot use, so every database call fails and `/readyz` reports `database: false` even with PostgreSQL running. With `--reload` (or in a Linux container) uvicorn uses a selector loop and it works. Verified on Windows 11 with uvicorn 0.54.
+> **On Windows, keep `--reload`.** uvicorn picks its event loop by platform: without `--reload` it uses `ProactorEventLoop`, which psycopg's async driver cannot use, so every database call fails and `/readyz` reports `database: false` even with PostgreSQL running. With `--reload` (or in a Linux container) uvicorn uses a selector loop and it works. Verified on Windows 11 with uvicorn 0.54. The test suite handles this itself via a loop-factory hook in `backend/tests/conftest.py`.
+
+Running the backend natively but the mock IdP in Compose works too — point
+`DCP_OIDC_REDIRECT_URL` at `http://localhost:8000/api/v1/auth/callback` instead, since the SPA's
+dev server is not in the loop.
 
 Compose publishes PostgreSQL on host port **5433** and Redis on **6380** by default, because a developer machine often already runs those services on their standard ports. Override with `POSTGRES_HOST_PORT` / `REDIS_HOST_PORT`; container-to-container traffic always uses the standard ports, so `DCP_DATABASE_URL` is unaffected.
 
@@ -106,33 +134,40 @@ pre-commit install
 
 ```
 backend/            FastAPI modular monolith + Celery workers (AD-01)
-  app/core/         config, logging, redaction, errors, middleware
+  app/core/         config, logging, redaction, errors, middleware, CSRF,
+                    Redis client, rate limiting
   app/health/       liveness and readiness
   app/db/           base, types, engines, session, partition helpers
-  app/auth/         User model (authentication itself is M1.3)
-  app/authz/        roles, permissions, scoped grants
+  app/auth/         OIDC client, Redis session store, cookies, dependencies,
+                    JIT provisioning, /auth/* router, User model
+  app/authz/        roles, permissions, scoped grants (enforcement is M1.4)
   app/inventory/    cloud accounts, servers, applications, services, policies
   app/approvals/    approval policy
-  app/audit/        append-only audit events
+  app/audit/        append-only audit events + the record() writer
   app/workers/      Celery app and tasks
   alembic/          migrations; the schema's source of truth
   tests/            unit tests (no network, no database)
-  tests/integration/  needs real PostgreSQL via TEST_DATABASE_URL
+  tests/auth/       OIDC, session, cookie and CSRF unit tests
+  tests/integration/  needs real PostgreSQL via TEST_DATABASE_URL; the auth
+                    suite also needs real Redis via TEST_REDIS_URL
 frontend/           React + TypeScript + Vite + Tailwind SPA
+  src/auth/         session context and hooks
+  src/pages/        Login
 infra/compose/      Docker Compose stack, profiled
+  mock-idp/         mock OIDC provider — development aid only
 infra/{prometheus,loki,alloy}/   observability config (placeholders until M2/M3)
 scripts/            check-all, smoke test, doc link check, digest pinning
 docs/               architecture, security, database, API, plan, testing
 ```
 
-## What M1.1 deliberately leaves out
+## What is deliberately left out so far
 
 Each lands in a named milestone, so nothing here is an accidental gap:
 
 | Not implemented | Milestone |
 |---|---|
-| OIDC authentication, sessions, CSRF enforcement | M1.3 |
-| RBAC and per-route permission dependencies | M1.4 |
+| **RBAC and per-route permission dependencies** — the biggest gap right now: a signed-in user has no roles and nothing enforces permissions | M1.4 |
+| User and role administration, including granting the first administrator | M1.4 |
 | Server and application inventory | M1.5 |
 | Dashboard | M1.6 |
 | Prometheus metrics, systemd service state, staleness | M2 |

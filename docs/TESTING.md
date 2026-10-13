@@ -379,7 +379,7 @@ npm audit --audit-level=high
 ### Full stack and E2E **[to implement]**
 
 ```bash
-docker compose --profile core --profile observability --profile mocks up -d
+docker compose -f infra/compose/docker-compose.yml --profile core --profile mocks up -d
 ./scripts/smoke-test.sh
 npm run test:e2e --prefix frontend
 docker compose down -v
@@ -399,6 +399,13 @@ uv run pytest -q -m real_integration --integration-profile=nonprod-sandbox
 ./scripts/check-all.sh
 ```
 
+**Windows note.** `tests/conftest.py` forces a selector-based event loop through
+pytest-asyncio's loop-factory hook. Without it psycopg's async driver rejects the
+`ProactorEventLoop` asyncio picks by default on Windows, and every test touching
+the async engine fails with `InterfaceError`. This is a harness fix only — the
+application still needs `--reload` (or Linux) there, because uvicorn selects its
+loop through a factory and ignores the asyncio policy.
+
 **Markers:** `unit` (default), `integration` (containers required), `security`, `slow`, `real_integration` (opt-in, excluded from CI). A test lacking a marker is treated as `unit` and must not touch the network or the filesystem outside a temporary directory. Everything under `backend/tests/integration/` is marked `integration` automatically by a collection hook, so a new file there cannot be silently excluded.
 
 ### Integration tests need a database **[implemented in M1.2]**
@@ -412,7 +419,23 @@ export TEST_DATABASE_URL='postgresql+psycopg://dcp:placeholder-password@127.0.0.
 uv run pytest -m integration
 ```
 
-`TEST_DATABASE_URL` is deliberately **not** `DCP_`-prefixed: that prefix is reserved for application settings, and an unrecognised `DCP_*` variable is a startup error by design, so a test-harness variable wearing it would force that guard to be loosened.
+### Authentication tests also need Redis **[implemented in M1.3]**
+
+```bash
+export TEST_REDIS_URL='redis://127.0.0.1:6380/1'
+uv run pytest -m integration
+```
+
+Database `1`, not `0`: `0` is the Celery broker, and the suite clears its own
+key prefixes rather than issuing `FLUSHDB`, which would discard queued work in a
+developer's own stack.
+
+Unset, only the authentication suite skips — the rest of the integration tests
+still run, so the summary can look complete while the session store, the
+single-use `state` and the rate limiter went untested. `scripts/check-all.sh`
+reports that case explicitly for exactly that reason.
+
+`TEST_DATABASE_URL` and `TEST_REDIS_URL` are deliberately **not** `DCP_`-prefixed: that prefix is reserved for application settings, and an unrecognised `DCP_*` variable is a startup error by design, so a test-harness variable wearing it would force that guard to be loosened.
 
 Unset, the integration tests **skip with a reason**. Set but unreachable, they **fail** — "the database was configured and did not work" is a result, not a reason to skip. CI additionally fails the build if the integration suite reports zero collected tests, because a skipped suite and a passing suite look identical in a summary.
 

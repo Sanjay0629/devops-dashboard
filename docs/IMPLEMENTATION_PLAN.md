@@ -147,18 +147,22 @@ backend/app/workers/tasks/maintenance.py  backend/tests/test_migrations.py
 
 ## M1.3 — OIDC authentication and sessions
 
+**Status: complete, 2026-10-13.** `OPEN-04` resolved as Redis-only. Verified against
+the mock IdP only — a real-IdP round trip is still outstanding (`OPEN-01`). See
+[`../PROGRESS.md`](../PROGRESS.md) §7 for the executed results.
+
 **Tasks**
 
-- [ ] OIDC discovery, JWKS cache with rotation, auth-code + PKCE flow.
-- [ ] `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/session` per [API_CONTRACTS.md §12](API_CONTRACTS.md#12-authentication-endpoints).
-- [ ] `state`/`nonce`/verifier in Redis, single-use, TTL.
-- [ ] Session store: opaque id, idle + absolute deadlines, rotation on privilege change, termination support.
-- [ ] Cookie flags per [SECURITY.md §5](SECURITY.md#5-session-handling); `Secure=false` only on localhost.
-- [ ] CSRF double-submit middleware.
-- [ ] Just-in-time user provisioning on first login; disabled users rejected.
-- [ ] Auth-event audit writing.
-- [ ] Mock IdP in the `mocks` Compose profile.
-- [ ] Frontend: login redirect, session context, 401 handling, logout.
+- [x] OIDC discovery, JWKS cache with rotation, auth-code + PKCE flow.
+- [x] `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/session` per [API_CONTRACTS.md §12](API_CONTRACTS.md#12-authentication-endpoints).
+- [x] `state`/`nonce`/verifier in Redis, single-use, TTL.
+- [x] Session store: opaque id, idle + absolute deadlines, rotation on privilege change, termination support.
+- [x] Cookie flags per [SECURITY.md §5](SECURITY.md#5-session-handling); `Secure=false` only on localhost.
+- [x] CSRF double-submit middleware.
+- [x] Just-in-time user provisioning on first login; disabled users rejected.
+- [x] Auth-event audit writing.
+- [x] Mock IdP in the `mocks` Compose profile.
+- [x] Frontend: login redirect, session context, 401 handling, logout.
 
 **Expected files**
 
@@ -187,13 +191,13 @@ backend/tests/auth/{test_login_flow.py,test_session.py,test_csrf.py}
 
 **Security checks**
 
-- [ ] Open-redirect suite on `next`.
-- [ ] `state` replay and CSRF bypass attempts fail.
-- [ ] No token or session id in any log line (canary test).
-- [ ] Rate limit on `/auth/*` enforced.
-- [ ] `/auth/session`'s `permissions` array is proven to be advisory — an endpoint still rejects an action the array implies.
+- [x] Open-redirect suite on `next` — 19 rejected forms, including `//host`, `/\host`, percent-encoded `//` and CRLF header injection.
+- [x] `state` replay and CSRF bypass attempts fail — verified in the integration suite and by hand over HTTP.
+- [x] No token or session id in any log line (canary test) — asserted in the suites and swept over the real container logs.
+- [x] Rate limit on `/auth/*` enforced — and proven to fail **closed** when Redis is unavailable.
+- [ ] `/auth/session`'s `permissions` array is proven to be advisory — an endpoint still rejects an action the array implies. **Deferred to M1.4:** there is no permission-bearing endpoint to reject one yet. Covered so far only structurally (the array is scope-blind and nothing reads it server-side).
 
-**Definition of done.** Login/logout work in Compose; the full auth test suite passes; `PROGRESS.md` records which IdP was used (mock vs real).
+**Definition of done.** Login/logout work in Compose; the full auth test suite passes; `PROGRESS.md` records which IdP was used (mock vs real). — **Met 2026-10-13:** login and logout driven through the `core` + `mocks` stack in a real browser; 126 auth unit tests and 39 auth integration tests pass; the IdP used was the **mock** and `PROGRESS.md` says so.
 
 **Risks / rollback.** Risk: real-IdP specifics (claim shapes, redirect registration) differ from the mock; OPEN-01 unresolved. Mitigation: keep the client generic, test against the real IdP as soon as one exists, and treat the mock as a development aid rather than proof. Rollback: feature-branch revert; no schema change beyond `users`.
 

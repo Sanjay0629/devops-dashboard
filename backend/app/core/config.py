@@ -58,6 +58,43 @@ class Settings(BaseSettings):
     )
     redis_url: SecretStr = Field(..., description="redis://host:6379/0")
 
+    # --- OIDC (M1.3, docs/SECURITY.md §2) -----------------------------------
+    # All optional: PRD §11 requires the app to start without production
+    # credentials. Unconfigured, /auth/login returns 503 not_configured rather
+    # than pretending to work (CLAUDE.md §7). That is also fail-closed: nobody
+    # authenticates against an IdP that was never configured.
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: SecretStr | None = None
+    #: Registered with the IdP **exactly** (docs/SECURITY.md §2). Not derived
+    #: from the request: a Host header is attacker-controlled, and deriving a
+    #: redirect URI from one is how an open redirect gets built by accident.
+    oidc_redirect_url: str | None = None
+    oidc_scopes: Annotated[tuple[str, ...], NoDecode] = ("openid", "email", "profile")
+    #: Clock-skew tolerance on exp/iat/nbf. Bounded: a large leeway turns an
+    #: expired token into a valid one.
+    oidc_clock_skew_seconds: int = Field(default=60, ge=0, le=300)
+    oidc_http_timeout_seconds: float = Field(default=10.0, gt=0, le=30)
+    #: How long a cached discovery document and JWKS are trusted before refetch.
+    oidc_metadata_ttl_seconds: int = Field(default=3_600, ge=60, le=86_400)
+    #: Floor between JWKS refetches triggered by an unknown `kid`, so a stream
+    #: of forged kids cannot turn into a request amplifier against the IdP
+    #: (docs/TESTING.md §9).
+    oidc_jwks_min_refresh_seconds: int = Field(default=60, ge=5, le=3_600)
+
+    # --- sessions (docs/SECURITY.md §5) -------------------------------------
+    # Redis-only (OPEN-04, resolved: the documented default). Login and logout
+    # are still audited in PostgreSQL, so the authentication record survives a
+    # flushed Redis even though the live sessions do not.
+    session_idle_timeout_seconds: int = Field(default=1_800, ge=60, le=86_400)
+    session_absolute_timeout_seconds: int = Field(default=28_800, ge=300, le=604_800)
+    #: TTL of the state/nonce/PKCE record created by /auth/login.
+    oidc_login_state_ttl_seconds: int = Field(default=600, ge=60, le=3_600)
+
+    # --- rate limiting (AD-19, docs/SECURITY.md §13) ------------------------
+    auth_rate_limit_max: int = Field(default=10, ge=1, le=10_000)
+    auth_rate_limit_window_seconds: int = Field(default=300, ge=1, le=86_400)
+
     # --- tunables ------------------------------------------------------------
     database_statement_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
     readiness_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
@@ -73,6 +110,29 @@ class Settings(BaseSettings):
             return tuple(part.strip() for part in value.split(",") if part.strip())
         return value
 
+    @field_validator("oidc_scopes", mode="before")
+    @classmethod
+    def _split_scopes(cls, value: object) -> object:
+        """Accept a space- or comma-separated string, as OIDC and env vars do."""
+        if isinstance(value, str):
+            return tuple(part for part in value.replace(",", " ").split() if part)
+        return value
+
+    @field_validator("oidc_issuer", "oidc_redirect_url")
+    @classmethod
+    def _check_absolute_http_url(cls, value: str | None) -> str | None:
+        """Reject anything that is not an absolute http(s) URL.
+
+        A relative or non-HTTP value here would be fetched or redirected to
+        later; rejecting it at load time keeps that out of the request path.
+        """
+        if value is None:
+            return None
+        value = value.rstrip("/") or value
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("must be an absolute http:// or https:// URL")
+        return value
+
     @field_validator("api_base_path")
     @classmethod
     def _check_base_path(cls, value: str) -> str:
@@ -85,7 +145,21 @@ class Settings(BaseSettings):
         if "*" in self.cors_origins:
             # docs/SECURITY.md §12 — never a wildcard, in any environment.
             raise ValueError("cors_origins must not contain '*'")
+        if "openid" not in self.oidc_scopes:
+            # Without it the provider need not issue an ID token at all, and
+            # ID-token verification is the whole authentication decision.
+            raise ValueError("oidc_scopes must include 'openid'")
+        if self.session_idle_timeout_seconds > self.session_absolute_timeout_seconds:
+            raise ValueError(
+                "session_idle_timeout_seconds must not exceed "
+                "session_absolute_timeout_seconds; an idle deadline beyond the "
+                "absolute one can never be reached"
+            )
         if self.environment != "local":
+            for name in ("oidc_issuer", "oidc_redirect_url"):
+                url = getattr(self, name)
+                if url is not None and not url.startswith("https://"):
+                    raise ValueError(f"{name} must use https outside the 'local' environment")
             if self.demo_mode:
                 raise ValueError(
                     "demo_mode must be false outside the 'local' environment; "
@@ -98,6 +172,28 @@ class Settings(BaseSettings):
     @property
     def is_local(self) -> bool:
         return self.environment == "local"
+
+    @property
+    def oidc_configured(self) -> bool:
+        return all(
+            value is not None
+            for value in (
+                self.oidc_issuer,
+                self.oidc_client_id,
+                self.oidc_client_secret,
+                self.oidc_redirect_url,
+            )
+        )
+
+    @property
+    def cookie_secure(self) -> bool:
+        """``Secure`` on the session and CSRF cookies.
+
+        Derived, not configurable. docs/SECURITY.md §5 permits exactly one
+        deviation — ``Secure=false`` on localhost — so this is a property
+        rather than a setting that a deployment could get wrong.
+        """
+        return not self.is_local
 
 
 def _unknown_environment_variables() -> list[str]:

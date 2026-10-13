@@ -96,6 +96,26 @@ def test_full_downgrade_to_base_leaves_no_tables(migrated: Engine, alembic_confi
     command.upgrade(alembic_config, "head")
 
 
+def test_the_migrations_seed_no_user(migrated: Engine, alembic_config: Config) -> None:
+    """No bootstrap administrator and no default credential ship.
+
+    Asserted here rather than in ``test_constraints.py`` because it is a
+    statement about the *migrations*, not about the table's current contents:
+    the session-scoped schema is shared, and M1.3's authentication tests
+    legitimately create users in it. Users attributed by an audit event cannot
+    be deleted afterwards (``actor_id`` is ON DELETE RESTRICT and
+    ``audit_events`` is append-only), so a bare `count(*) = 0` would fail for
+    the wrong reason. Rebuilding the schema here makes the claim exact.
+    """
+    command.downgrade(alembic_config, "base")
+    command.upgrade(alembic_config, "head")
+    with migrated.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM users")).scalar() == 0
+        # The reference data the application does need is there, so this is not
+        # passing merely because the seed did nothing.
+        assert connection.execute(text("SELECT count(*) FROM roles")).scalar() == 5
+
+
 def test_seed_revision_is_idempotent(migrated: Engine, alembic_config: Config) -> None:
     """Re-applying the seed must not duplicate reference data."""
     with migrated.connect() as connection:

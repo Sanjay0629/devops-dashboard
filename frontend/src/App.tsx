@@ -1,81 +1,63 @@
-import { useCallback, useEffect, useState } from 'react';
-
-import { fetchReadiness, type ProbeState } from '@/api/health';
+import { BackendStatus } from '@/components/BackendStatus';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { SessionProvider } from '@/auth/SessionProvider';
+import { useSession } from '@/auth/useSession';
+import { Login } from '@/pages/Login';
 
 /**
- * M1.1 landing page: the backend's own health, honestly reported.
+ * Composition root and session gate.
  *
- * The shape matters more than the content. It establishes the rule that every
- * later page follows (PRD §4.2, docs/API_CONTRACTS.md §4): unknown is rendered
- * as unknown. There is no code path here that turns "no answer" into a
- * reassuring default — an unreachable backend says so.
+ * Three states, rendered as three different things, because conflating them is
+ * the bug this file exists to avoid:
+ *
+ * - `loading` — we have not asked yet. Not "signed out".
+ * - `anonymous` — the server said `401`. Show the login page.
+ * - `unreachable` — we could not ask. Show the login page *saying so*, rather
+ *   than implying the user was logged out by a backend that is simply down.
+ *
+ * The real routing shell is M1.6; until then "signed in" lands on the backend
+ * status panel.
  */
 
-const STATE_LABEL: Record<ProbeState['kind'], string> = {
-  loading: 'Checking…',
-  ok: 'Ready',
-  unready: 'Not ready',
-  unreachable: 'Unreachable',
-};
+function Shell(): React.JSX.Element {
+  const { state, signOut } = useSession();
 
-const STATE_COLOUR: Record<ProbeState['kind'], string> = {
-  loading: 'var(--c-unknown)',
-  ok: 'var(--c-healthy)',
-  unready: 'var(--c-warning)',
-  unreachable: 'var(--c-critical)',
-};
+  if (state.kind === 'loading') {
+    return (
+      <main className="mx-auto max-w-2xl px-4 py-16">
+        <p role="status" style={{ color: 'var(--c-text-muted)' }}>
+          Checking your session…
+        </p>
+      </main>
+    );
+  }
 
-/** Colour is never the only signal (PRD §8), so each state carries a glyph too. */
-const STATE_GLYPH: Record<ProbeState['kind'], string> = {
-  loading: '…',
-  ok: '✓',
-  unready: '!',
-  unreachable: '×',
-};
+  if (state.kind === 'anonymous') return <Login />;
+  if (state.kind === 'unreachable') return <Login reason="unreachable" />;
 
-function CheckRow({ name, passed }: { name: string; passed: boolean }): React.JSX.Element {
-  return (
-    <div
-      className="flex items-center justify-between border-t px-4 py-2"
-      style={{ borderColor: 'var(--c-border)' }}
-    >
-      <code className="text-sm">{name}</code>
-      <span
-        className="flex items-center gap-2 text-sm font-medium"
-        style={{ color: passed ? 'var(--c-healthy)' : 'var(--c-critical)' }}
-      >
-        <span aria-hidden="true">{passed ? '✓' : '×'}</span>
-        {passed ? 'pass' : 'fail'}
-      </span>
-    </div>
-  );
-}
-
-export function App(): React.JSX.Element {
-  const [state, setState] = useState<ProbeState>({ kind: 'loading' });
-  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
-
-  const refresh = useCallback(async () => {
-    setState({ kind: 'loading' });
-    const next = await fetchReadiness();
-    setState(next);
-    setCheckedAt(new Date());
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const readiness = state.kind === 'ok' || state.kind === 'unready' ? state.readiness : null;
+  const { session } = state;
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-10">
+      {session.demo_mode && (
+        // AD-15: demonstration mode is never silent. A persistent banner, not
+        // a one-time toast, because the point is that nobody mistakes
+        // synthetic data for a live integration.
+        <div
+          role="status"
+          className="mb-6 rounded border px-4 py-2 text-sm"
+          style={{ borderColor: 'var(--c-warning)', color: 'var(--c-warning)' }}
+        >
+          <strong>Demonstration mode.</strong> Data shown may be synthetic and integrations are not
+          operational.
+        </div>
+      )}
+
       <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M1.1 — foundation. No monitoring, authentication or integrations are
+            Milestone M1.3 — authentication. No monitoring, inventory or integrations are
             implemented yet.
           </p>
         </div>
@@ -83,57 +65,62 @@ export function App(): React.JSX.Element {
       </header>
 
       <section
-        className="rounded-lg border"
+        className="mb-6 rounded-lg border"
         style={{ background: 'var(--c-surface)', borderColor: 'var(--c-border)' }}
-        aria-labelledby="backend-status-heading"
+        aria-labelledby="identity-heading"
       >
-        <div className="flex items-center justify-between px-4 py-3">
-          <h2 id="backend-status-heading" className="font-medium">
-            Backend status
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <h2 id="identity-heading" className="font-medium">
+            Signed in
           </h2>
-          <span
-            className="flex items-center gap-2 font-semibold"
-            style={{ color: STATE_COLOUR[state.kind] }}
-            role="status"
-          >
-            <span aria-hidden="true">{STATE_GLYPH[state.kind]}</span>
-            {STATE_LABEL[state.kind]}
-          </span>
-        </div>
-
-        {readiness !== null &&
-          Object.entries(readiness.checks).map(([name, passed]) => (
-            <CheckRow key={name} name={name} passed={passed} />
-          ))}
-
-        {state.kind === 'unreachable' && (
-          <p
-            className="border-t px-4 py-3 text-sm"
-            style={{ borderColor: 'var(--c-border)', color: 'var(--c-text-muted)' }}
-          >
-            No response from the backend. Dependency status is <strong>unknown</strong> — not
-            healthy, and not zero.
-          </p>
-        )}
-
-        <div
-          className="flex items-center justify-between border-t px-4 py-3 text-sm"
-          style={{ borderColor: 'var(--c-border)', color: 'var(--c-text-muted)' }}
-        >
-          <span>
-            {checkedAt === null ? 'Not yet checked' : `Checked at ${checkedAt.toISOString()}`}
-          </span>
           <button
             type="button"
-            onClick={() => void refresh()}
-            disabled={state.kind === 'loading'}
-            className="rounded border px-3 py-1 disabled:opacity-50"
+            onClick={() => void signOut()}
+            className="rounded border px-3 py-1 text-sm"
             style={{ borderColor: 'var(--c-border)', color: 'var(--c-text)' }}
           >
-            Refresh
+            Sign out
           </button>
         </div>
+        <dl className="border-t px-4 py-3 text-sm" style={{ borderColor: 'var(--c-border)' }}>
+          <div className="flex justify-between gap-4 py-1">
+            <dt style={{ color: 'var(--c-text-muted)' }}>Name</dt>
+            <dd>{session.user.display_name}</dd>
+          </div>
+          <div className="flex justify-between gap-4 py-1">
+            <dt style={{ color: 'var(--c-text-muted)' }}>Email</dt>
+            <dd>{session.user.email}</dd>
+          </div>
+          <div className="flex justify-between gap-4 py-1">
+            <dt style={{ color: 'var(--c-text-muted)' }}>Roles</dt>
+            <dd>
+              {session.roles.length === 0 ? (
+                // Not "none" dressed up as a neutral dash: a user with no role
+                // can see nothing, and saying so is more useful than hiding it.
+                <span style={{ color: 'var(--c-warning)' }}>
+                  No roles granted — ask an administrator
+                </span>
+              ) : (
+                session.roles.map((role) => role.name).join(', ')
+              )}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-4 py-1">
+            <dt style={{ color: 'var(--c-text-muted)' }}>Session expires</dt>
+            <dd>{session.session.expires_at}</dd>
+          </div>
+        </dl>
       </section>
+
+      <BackendStatus />
     </main>
+  );
+}
+
+export function App(): React.JSX.Element {
+  return (
+    <SessionProvider>
+      <Shell />
+    </SessionProvider>
   );
 }

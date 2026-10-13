@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { App } from '@/App';
+import { BackendStatus } from '@/components/BackendStatus';
 
 function mockReadyz(body: unknown, { ok = true, status = 200 } = {}): void {
   vi.stubGlobal(
@@ -15,16 +15,15 @@ function mockReadyz(body: unknown, { ok = true, status = 200 } = {}): void {
   );
 }
 
-describe('App', () => {
+describe('BackendStatus', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('renders the title and says what is not built yet', async () => {
+  it('reports a ready backend', async () => {
     mockReadyz({ status: 'ok', checks: { database: true, broker: true } });
-    render(<App />);
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('DevOps Control Plane');
-    expect(screen.getByText(/no monitoring, authentication or/i)).toBeInTheDocument();
+    render(<BackendStatus />);
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Backend status');
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('Ready');
     });
@@ -38,7 +37,7 @@ describe('App', () => {
         status: 503,
       },
     );
-    render(<App />);
+    render(<BackendStatus />);
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('Not ready');
     });
@@ -50,7 +49,7 @@ describe('App', () => {
 
   it('reports an unreachable backend as unknown, never as healthy', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')));
-    render(<App />);
+    render(<BackendStatus />);
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('Unreachable');
     });
@@ -63,7 +62,7 @@ describe('App', () => {
 
   it('treats a malformed response as unreachable rather than trusting it', async () => {
     mockReadyz({ unexpected: 'shape' });
-    render(<App />);
+    render(<BackendStatus />);
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('Unreachable');
     });
@@ -71,7 +70,7 @@ describe('App', () => {
 
   it('does not claim a check time before any check has run', () => {
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => undefined)));
-    render(<App />);
+    render(<BackendStatus />);
     expect(screen.getByText('Not yet checked')).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Checking');
   });
@@ -85,7 +84,7 @@ describe('App', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<App />);
+    render(<BackendStatus />);
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('Ready');
     });
@@ -97,7 +96,7 @@ describe('App', () => {
 
   it('conveys status with text, not colour alone', async () => {
     mockReadyz({ status: 'ok', checks: { database: true } });
-    render(<App />);
+    render(<BackendStatus />);
 
     // PRD §8: the state must survive with colour removed, so it has to be in
     // the text a screen reader reads out — not only in a style attribute.

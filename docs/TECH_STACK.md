@@ -225,6 +225,8 @@ Recharts and uPlot (with a thin React wrapper) both plausibly qualify; `visx` if
 **Responsibility:** authentication only. Authorisation is always DCP's own (AD-03).
 **Rules:** authorisation code + PKCE, confidential client, discovery document, JWKS verification with caching and rotation, `state` and `nonce` validated, exact redirect-URI registration, clock-skew tolerance. Roles are **not** taken from token claims initially (OPEN-01) because DCP must be able to revoke permissions without an IdP change.
 
+**Implementation (M1.3).** `pyjwt[crypto]` for ID-token verification and `httpx` for discovery, JWKS and the token exchange. Against [§10](#10-rules-for-introducing-a-new-dependency): `httpx` was already an approved choice here ([§3](#3-backend)) and only moved from the dev group to the runtime dependencies. `pyjwt` failed rung 3 — "is it a few lines?" — because the few lines in question are RS256/ECDSA signature verification, JWKS key selection and the `alg`-confusion defence, which is the one place in this codebase not to save lines. Alternatives considered: `authlib` (a much larger surface, and it bundles an OAuth client whose redirect handling we deliberately own), `python-jose` (stale). Cost: `pyjwt` pulls `cryptography`, which is a large but unavoidable transitive dependency for any JWS verification.
+
 ### 6.5 Jenkins REST API
 
 **Responsibility:** trigger registered jobs with parameters from registered configuration; poll queue item → build → result; fetch console output for authorised users.
@@ -339,7 +341,7 @@ The frontend and backend contract is kept aligned mechanically, not by disciplin
 |---|---|---|
 | OPEN-01 | OIDC provider; claim→role mapping | Generic OIDC; roles assigned in DCP |
 | OPEN-03 | Alert rules file-managed vs in-app | File-managed in git |
-| OPEN-04 | Redis-only sessions vs a durable session table | Redis-only |
+| ~~OPEN-04~~ | Redis-only sessions vs a durable session table | **RESOLVED 2026-10-13 (M1.3): Redis-only.** No `user_sessions` table; auth events still audited in PostgreSQL |
 | OPEN-05 | Restricted agent: adopt (SSM hybrid / Arc) vs build | Adopt |
 | OPEN-06 | Canonical secret store | Pluggable interface, one backend per deployment |
 | OPEN-08 | Prometheus/Loki retention and storage budget | 30 d / 14 d placeholders |

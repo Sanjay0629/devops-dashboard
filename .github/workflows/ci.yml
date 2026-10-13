@@ -84,6 +84,11 @@ jobs:
           # application settings, and an unrecognised DCP_* variable is a
           # startup error by design.
           TEST_DATABASE_URL: postgresql+psycopg://dcp:placeholder-password@localhost:5432/dcp_test
+          # M1.3: the authentication suite needs a real Redis (session store,
+          # single-use `state`, rate limiter). Without it those tests skip while
+          # the rest still pass, so the summary would read green with the
+          # session controls untested. Database 1, so the broker is untouched.
+          TEST_REDIS_URL: redis://localhost:6379/1
         run: uv run pytest -m integration --cov=app --cov-append --cov-report=term-missing --cov-report=xml
 
       - name: Fail if integration tests were skipped
@@ -92,6 +97,7 @@ jobs:
         # rather than a green tick.
         env:
           TEST_DATABASE_URL: postgresql+psycopg://dcp:placeholder-password@localhost:5432/dcp_test
+          TEST_REDIS_URL: redis://localhost:6379/1
         run: |
           set -euo pipefail
           output="$(uv run pytest -m integration --collect-only -q 2>&1 | tail -3)"

@@ -63,6 +63,9 @@ class AppError(Exception):
     status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR
     code: str = "internal_error"
     message: str = "An unexpected error occurred."
+    #: Response headers this error must carry, e.g. ``Retry-After`` on a 429
+    #: (docs/API_CONTRACTS.md §1.2). Built per instance by ``response_headers``.
+    headers: dict[str, str] | None = None
 
     def __init__(
         self,
@@ -74,6 +77,14 @@ class AppError(Exception):
         if message is not None:
             self.message = message
         self.details = details
+
+    def response_headers(self) -> dict[str, str] | None:
+        """Headers for this error response.
+
+        Overridden where the status code implies one — a ``429`` without
+        ``Retry-After`` tells the client nothing about when to come back.
+        """
+        return self.headers
 
 
 class NotConfiguredError(AppError):
@@ -117,6 +128,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_body(exc.code, exc.message, exc.details),
+            headers=exc.response_headers(),
         )
 
     @app.exception_handler(RequestValidationError)
