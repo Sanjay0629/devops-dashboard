@@ -2,7 +2,7 @@
 
 Centralized monitoring and management portal for servers and applications across AWS, Azure and on-premises environments.
 
-**Current state: milestone M1.1 — repository foundation.** The application does not monitor anything, has no authentication, and has no cloud, Jenkins, Prometheus or Loki integration. What exists is the toolchain, the health endpoints, and the verification loop every later milestone depends on. [`PROGRESS.md`](PROGRESS.md) is the authoritative statement of what works.
+**Current state: milestone M1.2 — database schema.** The application does not monitor anything, has no authentication, and has no cloud, Jenkins, Prometheus or Loki integration. What exists is the toolchain, the health endpoints, and the PostgreSQL schema with its migrations. [`PROGRESS.md`](PROGRESS.md) is the authoritative statement of what works.
 
 ## Documentation
 
@@ -61,6 +61,23 @@ cd backend && uv run uvicorn app.main:app --reload
 
 Compose publishes PostgreSQL on host port **5433** and Redis on **6380** by default, because a developer machine often already runs those services on their standard ports. Override with `POSTGRES_HOST_PORT` / `REDIS_HOST_PORT`; container-to-container traffic always uses the standard ports, so `DCP_DATABASE_URL` is unaffected.
 
+## Database
+
+Migrations are an explicit step, never run from application startup:
+
+```bash
+cd backend && uv run alembic upgrade head
+```
+
+```bash
+cd backend && uv run alembic downgrade -1
+```
+
+The schema is defined in [`docs/DATABASE.md`](docs/DATABASE.md). Two things about it are load-bearing rather than incidental:
+
+- **`audit_events` is append-only.** `UPDATE`, `DELETE` and `TRUNCATE` all raise, enforced by triggers rather than by grants alone — a superuser bypasses grants, which was measured rather than assumed.
+- **`audit_events` is partitioned by month**, and a write outside every partition range *fails*. Since audit writes share the transaction of the privileged change they record, that failure would also fail the operation, so a scheduled job keeps a three-month runway ahead and warns when it shrinks.
+
 ## Checks
 
 Run everything, as CI does:
@@ -91,9 +108,16 @@ pre-commit install
 backend/            FastAPI modular monolith + Celery workers (AD-01)
   app/core/         config, logging, redaction, errors, middleware
   app/health/       liveness and readiness
-  app/db/           engine and session factory
+  app/db/           base, types, engines, session, partition helpers
+  app/auth/         User model (authentication itself is M1.3)
+  app/authz/        roles, permissions, scoped grants
+  app/inventory/    cloud accounts, servers, applications, services, policies
+  app/approvals/    approval policy
+  app/audit/        append-only audit events
   app/workers/      Celery app and tasks
-  tests/            unit tests; no network, no database
+  alembic/          migrations; the schema's source of truth
+  tests/            unit tests (no network, no database)
+  tests/integration/  needs real PostgreSQL via TEST_DATABASE_URL
 frontend/           React + TypeScript + Vite + Tailwind SPA
 infra/compose/      Docker Compose stack, profiled
 infra/{prometheus,loki,alloy}/   observability config (placeholders until M2/M3)
@@ -107,7 +131,6 @@ Each lands in a named milestone, so nothing here is an accidental gap:
 
 | Not implemented | Milestone |
 |---|---|
-| Database schema, models, Alembic migrations | M1.2 |
 | OIDC authentication, sessions, CSRF enforcement | M1.3 |
 | RBAC and per-route permission dependencies | M1.4 |
 | Server and application inventory | M1.5 |
@@ -117,7 +140,7 @@ Each lands in a named milestone, so nothing here is an accidental gap:
 | Cloud adapters, service operations, approvals, audit | M4 |
 | Jenkins deployments | M5 |
 
-`/readyz` reports a `migrations` check that currently returns `false`: no schema exists yet, so it is reported but does not gate readiness. M1.2 adds it to the required set and upgrades it from "schema present" to "schema at head".
+`/readyz` gates on three checks: `database`, `broker` and `migrations`. The last compares the applied Alembic revision against the head this build ships, so an instance whose schema is behind — or ahead of — its code reports itself unready rather than failing every query.
 
 ## Security
 

@@ -41,6 +41,12 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload
 FROM base AS production
 COPY --from=deps /opt/venv /opt/venv
 COPY app ./app
+# Migrations run as an explicit deploy step from this image, never from
+# application startup (docs/DATABASE.md §16 item 9), so the revisions and the
+# Alembic config have to ship with it. The readiness check also reads the head
+# revision from here.
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
 RUN useradd --create-home --uid 10001 dcp && chown -R dcp:dcp /app
 USER dcp
 EXPOSE 8000

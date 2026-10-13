@@ -19,6 +19,7 @@ M1.1 registers exactly one task: ``ping``. Real tasks arrive from M2 onward.
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 from kombu import Queue
 
 from app.core.config import get_settings
@@ -54,10 +55,19 @@ def create_celery_app() -> Celery:
         result_expires=24 * 60 * 60,
         task_default_queue="maintenance",
         task_queues=tuple(Queue(name) for name in QUEUES),
-        # Beat has no entries yet; scheduled work arrives with M1.2 (partition
-        # maintenance) and M2.5 (the stale sweep).
-        beat_schedule={},
-        imports=("app.workers.tasks.ping",),
+        beat_schedule={
+            # Daily is ample for a three-month runway, and the task is
+            # idempotent so a missed run costs nothing (M1.2).
+            "ensure-audit-partitions": {
+                "task": "dcp.maintenance.ensure_audit_partitions",
+                "schedule": crontab(hour="3", minute="7"),
+                "options": {"queue": "maintenance"},
+            },
+        },
+        imports=(
+            "app.workers.tasks.ping",
+            "app.workers.tasks.maintenance",
+        ),
     )
     return celery_app
 
