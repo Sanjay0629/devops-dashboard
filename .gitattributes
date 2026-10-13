@@ -1,0 +1,34 @@
+# Line-ending policy: LF in the repository and LF on checkout, on every platform.
+#
+# Without this file, checkout endings depend on each developer's core.autocrlf.
+# With autocrlf=true (the Git-for-Windows default) a Windows checkout produces
+# CRLF files, and `prettier --check` — whose endOfLine default is "lf" — rejects
+# them. Linux CI still passes, so the result is a check that fails only on some
+# machines. That is worse than failing everywhere.
+#
+# It also protects the shell scripts: a CRLF `.sh` fails on Linux with
+# "bash: \r: command not found", which is a confusing way to break CI.
+* text=auto eol=lf
+
+# Belt and braces for the files where CRLF is actually fatal.
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Binary, so they are never line-ending converted or diffed as text.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+
+# Generated: keep them out of diffs and reviews, but still track them.
+frontend/package-lock.json  -diff linguist-generated
+backend/uv.lock             -diff linguist-generated
