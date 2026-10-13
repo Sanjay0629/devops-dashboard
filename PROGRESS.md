@@ -2,7 +2,7 @@
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
 **Last updated:** 2026-10-13
-**Updated by:** documentation preparation session
+**Updated by:** documentation preparation session (documentation committed and pushed 2026-10-13)
 
 > **Rules for this file**
 > - Record only what has **actually happened**. Never mark anything complete because a plan says it should be.
@@ -33,7 +33,7 @@ docs/TESTING.md
 
 There is **no** `backend/`, `frontend/`, `infra/`, `docker-compose.yml`, `pyproject.toml`, `package.json`, Alembic directory, database, container image or CI workflow. No package has been installed. No schema exists. No credential exists.
 
-The repository is **not** a git repository at the time of writing — `git init` is a prerequisite for M1.1.
+The repository is under version control: branch `main`, tracking `origin/main` on GitHub, working tree clean. Initial commit `d7dad3d` contains the ten files above and nothing else. There is no `.gitignore` yet — M1.1 adds one.
 
 ---
 
@@ -41,7 +41,7 @@ The repository is **not** a git repository at the time of writing — `git init`
 
 | Milestone | Status | Date | Evidence |
 |---|---|---|---|
-| Documentation set drafted (8 documents + this file) | **Drafted, awaiting review** | 2026-10-13 | Files listed in §1 exist |
+| Documentation set drafted (8 documents + this file) | **Drafted, awaiting review** | 2026-10-13 | Files listed in §1 exist; committed as `d7dad3d` and pushed to `origin/main` |
 
 **No implementation milestone has been completed.**
 
@@ -57,7 +57,7 @@ Outstanding before implementation can start:
 - [ ] **Resolve `OPEN-02`** — `PRD.md` §4.9 lists `environment` as an application attribute, but §6's `applications` table omits it while `deployments` carries it. The documents assume applications are environment-agnostic (`AD-12`). This changes the schema and the applications API, so it must be confirmed **before M1.5**.
 - [ ] Decide `OPEN-01` (identity provider) and `OPEN-06` (secret store) — both affect M1.1 configuration.
 - [ ] Decide `OPEN-04` (session store durability) before M1.3.
-- [ ] `git init` and an initial commit.
+- [x] `git init`, initial commit, pushed to GitHub — done 2026-10-13 (`d7dad3d`).
 
 ---
 
@@ -203,7 +203,7 @@ It is the smallest useful increment: it ends with `docker compose --profile core
 
 **Before starting:**
 
-1. `git init` and commit the current documentation set.
+1. ~~`git init` and commit the current documentation set.~~ Done 2026-10-13 (`d7dad3d`, pushed to `origin/main`).
 2. Resolve `OPEN-06` (secret store) so `core/config.py` has a target interface — a working default is acceptable.
 3. Choose a Python package manager (`TS-03`), which fixes the command prefix in [`docs/TESTING.md`](docs/TESTING.md) §16.
 
