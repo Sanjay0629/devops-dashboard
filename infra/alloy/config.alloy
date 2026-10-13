@@ -1,0 +1,16 @@
+// Placeholder Alloy configuration. M3.1 implements real collection:
+// journald, Nginx, PHP-FPM, application and Docker sources; the bounded label
+// allowlist from docs/ARCHITECTURE.md §5; and the pre-push redaction stages.
+//
+// Nothing is collected yet. This file exists so the `logs` profile starts.
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

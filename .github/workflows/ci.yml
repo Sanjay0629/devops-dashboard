@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Placeholder credentials for the unit suite. These reach nothing: the unit
+  # tests never open a socket. Integration tests get service containers from
+  # M1.2 onward (docs/TESTING.md §2).
+  DCP_ENVIRONMENT: local
+  DCP_DEMO_MODE: "true"
+  DCP_DATABASE_URL: postgresql+psycopg://placeholder:placeholder@localhost:5432/placeholder
+  DCP_REDIS_URL: redis://localhost:6379/0
+
+jobs:
+  backend:
+    name: Backend (lint, types, tests, audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install from the lockfile
+        # --frozen: the lockfile is the source of truth (AD-16). If pyproject
+        # and uv.lock disagree, fail rather than silently re-resolving.
+        run: uv sync --frozen --all-groups
+
+      - run: uv run ruff check --output-format=github .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run bandit -q -r app
+      - run: uv run pytest --cov=app --cov-report=term-missing --cov-report=xml
+      - name: Dependency vulnerability audit
+        # NOT --strict: the local project is not published to PyPI, and --strict
+        # turns that unauditable-package notice into a failure. Plain pip-audit
+        # still exits non-zero on an actual vulnerability, which is the gate.
+        run: uv run pip-audit
+
+  frontend:
+    name: Frontend (lint, types, tests, build, audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm run build
+      - run: npm audit --audit-level=high
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: a secret deleted in a later commit is still leaked.
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  images:
+    name: Build and scan images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: backend
+            target: production
+          - name: frontend
+            context: frontend
+            target: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          push: false
+          load: true
+          tags: dcp-${{ matrix.name }}:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan ${{ matrix.name }}
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: dcp-${{ matrix.name }}:ci
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+  compose:
+    name: Compose smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: docker compose -f infra/compose/docker-compose.yml --profile core config --quiet
+      - name: Smoke test the core stack
+        run: ./scripts/smoke-test.sh
+
+  docs:
+    name: Documentation links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check relative links and anchors
+        run: python scripts/check_doc_links.py .

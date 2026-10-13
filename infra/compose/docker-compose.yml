@@ -1,0 +1,238 @@
+# DevOps Control Plane — local development stack (PRD §11, docs/ARCHITECTURE.md §12)
+#
+# Profiles keep the default `up` light:
+#   core          frontend, backend, worker, beat, postgres, redis   (M1.1)
+#   observability prometheus, grafana, loki, node-exporter           (M2.1, M3.1)
+#   logs          alloy                                             (M3.1)
+#   mocks         mock-idp, mock-jenkins                            (M1.3, M5.1)
+#
+# Run from the repository root:
+#   docker compose -f infra/compose/docker-compose.yml --profile core up
+#
+# NOT YET VERIFIED: this file has never been started. The Docker daemon was not
+# running when M1.1 was implemented, so `docker compose up` is unexecuted and
+# the observability/logs/mocks profiles are placeholders whose services are
+# implemented in later milestones. See PROGRESS.md.
+#
+# Image versions are exact tags but are NOT digest-pinned yet; AD-16 requires
+# digests. scripts/pin-digests.sh resolves them once a daemon is available.
+
+name: dcp
+
+x-backend-env: &backend-env
+  DCP_ENVIRONMENT: ${DCP_ENVIRONMENT:-local}
+  DCP_LOG_LEVEL: ${DCP_LOG_LEVEL:-INFO}
+  DCP_DEMO_MODE: ${DCP_DEMO_MODE:-true}
+  DCP_API_BASE_PATH: ${DCP_API_BASE_PATH:-/api/v1}
+  DCP_DATABASE_URL: ${DCP_DATABASE_URL:-postgresql+psycopg://dcp:placeholder-password@postgres:5432/dcp}
+  DCP_REDIS_URL: ${DCP_REDIS_URL:-redis://redis:6379/0}
+  DCP_DATABASE_STATEMENT_TIMEOUT_MS: ${DCP_DATABASE_STATEMENT_TIMEOUT_MS:-5000}
+  DCP_READINESS_TIMEOUT_SECONDS: ${DCP_READINESS_TIMEOUT_SECONDS:-3.0}
+  DCP_CORS_ORIGINS: ${DCP_CORS_ORIGINS:-}
+
+# Applied to every service: no new privileges, bounded resources.
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  postgres:
+    <<: *hardening
+    profiles: [core]
+    image: postgres:17.2-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dcp}
+      POSTGRES_USER: ${POSTGRES_USER:-dcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-placeholder-password}
+      # Deterministic collation, so index ordering does not shift under us.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      # Host port is overridable: a developer machine often already runs
+      # PostgreSQL on 5432. Loopback only — never 0.0.0.0.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dcp} -d ${POSTGRES_DB:-dcp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1g }
+
+  redis:
+    <<: *hardening
+    profiles: [core]
+    image: redis:7.4.1-alpine
+    # noeviction on the broker database: evicting a queued task loses work
+    # (docs/TECH_STACK.md §4.2). appendonly survives a restart.
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6380}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
+
+  backend:
+    <<: *hardening
+    profiles: [core]
+    build:
+      context: ../../backend
+      target: development
+    environment: *backend-env
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+    volumes:
+      - ../../backend/app:/app/app:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1g }
+
+  worker:
+    <<: *hardening
+    profiles: [core]
+    build:
+      context: ../../backend
+      target: development
+    environment: *backend-env
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "-Q", "operations,deployments,integrations,notifications,maintenance"]
+    volumes:
+      - ../../backend/app:/app/app:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.workers.celery_app:celery_app", "inspect", "ping", "-d", "celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1g }
+
+  beat:
+    <<: *hardening
+    profiles: [core]
+    build:
+      context: ../../backend
+      target: development
+    environment: *backend-env
+    # EXACTLY ONE beat instance. A second scheduler double-fires every job
+    # (docs/ARCHITECTURE.md §13).
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "beat", "--loglevel=INFO"]
+    volumes:
+      - ../../backend/app:/app/app:ro
+    depends_on:
+      redis: { condition: service_healthy }
+    deploy:
+      replicas: 1
+      resources:
+        limits: { cpus: "0.25", memory: 256m }
+
+  frontend:
+    <<: *hardening
+    profiles: [core]
+    build:
+      context: ../../frontend
+      target: development
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-5173}:5173"
+    volumes:
+      - ../../frontend/src:/app/src:ro
+      - ../../frontend/index.html:/app/index.html:ro
+    environment:
+      # The dev server proxies /api and the probes to the backend, so the
+      # browser sees a single origin.
+      VITE_DEV_PROXY_TARGET: http://backend:8000
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1g }
+
+  # --- observability profile (M2.1 / M3.1) ----------------------------------
+  # Config files are placeholders until those milestones; declared here so the
+  # profile shape is settled and nothing has to be restructured later.
+
+  prometheus:
+    <<: *hardening
+    profiles: [observability]
+    image: prom/prometheus:v3.0.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ../prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+
+  node-exporter:
+    <<: *hardening
+    profiles: [observability]
+    image: prom/node-exporter:v1.8.2
+    # A sample scrape target, so M2.1 has something real to query.
+    ports:
+      - "127.0.0.1:9100:9100"
+
+  loki:
+    <<: *hardening
+    profiles: [observability]
+    image: grafana/loki:3.3.2
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ../loki:/etc/loki:ro
+      - loki-data:/loki
+
+  grafana:
+    <<: *hardening
+    profiles: [observability]
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-placeholder-password}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+  # --- logs profile (M3.1) ---------------------------------------------------
+  alloy:
+    <<: *hardening
+    profiles: [logs]
+    image: grafana/alloy:v1.5.1
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - /etc/alloy/config.alloy
+    ports:
+      - "127.0.0.1:12345:12345"
+    volumes:
+      - ../alloy:/etc/alloy:ro
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  loki-data:
+  grafana-data:

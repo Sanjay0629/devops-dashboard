@@ -1,0 +1,126 @@
+[project]
+name = "dcp-backend"
+version = "0.1.0"
+description = "DevOps Control Plane — backend API and workers"
+requires-python = ">=3.12,<3.13"
+
+# Ranges here, exact pins in uv.lock (AD-16). CI installs from the lockfile only.
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.32,<1.0",
+    "pydantic>=2.9,<3.0",
+    "pydantic-settings>=2.6,<3.0",
+    "sqlalchemy[asyncio]>=2.0,<3.0",
+    "psycopg[binary,pool]>=3.2,<4.0",
+    "redis>=5.2,<7.0",
+    "celery[redis]>=5.4,<6.0",
+    "structlog>=24.4,<26.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3,<10.0",
+    "pytest-asyncio>=0.24,<2.0",
+    "pytest-cov>=6.0,<8.0",
+    "httpx>=0.27,<1.0",
+    "ruff>=0.8,<1.0",
+    "mypy>=1.13,<2.0",
+    "bandit>=1.8,<2.0",
+    "pip-audit>=2.7,<3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ---------------------------------------------------------------- ruff
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "A",        # builtins shadowing
+    "C4",       # comprehensions
+    "DTZ",      # timezone-aware datetimes — naive timestamps are a bug here
+    "T20",      # no print()
+    "SIM",      # simplify
+    "PTH",      # pathlib
+    "RUF",
+    "S",        # bandit rules (SECURITY.md: no shell sinks, no asserts in app code)
+]
+ignore = [
+    "S101",     # assert — used by tests; app code does not rely on it
+    # RUF002/RUF003 flag "ambiguous" unicode in docstrings and comments. The
+    # prose here deliberately uses en dashes and §. RUF001 stays on, because an
+    # ambiguous character inside a *string literal* could actually matter.
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may assert and may hold throwaway credentials-shaped literals.
+"tests/**" = ["S105", "S106", "S107"]
+
+[tool.ruff.lint.isort]
+# Without this, `app` is sorted as a third-party package inside tests.
+known-first-party = ["app"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path"]
+
+# ---------------------------------------------------------------- mypy
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+disallow_any_unimported = true
+show_error_codes = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = ["celery.*", "kombu.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Celery and kombu ship no py.typed marker, so their decorators and return
+# types degrade to Any under strict mode. Narrowed to the worker package so the
+# rest of the codebase keeps full strictness.
+module = ["app.workers.*"]
+disallow_any_unimported = false
+disable_error_code = ["untyped-decorator", "no-any-unimported"]
+
+# ---------------------------------------------------------------- pytest
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "integration: needs PostgreSQL and Redis containers",
+    "security: security control verification",
+    "slow: long-running",
+    "real_integration: opt-in, hits a real external system; never runs in CI",
+]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]

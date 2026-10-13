@@ -1,0 +1,37 @@
+# Minimal single-process Loki for local development. M3.1 sets the real
+# limits and retention (OPEN-08 decides the durations).
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  log_level: info
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # Bounds matter: DCP builds every query server-side and enforces its own
+  # limits (AD-05), but Loki is the backstop.
+  max_query_length: 168h    # 7 days, matching docs/API_CONTRACTS.md §19
+  max_entries_limit_per_query: 1000
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
