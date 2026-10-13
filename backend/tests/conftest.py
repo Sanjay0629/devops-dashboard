@@ -1,0 +1,76 @@
+"""Shared fixtures.
+
+No test in this file touches a network, a database or a real broker. Dependency
+checks are stubbed; the real ones are exercised by the integration suite that
+arrives with M1.2 (docs/TESTING.md §2).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.core.config import Settings, get_settings
+from app.db.session import get_engine, get_session_factory
+
+# Placeholder credentials. Nothing here reaches a real service; the password is
+# literally the word "placeholder" so a secret scanner has nothing to find.
+TEST_ENV = {
+    "DCP_ENVIRONMENT": "local",
+    "DCP_LOG_LEVEL": "INFO",
+    "DCP_DEMO_MODE": "true",
+    "DCP_DATABASE_URL": "postgresql+psycopg://placeholder:placeholder@localhost:5432/placeholder",
+    "DCP_REDIS_URL": "redis://localhost:6379/0",
+}
+
+
+def _clear_caches() -> None:
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+    get_session_factory.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Give every test a clean, fully specified environment."""
+    for key in list(TEST_ENV):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in TEST_ENV.items():
+        monkeypatch.setenv(key, value)
+    _clear_caches()
+    yield
+    _clear_caches()
+
+
+@pytest.fixture
+def settings() -> Settings:
+    return get_settings()
+
+
+@pytest.fixture
+def app(settings: Settings) -> FastAPI:
+    from app.main import create_app
+
+    return create_app(settings)
+
+
+@pytest.fixture
+def client(app: FastAPI) -> Iterator[TestClient]:
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def all_checks_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub every readiness check to succeed."""
+    import app.health.checks as checks
+
+    async def ok() -> bool:
+        return True
+
+    monkeypatch.setattr(checks, "check_database", ok)
+    monkeypatch.setattr(checks, "check_broker", ok)
+    monkeypatch.setattr(checks, "check_migrations", ok)

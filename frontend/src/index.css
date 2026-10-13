@@ -1,0 +1,71 @@
+@import 'tailwindcss';
+
+/* Theme tokens (docs/TECH_STACK.md §2.4).
+   Semantic names, not colour names: components ask for "critical", never "red".
+   Light is the default; dark applies via the OS preference or an explicit
+   data-theme attribute, so the operator's choice always wins over the OS. */
+:root {
+  color-scheme: light;
+  --c-bg: #f8fafc;
+  --c-surface: #ffffff;
+  --c-border: #e2e8f0;
+  --c-text: #0f172a;
+  --c-text-muted: #475569;
+  --c-healthy: #15803d;
+  --c-warning: #a16207;
+  --c-critical: #b91c1c;
+  --c-stale: #7c3aed;
+  --c-unknown: #475569;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --c-bg: #0b1120;
+    --c-surface: #15203a;
+    --c-border: #2a3a5c;
+    --c-text: #f1f5f9;
+    --c-text-muted: #a9b6cc;
+    --c-healthy: #4ade80;
+    --c-warning: #fcd34d;
+    --c-critical: #fca5a5;
+    --c-stale: #c4b5fd;
+    --c-unknown: #a9b6cc;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --c-bg: #0b1120;
+  --c-surface: #15203a;
+  --c-border: #2a3a5c;
+  --c-text: #f1f5f9;
+  --c-text-muted: #a9b6cc;
+  --c-healthy: #4ade80;
+  --c-warning: #fcd34d;
+  --c-critical: #fca5a5;
+  --c-stale: #c4b5fd;
+  --c-unknown: #a9b6cc;
+}
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+/* Respect a reduced-motion preference everywhere, once. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
