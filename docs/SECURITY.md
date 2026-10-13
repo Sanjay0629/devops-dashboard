@@ -90,8 +90,15 @@ Evaluation rules:
 3. **Most-specific wins for allow; any deny wins overall.** Explicit deny grants are honoured over allows.
 4. **Production is never implicit.** `environment: ["*"]` does **not** grant production. Production requires an explicit `production` entry (PRD §3.6).
 5. **Fail closed.** Unresolvable target, unreadable scope, or evaluation error ⇒ `403` plus an `AUTHZ_DENIED` audit event.
-6. **Immediate revocation.** Effective permissions are resolved per request from PostgreSQL; the cache key includes a `permissions_version` bumped on every role/permission/scope change.
+6. **Immediate revocation.** Effective permissions are resolved per request from PostgreSQL. **There is no cache and no `permissions_version` counter** — amended in M1.4 (2026-10-14) with product-owner agreement, because the requirement in PRD §4.1 is per-request resolution and a cache can only make revocation less immediate. See [ARCHITECTURE.md §9.2](ARCHITECTURE.md#92-authorization--rbac-with-scope-evaluated-per-request-ad-03).
 7. **One matcher.** Exactly one function implements this, exercised by a table-driven test suite ([TESTING.md §8](TESTING.md#8-security-tests)). Duplicated authorisation logic is a defect.
+
+**Dimension semantics** (decided in M1.4 as assumption `A-09`, because rules 1–7 did not say; recorded in [`../PROGRESS.md`](../PROGRESS.md)):
+
+- A dimension the grant does **not** mention is **unconstrained**. Without this, `{"environment": ["staging"]}` would grant nothing, since the example scope in [DATABASE.md §3.5](DATABASE.md#35-user_roles) omits `cloud_account` entirely. Rule 4 is the exception: a production target needs `environment` to name `production` literally, so an absent dimension never *implies* production.
+- An **empty scope `{}` grants nothing at all**, including permissions evaluated without a target. That is [DATABASE.md §3.5](DATABASE.md#35-user_roles) read literally — a grant must say something about reach before it carries authority.
+- A grant that constrains a dimension the **target does not have** (an `application` constraint against a server) is a denial, not a pass.
+- A permission with **no target** — the administrative endpoints — is a capability check only: the grant must be non-empty, and its dimensions are not evaluated, because there is nothing to evaluate them against. Scope on a *resource* endpoint is checked after the row is loaded ([§20](#20-api-authorization-requirements)).
 
 Representative matrix (full list in [API_CONTRACTS.md](API_CONTRACTS.md), per endpoint):
 
@@ -112,7 +119,9 @@ Representative matrix (full list in [API_CONTRACTS.md](API_CONTRACTS.md), per en
 | `deployment:approve` | — | — | — | ✅ scoped | — |
 | `operation:approve` | — | — | — | ✅ scoped | — |
 | `audit:read` | — | — | — | ✅ | ✅ |
-| `admin:users` / `admin:roles` / `admin:integrations` | — | — | — | — | ✅ |
+| `admin:users` / `admin:roles` | — | — | — | — | ✅ |
+| `admin:manage` (system settings, e.g. read-only mode) | — | — | — | — | ✅ |
+| `admin:integrations` — **seeded as `integration:manage`**, see [PROGRESS.md](../PROGRESS.md) issue 39 | — | — | — | — | ✅ |
 
 `deployment:approve` and `operation:approve` are intentionally **not** granted to Administrator, to keep separation of duties meaningful (OPEN-10).
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, inspect, text
 
 from app.db.base import Base, all_models
@@ -77,16 +78,27 @@ def test_autogenerate_detects_no_drift(migrated: Engine, alembic_config: Config)
 
 
 def test_downgrade_and_upgrade_round_trip(migrated: Engine, alembic_config: Config) -> None:
-    """One revision down and back up, which is what a rollback actually does."""
+    """One revision down and back up, which is what a rollback actually does.
+
+    The two revision numbers are read from the script directory rather than
+    written here, so adding a revision does not silently leave this test
+    asserting a rollback of the wrong one.
+    """
+    script = ScriptDirectory.from_config(alembic_config)
+    head = script.get_current_head()
+    assert head is not None
+    previous = script.get_revision(head).down_revision
+    assert isinstance(previous, str)
+
     command.downgrade(alembic_config, "-1")
     with migrated.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert revision == "0001"
+    assert revision == previous
 
     command.upgrade(alembic_config, "head")
     with migrated.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert revision == "0002"
+    assert revision == head
 
 
 def test_full_downgrade_to_base_leaves_no_tables(migrated: Engine, alembic_config: Config) -> None:

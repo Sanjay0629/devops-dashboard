@@ -1,13 +1,16 @@
 """FastAPI application factory.
 
 The modular monolith's composition root (AD-01). Domain routers are mounted here
-as they arrive; M1.1 has only the health router.
+as they arrive; M1.1 had only the health router.
 
-As of M1.3 this mounts the health router and the authentication router. There
-is still no *authorisation*: ``require_permission`` and the route-coverage test
-that proves every privileged route carries it are M1.4. The auth endpoints are
-two of the three documented public exceptions (docs/SECURITY.md §20); the other
-two auth routes are protected by ``require_session``.
+As of M1.4 this mounts health, authentication and administration. Every route
+the admin router adds carries a ``require_permission`` dependency, and
+``tests/authz/test_route_coverage.py`` walks this application's routing table
+to prove that no route anywhere escapes one — so a future router added here
+cannot quietly ship unauthorised. The exceptions are explicit in that test: the
+health probes and ``/auth/login`` + ``/auth/callback`` are public
+(docs/SECURITY.md §20), and ``/auth/logout`` + ``/auth/session`` carry
+``require_session`` but no permission, because identity is all they need.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.admin.router import router as admin_router
 from app.auth.router import router as auth_router
 from app.core.config import Settings, get_settings
 from app.core.csrf import CsrfMiddleware
@@ -83,6 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # does not have to track API versions.
     app.include_router(health_router)
     app.include_router(auth_router, prefix=settings.api_base_path)
+    app.include_router(admin_router, prefix=settings.api_base_path)
 
     return app
 

@@ -2,7 +2,7 @@
 
 Centralized monitoring and management portal for servers and applications across AWS, Azure and on-premises environments.
 
-**Current state: milestone M1.3 — OIDC authentication and sessions.** You can sign in, see your identity, and sign out. The application does not **authorise** anything yet — there is no permission enforcement, so a signed-in user has no roles and can reach nothing beyond the auth endpoints. It monitors nothing and has no cloud, Jenkins, Prometheus or Loki integration. Authentication has been verified only against a local **mock** identity provider that checks no password (`OPEN-01`). [`PROGRESS.md`](PROGRESS.md) is the authoritative statement of what works.
+**Current state: milestone M1.4 — authentication, sessions and authorisation.** You can sign in, be granted a scoped role, and be refused everything you have not been granted. The administrative API (users, roles, read-only mode) is the only domain API so far: it monitors nothing and has no cloud, Jenkins, Prometheus or Loki integration. Authentication has been verified only against a local **mock** identity provider that checks no password (`OPEN-01`). [`PROGRESS.md`](PROGRESS.md) is the authoritative statement of what works.
 
 ## Documentation
 
@@ -43,8 +43,17 @@ synthetic accounts. Without that profile the app still starts and `/api/v1/auth/
 `503 not_configured` — which is the honest answer, not a failure.
 
 All three accounts begin with **no roles**, so you can sign in and see nothing until a role is
-granted. There is no bootstrap administrator by design; role administration arrives in M1.4, so
-until then a grant is a manual `INSERT` into `user_roles`.
+granted. There is no bootstrap administrator by design. Grant the first one with the one-shot CLI,
+which refuses to run if an administrator already exists:
+
+```bash
+docker compose -f infra/compose/docker-compose.yml exec backend python -m app.admin.bootstrap --email admin@example.invalid
+```
+
+It grants `ADMINISTRATOR` to an **existing** user — so sign in once first — with every environment
+in scope, and audits the grant as `system:bootstrap`. After that, roles are granted and revoked
+through `/api/v1/admin/users/{id}/roles`, and a change takes effect on the target's next request
+with no re-login.
 
 > **Two things to know about this Compose setup.**
 >
@@ -104,6 +113,7 @@ cd backend && uv run alembic downgrade -1
 The schema is defined in [`docs/DATABASE.md`](docs/DATABASE.md). Two things about it are load-bearing rather than incidental:
 
 - **`audit_events` is append-only.** `UPDATE`, `DELETE` and `TRUNCATE` all raise, enforced by triggers rather than by grants alone — a superuser bypasses grants, which was measured rather than assumed.
+- **`system_settings` holds the read-only-mode switch** (migration `0003`), in PostgreSQL rather than Redis or an environment variable: [`docs/SECURITY.md`](docs/SECURITY.md) §27 makes it the first containment step in an incident, so it has to survive a restart and a Redis flush and be flippable without a redeploy. The reader fails **closed** — a missing or non-boolean row refuses writes.
 - **`audit_events` is partitioned by month**, and a write outside every partition range *fails*. Since audit writes share the transaction of the privileged change they record, that failure would also fail the operation, so a scheduled job keeps a three-month runway ahead and warns when it shrinks.
 
 ## Checks
@@ -140,7 +150,9 @@ backend/            FastAPI modular monolith + Celery workers (AD-01)
   app/db/           base, types, engines, session, partition helpers
   app/auth/         OIDC client, Redis session store, cookies, dependencies,
                     JIT provisioning, /auth/* router, User model
-  app/authz/        roles, permissions, scoped grants (enforcement is M1.4)
+  app/authz/        roles, permissions, scoped grants, system settings;
+                    the matcher, per-request resolution, require_permission
+  app/admin/        user and role administration, read-only mode, bootstrap CLI
   app/inventory/    cloud accounts, servers, applications, services, policies
   app/approvals/    approval policy
   app/audit/        append-only audit events + the record() writer
@@ -166,9 +178,8 @@ Each lands in a named milestone, so nothing here is an accidental gap:
 
 | Not implemented | Milestone |
 |---|---|
-| **RBAC and per-route permission dependencies** — the biggest gap right now: a signed-in user has no roles and nothing enforces permissions | M1.4 |
-| User and role administration, including granting the first administrator | M1.4 |
-| Server and application inventory | M1.5 |
+| **Any domain API at all** — the biggest gap right now: authorisation is enforced, but the only endpoints behind it are administrative | M1.5+ |
+| Server and application inventory, and therefore any *scoped* resource for the matcher to evaluate a target against | M1.5 |
 | Dashboard | M1.6 |
 | Prometheus metrics, systemd service state, staleness | M2 |
 | Loki log search, alert rules, notifications | M3 |
@@ -179,9 +190,11 @@ Each lands in a named milestone, so nothing here is an accidental gap:
 
 ## Security
 
-[`docs/SECURITY.md`](docs/SECURITY.md) §1 lists ten mandatory rules. Two shape the code already:
+[`docs/SECURITY.md`](docs/SECURITY.md) §1 lists ten mandatory rules. Four shape the code already:
 
 - **No shell execution surface exists**, and none may be added. Service operations will accept a closed action enum and a registered target id — never a command.
 - **Secrets are never logged.** A redaction pass sits at the end of the logging chain, proven by canary tests rather than assumed.
+- **Permissions are enforced on the backend, per route.** One matcher, one `require_permission` dependency, and a test that walks the live routing table and fails the build if any route carries neither a permission nor an explicit, justified exception. The frontend hides controls for usability only; its permission list is advisory and a test says so.
+- **Fail closed.** Any error resolving a session, a grant, a scope or the read-only flag denies. There is no `if DEBUG: skip_auth` path, and a grep gate — with its own test that plants one — proves it.
 
 Configuration refuses to start without the credentials it needs, rejects wildcard CORS in every environment, and rejects demonstration mode outside `local`.

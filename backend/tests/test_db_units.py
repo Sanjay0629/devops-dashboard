@@ -97,6 +97,8 @@ class TestModelMetadata:
             "ServiceActionPolicy",
             "ApprovalPolicy",
             "AuditEvent",
+            # M1.4: the durable read-only switch (docs/SECURITY.md §27).
+            "SystemSetting",
         }
 
     def test_constraint_naming_convention_is_applied(self) -> None:

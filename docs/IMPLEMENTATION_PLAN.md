@@ -195,7 +195,7 @@ backend/tests/auth/{test_login_flow.py,test_session.py,test_csrf.py}
 - [x] `state` replay and CSRF bypass attempts fail — verified in the integration suite and by hand over HTTP.
 - [x] No token or session id in any log line (canary test) — asserted in the suites and swept over the real container logs.
 - [x] Rate limit on `/auth/*` enforced — and proven to fail **closed** when Redis is unavailable.
-- [ ] `/auth/session`'s `permissions` array is proven to be advisory — an endpoint still rejects an action the array implies. **Deferred to M1.4:** there is no permission-bearing endpoint to reject one yet. Covered so far only structurally (the array is scope-blind and nothing reads it server-side).
+- [x] `/auth/session`'s `permissions` array is proven to be advisory — an endpoint still rejects an action the array implies. **Done in M1.4** (PROGRESS.md issue 36): `test_the_permissions_array_is_advisory` grants an empty-scope `ADMINISTRATOR`, finds `admin:users` in the array, and watches `GET /api/v1/admin/users` answer `403`.
 
 **Definition of done.** Login/logout work in Compose; the full auth test suite passes; `PROGRESS.md` records which IdP was used (mock vs real). — **Met 2026-10-13:** login and logout driven through the `core` + `mocks` stack in a real browser; 126 auth unit tests and 39 auth integration tests pass; the IdP used was the **mock** and `PROGRESS.md` says so.
 
@@ -207,21 +207,23 @@ backend/tests/auth/{test_login_flow.py,test_session.py,test_csrf.py}
 
 **Tasks**
 
-- [ ] Permission model, scope resolution, and the **single** `require_permission(resource_type, action, scope_source)` dependency.
-- [ ] Scope matcher: conjunctive dimensions, `*` handling, `production` never implicit, `DENY` beats `ALLOW`, fail-closed on any error.
-- [ ] Per-request resolution from PostgreSQL with a `permissions_version`-keyed cache.
-- [ ] `AUTHZ_DENIED` audit writing.
-- [ ] Admin endpoints 25.1–25.9 ([API_CONTRACTS.md §25](API_CONTRACTS.md#25-user-and-role-administration)), including no-privilege-escalation-through-delegation and last-Administrator protection.
-- [ ] Read-only mode flag blocking state-changing endpoints.
-- [ ] CI route-coverage test: every route has a permission dependency or is on the explicit public list.
-- [ ] Frontend: permission-aware navigation and control hiding (usability only).
+- [x] Permission model, scope resolution, and the **single** `require_permission(resource_type, action)` dependency. The `scope_source` parameter in the original wording is **not** built: [SECURITY.md §20](SECURITY.md#20-api-authorization-requirements) requires scope to be validated *after* the target row is loaded, which a dependency cannot do, so the scoped question is `Authorized.permits(resource_type, action, target)` calling the same matcher from the handler.
+- [x] Scope matcher: conjunctive dimensions, `*` handling, `production` never implicit, `DENY` beats `ALLOW`, fail-closed on any error. 27 table-driven cases.
+- [x] Per-request resolution from PostgreSQL. **No cache and no `permissions_version` counter** — an agreed divergence from `AD-03`, approved by the product owner; the four contract documents were corrected in the same change ([ARCHITECTURE.md §9.2](ARCHITECTURE.md#92-authorization--rbac-with-scope-evaluated-per-request-ad-03)).
+- [x] `AUTHZ_DENIED` audit writing, committed before the `403` propagates so a failed request still leaves a trail.
+- [x] Admin endpoints 25.1–25.9 ([API_CONTRACTS.md §25](API_CONTRACTS.md#25-user-and-role-administration)), including no-privilege-escalation-through-delegation and last-Administrator protection, plus the new 25.10 read-only toggle. The first administrator comes from a one-shot `python -m app.admin.bootstrap` CLI.
+- [x] Read-only mode flag blocking state-changing endpoints, as a durable `system_settings` row ([DATABASE.md §3.6](DATABASE.md#36-system_settings--added-entity-m14)).
+- [x] CI route-coverage test: every route has a permission dependency or is on the explicit exception list, which distinguishes *public* from *session-authenticated* and asserts each claim.
+- [~] Frontend: control hiding (`src/auth/permissions.ts`, advisory and tested) and the read-only banner. **Permission-aware navigation is not built: there is no navigation yet** — the routing shell is M1.6, which is where the nav gating belongs.
 
 **Expected files**
 
 ```
 backend/app/authz/{dependencies,matcher,service,models,schemas}.py
-backend/app/admin/{router,service,schemas}.py
-backend/tests/authz/{test_matcher.py,test_route_coverage.py,test_admin_roles.py}
+backend/app/admin/{router,service,schemas}.py  + bootstrap.py
+backend/alembic/versions/0003_system_settings_and_admin_permissions.py
+backend/tests/authz/{test_matcher.py,test_route_coverage.py}
+backend/tests/integration/test_admin_roles.py   # not tests/authz/: needs the real schema and Redis
 frontend/src/auth/permissions.ts
 ```
 
@@ -242,12 +244,12 @@ frontend/src/auth/permissions.ts
 
 **Security checks**
 
-- [ ] No route lacks a permission dependency (CI-enforced).
-- [ ] Fail-closed proven by fault injection into scope resolution.
-- [ ] A `curl` with a valid session but insufficient permission is rejected identically to the UI path.
-- [ ] No `if DEBUG: skip_auth` path exists (grep-gated test).
+- [x] No route lacks a permission dependency (CI-enforced by `tests/authz/test_route_coverage.py`).
+- [x] Fail-closed proven by fault injection into scope resolution (`test_resolution_failure_denies`).
+- [x] A `curl` with a valid session but insufficient permission is rejected identically to the UI path — asserted for all ten endpoints × four non-admin roles, and exercised by hand against the running stack.
+- [x] No `if DEBUG: skip_auth` path exists (grep-gated test, which has its own test proving a planted bypass is caught).
 
-**Definition of done.** Matcher suite and per-role endpoint suite pass; route coverage green; `PROGRESS.md` updated.
+**Definition of done.** Matcher suite and per-role endpoint suite pass; route coverage green; `PROGRESS.md` updated. **Met 2026-10-13:** 270 unit tests and 132 integration tests pass against real PostgreSQL and Redis; see [`../PROGRESS.md`](../PROGRESS.md) §7 for the actual output.
 
 **Risks / rollback.** Risk: authorisation logic duplicated as features grow, causing drift. Mitigation: one matcher, one dependency, route-coverage test. Rollback: revert; no other milestone depends on partial RBAC.
 

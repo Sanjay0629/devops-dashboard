@@ -1,5 +1,6 @@
 import { useContext } from 'react';
 
+import { canRender, isReadOnly, type Permission } from '@/auth/permissions';
 import { SessionContext, type SessionContextValue } from '@/auth/sessionContext';
 
 /**
@@ -21,13 +22,17 @@ export function useSession(): SessionContextValue {
 /**
  * Does the session's advisory permission list contain this permission?
  *
- * **For rendering only.** This is the frontend's copy of a list the backend
- * calls advisory (docs/API_CONTRACTS.md §12.4), and it is scope-blind — it can
- * say true for an action the caller cannot perform on a particular target.
- * Hiding a control the user cannot use is a usability choice; the control that
- * matters is the server-side check on every request (docs/SECURITY.md §6).
+ * **For rendering only** — the reasoning, and the permission names, live in
+ * `@/auth/permissions`. This hook is the React-flavoured way to ask it, so
+ * there is one answer rather than two.
  */
-export function useCanRender(permission: string): boolean {
+export function useCanRender(permission: Permission): boolean {
   const { state } = useSession();
-  return state.kind === 'authenticated' && state.session.permissions.includes(permission);
+  return canRender(state, permission);
+}
+
+/** Is the portal in incident read-only mode? For disabling controls only. */
+export function useIsReadOnly(): boolean {
+  const { state } = useSession();
+  return isReadOnly(state);
 }
