@@ -28,8 +28,17 @@ run "backend: unit tests"     bash -c 'cd backend && uv run pytest -m "not integ
 # printed "ALL CHECKS PASSED" while 61 tests silently skipped — a pass it had
 # not earned, and the suite that covers the constraints, partitioning and audit
 # immutability the schema depends on.
+#
+# M1.3 added authentication tests that need a real Redis as well (the session
+# store, the single-use `state`, the rate limiter). Those skip individually
+# without TEST_REDIS_URL, so it is reported for the same reason: a partial
+# suite must not read as a complete one.
 if [[ -n "${TEST_DATABASE_URL:-}" ]]; then
   run "backend: integration"  bash -c 'cd backend && uv run pytest -m integration'
+  if [[ -z "${TEST_REDIS_URL:-}" ]]; then
+    printf '    NOTE: TEST_REDIS_URL unset, so the authentication suite skipped\n'
+    skipped+=("backend: integration (auth — needs TEST_REDIS_URL)")
+  fi
 else
   printf '\n=== backend: integration\n    SKIPPED — TEST_DATABASE_URL is not set (see docs/TESTING.md §16)\n'
   skipped+=("backend: integration")

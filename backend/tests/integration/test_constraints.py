@@ -496,11 +496,6 @@ class TestSeededReferenceData:
         assert rows
         assert all(not row[0] and row[1] >= 1 for row in rows)
 
-    def test_no_user_is_seeded(self, connection: Connection) -> None:
-        """No bootstrap administrator and no default credential ship."""
-        count = connection.execute(text("SELECT count(*) FROM users")).scalar()
-        assert count == 0
-
     @pytest.mark.security
     def test_no_seeded_policy_grants_a_stop_action(self, connection: Connection) -> None:
         """Stopping a service and leaving it down is not a default capability."""

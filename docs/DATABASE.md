@@ -700,7 +700,7 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 | ID | Question | Working default |
 |---|---|---|
 | OPEN-02 | Is an application per-environment (PRD §4.9) or environment-agnostic (PRD §6 implication)? | Environment-agnostic (AD-12) — **needs confirmation; changes `applications`, `deployment_targets` and the API** |
-| OPEN-04 | Durable `user_sessions` table, or Redis-only? | Redis-only |
+| ~~OPEN-04~~ | Durable `user_sessions` table, or Redis-only? | **RESOLVED 2026-10-13 (M1.3): Redis-only.** No `user_sessions` table. Login, logout and denial are still audited in PostgreSQL, so the authentication record survives a flushed Redis even though live sessions do not. Accepted cost: a Redis restart logs everyone out. |
 | OPEN-08 | Retention durations for audit, alerts, metrics, logs | 400 d / 180 d / 30 d / 14 d placeholders |
 | OPEN-10 | `required_approvals > 1`, and self-approval policy | 1 approval; self-approval denied |
 | OPEN-11 | `owner_team` free text vs a `teams` table with scoping | Free text |

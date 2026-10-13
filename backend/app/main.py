@@ -3,10 +3,11 @@
 The modular monolith's composition root (AD-01). Domain routers are mounted here
 as they arrive; M1.1 has only the health router.
 
-Note what is *not* here: no authentication, no authorisation, no domain routes.
-Those land in M1.3–M1.6. Every route added from M1.4 onwards must carry an
-explicit permission dependency, enforced by the route-coverage test
-(docs/IMPLEMENTATION_PLAN.md M1.4).
+As of M1.3 this mounts the health router and the authentication router. There
+is still no *authorisation*: ``require_permission`` and the route-coverage test
+that proves every privileged route carries it are M1.4. The auth endpoints are
+two of the three documented public exceptions (docs/SECURITY.md §20); the other
+two auth routes are protected by ``require_session``.
 """
 
 from __future__ import annotations
@@ -17,10 +18,13 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth.router import router as auth_router
 from app.core.config import Settings, get_settings
+from app.core.csrf import CsrfMiddleware
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import CorrelationIdMiddleware, SecurityHeadersMiddleware
+from app.core.redis import dispose_redis
 from app.db.session import dispose_engine
 from app.health.router import router as health_router
 
@@ -37,6 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     yield
     await dispose_engine()
+    await dispose_redis()
     logger.info("application_stopped")
 
 
@@ -67,6 +72,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_methods=["GET", "POST", "PATCH", "DELETE"],
             allow_headers=["Content-Type", "X-Correlation-ID", "X-CSRF-Token"],
         )
+    # Inside CORS, outside the routes: a state-changing request is rejected
+    # before any handler or database session is created (docs/SECURITY.md §11).
+    app.add_middleware(CsrfMiddleware, allowed_origins=settings.cors_origins)
     app.add_middleware(CorrelationIdMiddleware)
 
     register_exception_handlers(app)
@@ -74,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Probes live at the root, outside the versioned API, so an orchestrator
     # does not have to track API versions.
     app.include_router(health_router)
+    app.include_router(auth_router, prefix=settings.api_base_path)
 
     return app
 

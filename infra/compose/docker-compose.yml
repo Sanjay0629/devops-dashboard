@@ -4,15 +4,16 @@
 #   core          frontend, backend, worker, beat, postgres, redis   (M1.1)
 #   observability prometheus, grafana, loki, node-exporter           (M2.1, M3.1)
 #   logs          alloy                                             (M3.1)
-#   mocks         mock-idp, mock-jenkins                            (M1.3, M5.1)
+#   mocks         mock-idp (M1.3), mock-jenkins (M5.1, not yet implemented)
 #
 # Run from the repository root:
 #   docker compose -f infra/compose/docker-compose.yml --profile core up
 #
-# NOT YET VERIFIED: this file has never been started. The Docker daemon was not
-# running when M1.1 was implemented, so `docker compose up` is unexecuted and
-# the observability/logs/mocks profiles are placeholders whose services are
-# implemented in later milestones. See PROGRESS.md.
+# PARTLY VERIFIED: `postgres`, `redis` and the `mocks` profile's `mock-idp`
+# have been started and used. The full `core` stack (backend/worker/beat/
+# frontend containers) and scripts/smoke-test.sh remain unexecuted, and the
+# observability and logs profiles are still placeholders whose services arrive
+# with M2.1/M3.1. See PROGRESS.md.
 #
 # Image versions are exact tags but are NOT digest-pinned yet; AD-16 requires
 # digests. scripts/pin-digests.sh resolves them once a daemon is available.
@@ -29,6 +30,22 @@ x-backend-env: &backend-env
   DCP_DATABASE_STATEMENT_TIMEOUT_MS: ${DCP_DATABASE_STATEMENT_TIMEOUT_MS:-5000}
   DCP_READINESS_TIMEOUT_SECONDS: ${DCP_READINESS_TIMEOUT_SECONDS:-3.0}
   DCP_CORS_ORIGINS: ${DCP_CORS_ORIGINS:-}
+  # M1.3. Defaults point at the mock-idp service, which only exists in the
+  # `mocks` profile — without it /auth/login answers 503, which is the honest
+  # result for "no identity provider is reachable". Set these to a real IdP to
+  # replace it; `iss` is compared literally, so the issuer must be byte-exact.
+  DCP_OIDC_ISSUER: ${DCP_OIDC_ISSUER:-http://localhost:9000}
+  DCP_OIDC_CLIENT_ID: ${DCP_OIDC_CLIENT_ID:-dcp-local}
+  DCP_OIDC_CLIENT_SECRET: ${DCP_OIDC_CLIENT_SECRET:-placeholder-client-secret}
+  # Points at the **frontend** origin, not the backend's. In production the SPA
+  # and the API share one origin behind the reverse proxy (AD-02), and the dev
+  # server's proxy reproduces that — so the whole flow, and the `next` redirect
+  # at the end of it, stays on the origin the operator is actually browsing.
+  # Pointing it at :8000 instead would land the user on the backend, which
+  # serves no SPA. Register this value with the IdP exactly.
+  DCP_OIDC_REDIRECT_URL: ${DCP_OIDC_REDIRECT_URL:-http://localhost:5173/api/v1/auth/callback}
+  DCP_SESSION_IDLE_TIMEOUT_SECONDS: ${DCP_SESSION_IDLE_TIMEOUT_SECONDS:-1800}
+  DCP_SESSION_ABSOLUTE_TIMEOUT_SECONDS: ${DCP_SESSION_ABSOLUTE_TIMEOUT_SECONDS:-28800}
 
 # Applied to every service: no new privileges, bounded resources.
 x-hardening: &hardening
@@ -95,6 +112,11 @@ services:
     environment: *backend-env
     ports:
       - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+      # Published here, not on mock-idp: that service shares this container's
+      # network namespace (see its comment below), so its port is this
+      # container's port. Harmless when the `mocks` profile is not running —
+      # nothing is listening on it.
+      - "127.0.0.1:${MOCK_IDP_HOST_PORT:-9000}:9000"
     volumes:
       - ../../backend/app:/app/app:ro
     depends_on:
@@ -157,6 +179,11 @@ services:
     volumes:
       - ../../frontend/src:/app/src:ro
       - ../../frontend/index.html:/app/index.html:ro
+      # The dev server's own config, so a proxy or port change does not need an
+      # image rebuild. Without it the container keeps running the config baked
+      # in at build time, which is how the unused VITE_DEV_PROXY_TARGET went
+      # unnoticed until M1.3.
+      - ../../frontend/vite.config.ts:/app/vite.config.ts:ro
     environment:
       # The dev server proxies /api and the probes to the backend, so the
       # browser sees a single origin.
@@ -215,6 +242,42 @@ services:
       - "127.0.0.1:3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
+
+  # --- mocks profile (M1.3 / M5.1) ------------------------------------------
+  # DEVELOPMENT AIDS. Passing against these is not evidence that a real
+  # integration works (CLAUDE.md §7). See infra/compose/mock-idp/README.md.
+
+  mock-idp:
+    <<: *hardening
+    profiles: [mocks]
+    build:
+      context: ../../backend
+      target: development
+    # Shares the backend's network namespace, which is what makes one issuer
+    # URL correct for both sides: the browser reaches the published
+    # localhost:9000, and the backend reaches the same localhost:9000 from
+    # inside the namespace. The `iss` claim is compared literally, so without
+    # this the browser would need `localhost` and the backend `mock-idp`, and
+    # one of the two would always be wrong.
+    network_mode: "service:backend"
+    environment:
+      MOCK_IDP_ISSUER: ${DCP_OIDC_ISSUER:-http://localhost:9000}
+      MOCK_IDP_CLIENT_ID: ${DCP_OIDC_CLIENT_ID:-dcp-local}
+      MOCK_IDP_CLIENT_SECRET: ${DCP_OIDC_CLIENT_SECRET:-placeholder-client-secret}
+    command: ["uvicorn", "mock_idp:app", "--host", "0.0.0.0", "--port", "9000", "--app-dir", "/mock-idp"]
+    volumes:
+      - ./mock-idp:/mock-idp:ro
+    depends_on:
+      backend: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 256m }
 
   # --- logs profile (M3.1) ---------------------------------------------------
   alloy:

@@ -566,7 +566,7 @@ Required runbooks (to be written in Phase 6, [IMPLEMENTATION_PLAN.md](IMPLEMENTA
 | ID | Question | Working default |
 |---|---|---|
 | OPEN-01 | IdP choice; are roles ever sourced from claims? | Roles assigned in DCP only |
-| OPEN-04 | Durable session table vs Redis-only | Redis-only; auth events still audited in PostgreSQL |
+| ~~OPEN-04~~ | Durable session table vs Redis-only | **RESOLVED 2026-10-13 (M1.3): Redis-only.** No `user_sessions` table. Login, logout and denial are still audited in PostgreSQL, so the authentication record survives a flushed Redis even though live sessions do not. Accepted cost: a Redis restart logs everyone out. |
 | OPEN-05 | Restricted agent: adopt vs build, and its authentication model | Adopt provider-native (SSM hybrid / Arc) |
 | OPEN-06 | Canonical secret store | Pluggable, one configured backend |
 | OPEN-07 | RPO/RTO | Undefined — blocker for production rollout |

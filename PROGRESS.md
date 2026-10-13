@@ -2,7 +2,7 @@
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
 **Last updated:** 2026-10-13
-**Updated by:** M1.2 implementation session
+**Updated by:** M1.3 implementation session
 
 > **Rules for this file**
 > - Record only what has **actually happened**. Never mark anything complete because a plan says it should be.
@@ -14,41 +14,60 @@
 
 ## 1. Current project stage
 
-**Stage: Phase 1 — Foundation. Milestones M1.1 and M1.2 complete; M1.3 not started.**
+**Stage: Phase 1 — Foundation. Milestones M1.1, M1.2 and M1.3 complete; M1.4 next.**
 
-The application has a running skeleton and a migrated PostgreSQL schema. It still
-monitors nothing and authenticates nobody — see [§4](#4-pending-milestones).
+The application has a running skeleton, a migrated PostgreSQL schema, and working
+OIDC authentication with server-side sessions. It **authorises** nobody: there is
+no permission enforcement yet, and the only protected endpoints are the two auth
+routes that need a session. It still monitors nothing — see
+[§4](#4-pending-milestones).
+
+A user can now sign in through the mock IdP, see their identity, and sign out. They
+will see **no roles and no permissions**, because nothing grants a role yet; role
+administration is M1.4. That is deliberate (there is no bootstrap administrator), and
+it means the only way to grant the first role today is a manual `INSERT` into
+`user_roles`.
 
 ```
 PRD.md  CLAUDE.md  PROGRESS.md  README.md
 .env.example  .gitattributes  .gitignore  .dockerignore  .pre-commit-config.yaml
 .github/workflows/ci.yml
 backend/     pyproject.toml, uv.lock, Dockerfile, alembic.ini
-  app/core/        config, logging, redaction, errors, middleware
+  app/core/        config, logging, redaction, errors, middleware, csrf,
+                   redis client, rate limiting
   app/health/      liveness, readiness (database, broker, migrations-at-head)
   app/db/          base, types (uuid7), engines, session, partition helpers
-  app/auth/        User
+  app/auth/        User, OIDC client, Redis session store, cookies,
+                   dependencies, service (JIT provisioning), router, schemas
   app/authz/       Role, Permission, RolePermission, UserRole
   app/inventory/   CloudAccount, Server, Application, ApplicationServer,
                    Service, ServiceActionPolicy
   app/approvals/   ApprovalPolicy
-  app/audit/       AuditEvent (partitioned, append-only)
+  app/audit/       AuditEvent (partitioned, append-only), record() writer
   app/workers/     Celery app, ping, partition maintenance
   alembic/         0001 initial schema, 0002 seed reference data
-  tests/           unit; tests/integration/ needs real PostgreSQL
+  tests/           unit + tests/auth/; tests/integration/ needs real
+                   PostgreSQL, and the auth suite also needs real Redis
 frontend/    React + TypeScript + Vite + Tailwind SPA
-infra/       compose/docker-compose.yml, prometheus/, loki/, alloy/
+  src/auth/        SessionProvider, sessionContext, useSession
+  src/pages/       Login
+  src/api/         health, session
+infra/       compose/docker-compose.yml, compose/mock-idp/ (dev aid),
+             prometheus/, loki/, alloy/
 scripts/     check-all.sh, smoke-test.sh, check_doc_links.py, pin-digests.sh
 docs/        eight design documents
 ```
 
-There is still **no** authentication, no authorisation enforcement, no domain API
-and no integration of any kind. 13 of the 19 tables in
+There is still **no authorisation enforcement**, no domain API and no external
+integration of any kind. 13 of the 19 tables in
 [`docs/DATABASE.md`](docs/DATABASE.md) exist; the six that record operations,
-deployments and alerts arrive with the milestones that write to them.
+deployments and alerts arrive with the milestones that write to them. **M1.3 added
+no table and no migration** — the schema is still at revision `0002`, because
+`OPEN-04` resolved as Redis-only sessions and `users` already had every column the
+milestone needed.
 
-Version control: branch `main` tracking `origin/main`. Last pushed commit
-`fec466d`; M1.2 work is uncommitted at the time of writing.
+Version control: branch `main` tracking `origin/main`. Last pushed commit `131461a`
+(the M1.2 merge); M1.3 work is on branch `phase-M1.3` at the time of writing.
 
 ## 2. Completed milestones
 
@@ -57,6 +76,16 @@ Version control: branch `main` tracking `origin/main`. Last pushed commit
 | Documentation set drafted (8 documents + this file) | **Drafted, awaiting review** | 2026-10-13 | Committed as `d7dad3d`, pushed to `origin/main` |
 | **M1.1** — repository skeleton, Compose core, health endpoints, CI | **Complete, with two caveats** | 2026-10-13 | All 13 local checks pass ([§7](#7-tests-executed-and-their-actual-results)); endpoints verified over real HTTP |
 | **M1.2** — database schema, migrations, partitioning, audit immutability, seed data | **Complete** | 2026-10-13 | Migrations applied, downgraded and re-applied against **real PostgreSQL 17.2**; immutability verified against a confirmed superuser ([§7](#7-tests-executed-and-their-actual-results)) |
+| **M1.3** — OIDC authentication, Redis sessions, CSRF, JIT provisioning, auth audit, mock IdP, frontend session | **Complete against the mock IdP** | 2026-10-13 | Login and logout driven through the Compose `core` + `mocks` stack **in a real browser**; 126 auth unit + 39 auth integration tests pass; all 14 checks in `scripts/check-all.sh` pass ([§7](#7-tests-executed-and-their-actual-results)) |
+
+**M1.3 caveat — the honest limit of what was verified.** Everything was tested
+against the **mock** OIDC provider in `infra/compose/mock-idp/`, which checks no
+password. That proves the OIDC client is self-consistent and that the session, CSRF,
+provisioning and audit behaviour work. It is **not** evidence that a real identity
+provider works: claim shapes, discovery quirks, redirect-URI registration and
+token-endpoint authentication all differ per provider (`OPEN-01`). The mock is a
+development aid and is labelled as one in its own README, in the Compose file and in
+`.env.example`.
 
 **M1.1 caveats — neither blocks M1.2, both are tracked in [§6](#6-known-issues):**
 
@@ -75,16 +104,23 @@ Version control: branch `main` tracking `origin/main`. Last pushed commit
 
 ## 3. In-progress milestone
 
-**None.** M1.2 is finished; M1.3 (OIDC authentication and sessions) has not begun.
+**None.** M1.3 is finished; M1.4 (RBAC and authorisation enforcement) has not begun.
 
 Outstanding decisions, in the order they bite:
 
-- [ ] **`OPEN-04` — before M1.3.** Redis-only sessions, or a durable `user_sessions`
-      table? M1.2 did **not** create one, following the documented default. Adding it
-      later is an additive migration, so this is not urgent, merely next.
-- [ ] **`OPEN-01` — before M1.3 hardening.** Which identity provider, and does any
-      claim ever map to a role? The documented default is "roles are assigned in DCP
-      only", which is what the seeded schema assumes. The mock IdP is enough to start.
+- [x] **`OPEN-04` — RESOLVED 2026-10-13 as Redis-only.** No `user_sessions` table was
+      created, following the documented default and the instruction for this session.
+      Login, logout and denial are audited in PostgreSQL, so the authentication record
+      outlives Redis; live sessions do not. Accepted cost: restarting Redis signs
+      everyone out. Reversing it later is still an additive migration. Recorded in all
+      four contract documents.
+- [ ] **`OPEN-01` — still open, and now the main caveat on M1.3.** Which identity
+      provider, and does any claim ever map to a role? The documented default — "roles
+      are assigned in DCP only" — is what M1.3 implemented: `IdentityClaims` has no
+      field that could carry a role, and a test asserts that a token claiming
+      `groups: ["ADMINISTRATOR"]` grants nothing. What is unresolved is *which* real
+      provider, and therefore whether its claim shapes and registration rules match
+      what the mock taught us.
 - [ ] **`OPEN-02` — before M1.5.** `applications` was created **without** an
       `environment` column (`AD-12`). Reversing that after M1.5 means a data
       migration, so confirm it before then.
@@ -92,6 +128,73 @@ Outstanding decisions, in the order they bite:
 - [ ] `OPEN-15` — the audit-immutability hardening M1.2 could not finish: a
       non-superuser application role separate from the migration owner. Scheduled
       M6.2; see issue 28.
+
+Assumptions recorded during M1.3 (CLAUDE.md §9 — the PRD is silent on each):
+
+- **`A-05` Identity conflict means deny.** `users` carries a case-insensitive unique
+  index over *active* users' emails, so a **new** OIDC subject presenting an address an
+  active user already holds is a reachable case (a re-provisioned directory account,
+  two providers). The PRD does not say what should happen. The default chosen is to
+  **deny the login** — `403` plus an audited `LOGIN_DENIED` with
+  `reason: identity_conflict` — rather than merge, rename or create a second row.
+  Merging identities silently is how one person inherits another's audit history, and
+  the trail is attributed by `user_id`. `403` rather than `409` because a `409` would
+  confirm to an unauthenticated caller that the address is registered. An administrator
+  resolves it by retiring the existing row, after which the address is reusable. Found
+  by a failing test, not by reading: the first version of this path produced an
+  unhandled `IntegrityError`, i.e. a `500` on an authentication endpoint.
+- **`A-06` Forwarded client addresses are not trusted.** `X-Forwarded-For` is
+  deliberately **not** read. It is attacker-controlled unless a known proxy overwrites
+  it, and the value lands in `audit_events.source_ip` *and* in the rate-limit key — a
+  spoofable rate-limit key is no rate limit. The connection address is used instead.
+  Revisit when the production proxy is configured (`OPEN-12`), with the trusted hop
+  count made explicit.
+- **`A-07` Session identifiers are stored under a SHA-256 of themselves.** Not required
+  by [`docs/SECURITY.md`](docs/SECURITY.md) §5, which only forbids them in URLs, logs
+  and audit rows. A session id is a bearer credential for its lifetime, and a Redis key
+  dump, `MONITOR` trace or `--bigkeys` scan should not hand over usable ones. Cost: one
+  hash per lookup.
+- **`A-08` CSRF is checked before routing.** The middleware sits outside the router, so
+  a state-changing request that fails CSRF never reaches a handler or opens a database
+  session — and probing with `POST` reveals nothing about which routes exist. Visible
+  consequence: `POST` to a `GET`-only route answers `403`, not `405`. An existing M1.2
+  test asserted that `405`; it now supplies the CSRF credentials to reach routing, and
+  a new test asserts the precedence directly.
+
+Decisions settled during M1.3:
+
+- **A JWT library rather than hand-rolled verification.** `pyjwt[crypto]` added, per
+  [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §10 rung 3: the "few lines" in question
+  are RS256/ECDSA signature verification, JWKS key selection and the `alg`-confusion
+  defence, which is the one place in this codebase not to save lines. `authlib` was
+  rejected as a much larger surface that bundles an OAuth client whose redirect
+  handling we deliberately own; `python-jose` as stale. `httpx` moved from the dev
+  group to the runtime dependencies — it was already the approved outbound HTTP
+  client. Net new packages: `pyjwt`, `cryptography`, `cffi`, `pycparser`.
+- **The mock IdP runs from the backend image, not a third-party one.** ~230 lines of
+  FastAPI in `infra/compose/mock-idp/`, needing no new dependency and no 300 MB JVM
+  image, and giving full control over what it does and does not implement. It *does*
+  implement the parts the security checks depend on — RS256 with a published JWKS and
+  `kid`, discovery, `nonce` echoed into the ID token, PKCE S256 **verified**,
+  single-use TTL-bounded codes, constant-time client-secret comparison — so passing
+  against it means something, while still not meaning the real integration works.
+- **`mock-idp` shares the backend container's network namespace.** `iss` is compared
+  literally, so one issuer URL must resolve identically from the browser and from
+  inside the backend. The alternatives were to weaken the check that discovered
+  endpoints stay on the issuer's origin (a real control — it is what stops a tampered
+  discovery document from redirecting the token exchange, client secret included), or
+  to depend on `host.docker.internal` resolving on the host, which is not dependable.
+  Known sharp edge, documented in the README and in issue 33: recreating `backend`
+  alone leaves `mock-idp` attached to the old namespace.
+- **`DCP_OIDC_REDIRECT_URL` points at the frontend origin in Compose.** In production
+  the SPA and API share one origin behind the reverse proxy (AD-02); the dev server's
+  proxy reproduces that, so the flow and its final `next` redirect stay on the origin
+  the operator is browsing. Pointing it at `:8000` would land them on the backend,
+  which serves no SPA.
+- **Cookie `Secure` is a derived property, not a setting.** `docs/SECURITY.md` §5
+  permits exactly one deviation — `Secure=false` on localhost — so there is no
+  `DCP_COOKIE_SECURE` for a deployment to get wrong. A test asserts no such field
+  exists.
 
 Decisions settled during M1.2:
 
@@ -115,11 +218,11 @@ Decisions settled during M1.2:
 
 ## 4. Pending milestones
 
-Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending — none started.**
+Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending below are unstarted.**
 
 | Phase | Milestones | Status |
 |---|---|---|
-| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · M1.3 OIDC auth · M1.4 RBAC · M1.5 inventory · M1.6 dashboard shell · M1.7 consolidation | **M1.3 next** |
+| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · M1.4 RBAC · M1.5 inventory · M1.6 dashboard shell · M1.7 consolidation | **M1.4 next** |
 | 2 — Monitoring | M2.1 Prometheus client · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | Pending |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
@@ -148,7 +251,7 @@ The decisions with the widest blast radius, listed so review can prioritise them
 
 Once a decision is reviewed, record the date and the outcome here.
 
-**Exercised in code as of M1.1** (implemented, not formally approved):
+**Exercised in code as of M1.3** (implemented, not formally approved):
 
 | ID | Where |
 |---|---|
@@ -164,6 +267,15 @@ Once a decision is reviewed, record the date and the outcome here.
 | AD-11 audit append-only | `audit_events` triggers + revoked grants; verified against a confirmed superuser (M1.2) |
 | AD-12 applications environment-agnostic | `applications` created without an `environment` column — **still `OPEN-02`** |
 | AD-14 derived server status | `servers.status` defaults to `PENDING`; the stale sweep owns the rest (M2.5) |
+| **AD-02** OIDC auth code + PKCE, BFF, opaque cookie | `app/auth/oidc_client.py` (discovery, JWKS, PKCE S256, token exchange, ID-token verification), `app/auth/session.py` (opaque 256-bit id in Redis), `app/auth/cookies.py`. Verified in a real browser: the session cookie is invisible to JavaScript and no token reaches the SPA |
+| **AD-19** Redis rate limits, fail-closed on privileged classes | `app/core/ratelimit.py`; `/auth/*` passes `fail_closed=True`, and a test observes a `429` with `Retry-After` when Redis is unreachable |
+| docs/SECURITY.md §2 ID-token verification | Signature against cached JWKS with rotation, `iss`, `aud`, `exp`, `iat`, `nonce`, bounded skew; algorithm taken from our allowlist, never from the token. 44 unit tests, including `alg: none` and HS256 key confusion |
+| docs/SECURITY.md §5 session handling | Idle (30 min) and absolute (8 h) deadlines enforced server-side; rotation on login; `terminate_user_sessions`; `HttpOnly`/`Secure`/`SameSite=Strict`/`Path=/`/host-only; permissions never stored in the session |
+| docs/SECURITY.md §11 CSRF | `app/core/csrf.py` double-submit plus `Origin`/`Referer`, constant-time compare, checked before routing. 24 unit tests plus the live `403`s for missing, mismatched and cross-origin |
+| Mandatory rule 9 never fetch a user-supplied URL | Every discovered OIDC endpoint must share the configured issuer's origin before it is fetched, so a tampered discovery document cannot redirect the token exchange (which carries the client secret). Redirects are not followed |
+| Mandatory rule 6 fail closed | `require_session` answers `401` for every failure mode including an unreachable Redis; rate limiting fails closed on `/auth/*`; a provisioning `IntegrityError` denies rather than `500`s |
+| PRD §4.1 immediate revocation | `/auth/session` re-reads roles and permissions from PostgreSQL on every call and the session record holds none. Tests grant and revoke with no re-login and no restart |
+| AD-15 demonstration banner | `demo_mode: true` on `/auth/session` renders a persistent banner; observed in the browser |
 | Mandatory rule 10 attribution | `ck_audit_events_actor_attribution`: a `USER` event must name its user, enforced by the database |
 | docs/DATABASE.md §10 soft delete | `deleted_at` only on inventory tables, each with partial unique indexes; a test asserts both |
 | docs/DATABASE.md §16 migrations | autogenerated then hand-edited; drift test asserts models and schema agree |
@@ -205,7 +317,7 @@ Once a decision is reviewed, record the date and the outcome here.
 
 | # | Issue | Severity | Handling |
 |---|---|---|---|
-| 20 | **PARTLY RESOLVED 2026-10-13.** The Docker daemon became available during M1.2, and the `postgres` and `redis` services were started and verified healthy (PostgreSQL 17.2, `redis-cli ping` → PONG). The **full** `core` stack and `scripts/smoke-test.sh` are **still unexecuted**. Originally: **the Compose stack has never been started.** No Docker daemon on the implementation machine. `docker compose --profile core config` validates (exit 0), but `up` is unexecuted, so "every service starts healthy" is **unverified**. `scripts/smoke-test.sh` has likewise never run. | Blocks the M1.7 smoke gate, not M1.2 | Run both on a machine with a daemon and record the result here. Expect to fix something. |
+| 20 | **FURTHER RESOLVED 2026-10-13 (M1.3).** The full `core` stack **plus** the `mocks` profile was started and used: `postgres`, `redis`, `backend`, `worker`, `beat`, `frontend` and `mock-idp` all reached `healthy`, and login/logout were driven through them in a real browser. `scripts/smoke-test.sh` itself is **still unexecuted**, so the M1.1 criterion is not formally signed off by its own gate. Previously: the Docker daemon became available during M1.2, and `postgres` and `redis` were started and verified healthy (PostgreSQL 17.2, `redis-cli ping` → PONG). Originally: **the Compose stack has never been started.** No Docker daemon on the implementation machine. `docker compose --profile core config` validates (exit 0), but `up` is unexecuted, so "every service starts healthy" is **unverified**. `scripts/smoke-test.sh` has likewise never run. | Blocks the M1.7 smoke gate only | Run `scripts/smoke-test.sh` and record the result. The stack itself is known to come up. |
 | 21 | **Images use exact tags, not digests**, contrary to AD-16. A digest cannot be resolved without a daemon, and inventing one would be fabricating a fact. | Reproducibility | `scripts/pin-digests.sh` resolves them; commit the result and close this entry. |
 | 22 | **Native Windows without `--reload` cannot reach PostgreSQL.** uvicorn 0.54 picks its loop by platform: no `--reload` on Windows means `ProactorEventLoop`, which psycopg's async driver rejects, so `/readyz` reports `database: false` even with PostgreSQL up. Verified directly. | Local dev ergonomics only; production is Linux | Documented in `README.md`. An attempted `asyncio` policy fix was **removed** — uvicorn uses a loop *factory* and ignores the policy, so the code fixed nothing while looking like it did. |
 | 23 | **Compose host ports moved off the defaults.** A PostgreSQL instance is already listening on 5432 on the implementation machine, so the original mapping would have collided on first `up`. | Avoided | PostgreSQL now publishes on host 5433 and Redis on 6380, both overridable. Container-to-container traffic is unchanged. |
@@ -219,6 +331,17 @@ Once a decision is reviewed, record the date and the outcome here.
 | 27 | **Fixed 2026-10-13: no `.gitattributes`, so a Windows checkout produced CRLF and `npm run format:check` failed on 14 files** while Linux CI passed — a check that fails only on some machines. The shell scripts would have broken the same way on Linux, where a CRLF `.sh` fails with a carriage-return error. Found by running the checks from a fresh clone, not from the working tree. | Was blocking local verification | `.gitattributes` with `* text=auto eol=lf` added (`ef1de2b`); working tree renormalised. Committed blobs were already LF, so no file content changed. Re-verified from a fresh clone: LF checkout, all frontend and backend checks pass. |
 | 26 | **The secret scanner, image scan and Compose smoke gate are unverified locally.** `pre-commit`, `gitleaks` and `trivy` are not installed on the implementation machine, so the M1.1 criterion "the scanner fails on a planted test secret" has **not** been demonstrated. The hooks and CI jobs are configured but unproven. | Verification gap | Run `pre-commit install && pre-commit run --all-files`, plant a test secret, confirm it fails, then record it here. |
 
+### Implementation issues (found during M1.3, 2026-10-13)
+
+| # | Issue | Severity | Handling |
+|---|---|---|---|
+| 33 | **`mock-idp` detaches when `backend` is recreated on its own.** It uses `network_mode: service:backend` so that one issuer URL resolves from both the browser and the backend; recreating only `backend` (e.g. `up -d --build frontend`, which recreates it as a dependency) leaves `mock-idp` in the old network namespace, and `/auth/login` then answers `503 provider_unavailable`. Hit during this session and diagnosed from `docker exec dcp-backend-1 curl localhost:9000` returning nothing. | Local development only | Documented in `README.md` and `infra/compose/mock-idp/README.md`: a plain `up -d` with both profiles recreates both. Not worked around in code, because the alternatives are to weaken the issuer-origin check or to depend on `host.docker.internal`. |
+| 34 | **RESOLVED 2026-10-13. The Vite dev server ignored `VITE_DEV_PROXY_TARGET`.** Compose has set it since M1.1 but `vite.config.ts` hard-coded `http://localhost:8000`, which inside the frontend container is the frontend. Invisible until M1.3 gave the SPA an API call to make; then `/api/v1/auth/session` through the dev server failed with `ECONNREFUSED`. | Was blocking the M1.3 Compose DoD | `vite.config.ts` now reads the variable. `vite.config.ts` is also mounted into the container — previously only `src/` and `index.html` were, so a config change needed an image rebuild, which is why the dead variable survived three milestones. |
+| 35 | **RESOLVED 2026-10-13. Windows `ProactorEventLoop` broke every async-database test.** M1.2's integration tests use the *sync* engine, so this only appeared with M1.3's first async-database tests: psycopg refuses that loop and all 39 failed with `InterfaceError`. | Was blocking the M1.3 test suite | A `pytest_asyncio_loop_factories` hook in `backend/tests/conftest.py` selects `SelectorEventLoop` on Windows. This does **not** contradict issue 22's note that an asyncio *policy* fix was removed from application code: uvicorn picks its loop through a factory and ignores the policy, whereas pytest-asyncio takes a factory. The application answer on Windows is still `--reload`, or Linux. |
+| 36 | **`/auth/session`'s `permissions` array is not yet *proven* advisory.** The M1.3 security checklist asks for an endpoint that still rejects an action the array implies. There is no permission-bearing endpoint yet, so the claim rests on structure: the array is scope-blind, nothing server-side reads it, and no `require_permission` dependency exists to be bypassed. | Verification gap, not a defect | Prove it in M1.4, which adds the first such endpoint. Recorded as an unticked box in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) M1.3 rather than quietly ticked. |
+| 37 | **No way to grant the first role through the application.** JIT provisioning deliberately creates users with no roles, and there is no bootstrap administrator (alembic `0002`). Role administration is M1.4, so today the only way to grant a role is a manual `INSERT` into `user_roles` — whose `granted_by` is `NOT NULL` and references `users`, so the first grant has to name an existing user as its own granter. | Expected at this milestone | M1.4 adds the role endpoints. Worth deciding there how the *first* administrator is bootstrapped, since the schema forbids an unattributed grant. |
+| 38 | **A restart of Redis signs every user out.** The accepted cost of `OPEN-04` resolving as Redis-only. Login, logout and denial remain in PostgreSQL, so the record survives; the live sessions do not. | Accepted, by decision | None. Revisit only if operators report it as a real problem; adding a durable table later is an additive migration. |
+
 ---
 
 ## 7. Tests executed and their actual results
@@ -226,26 +349,34 @@ Once a decision is reviewed, record the date and the outcome here.
 All results below were produced by running the commands on 2026-10-13 and reading
 the output. Nothing here is inferred.
 
-### Executed — `./scripts/check-all.sh`, 13/13 passed
+### Executed — `./scripts/check-all.sh`, 14/14 passed (M1.3, 2026-10-13)
 
 | Check | Command | Result |
 |---|---|---|
 | Backend lint | `uv run ruff check .` | **pass** — "All checks passed!" |
-| Backend format | `uv run ruff format --check .` | **pass** — 24 files formatted |
-| Backend types | `uv run mypy` (strict) | **pass** — "no issues found in 17 source files" |
+| Backend format | `uv run ruff format --check .` | **pass** |
+| Backend types | `uv run mypy` (strict) | **pass** — "no issues found in 42 source files" |
 | Backend security lint | `uv run bandit -q -r app` | **pass** — no findings |
-| Backend tests | `uv run pytest` | **77 passed**, 1 warning, 4.70s |
+| Backend unit tests | `uv run pytest -m "not integration"` | **235 passed**, 100 deselected, 1 warning, 21.41s |
+| Backend integration tests | `uv run pytest -m integration` | **100 passed**, 235 deselected, 1 warning, 22.50s |
 | Backend dependency audit | `uv run pip-audit` | **pass** — "No known vulnerabilities found" |
 | Frontend lint | `npx eslint .` | **pass** |
 | Frontend format | `npx prettier --check .` | **pass** |
 | Frontend types | `npx tsc --noEmit` | **pass** |
-| Frontend tests | `npx vitest run` | **13 passed** (2 files), 1.41s |
-| Frontend build | `npm run build` | **pass** — 31 modules, 228 kB JS / 71 kB gzip |
+| Frontend tests | `npx vitest run` | **30 passed** (3 files), 3.64s |
+| Frontend build | `npm run build` | **pass** — 37 modules, 234 kB JS / 72.6 kB gzip |
 | Frontend audit | `npm audit --audit-level=high` | **pass** — 0 vulnerabilities |
-| Documentation links | `python scripts/check_doc_links.py .` | **pass** — 250 links, 12 files, 0 problems |
+| Documentation links | `python scripts/check_doc_links.py .` | **pass** — 268 links, 13 files, 0 problems |
 
-Backend tests by area: config 14, redaction 25, health 8, middleware 17, errors 13.
-Frontend: `App` 7, `ThemeToggle` 6.
+Both `TEST_DATABASE_URL` and `TEST_REDIS_URL` were set, so nothing skipped. The
+run was against the existing `dcp_test` database on the Compose PostgreSQL and
+Redis database `1` (database `0` is the Celery broker and was left alone).
+
+Backend unit tests by area (235 total): **auth 126** (ID token 44, `next` and login
+flow 42, CSRF 24, session and cookies 16), db units 29, redaction 27, middleware 18,
+config 15, errors 11, health 9. Backend integration (100 total): **auth flow 39**,
+plus M1.2's 61. Frontend (30 total): session gating and logout 17,
+`BackendStatus` 7, `ThemeToggle` 6.
 
 ### Executed — verification beyond the suites
 
@@ -292,15 +423,54 @@ directory, because a working tree can pass checks that a fresh clone fails.
 | ruff / ruff format / mypy strict | **pass** — 31 source files |
 | `/healthz` against the live app | **200** |
 
+### Executed — M1.3, against the live Compose stack and a real browser (2026-10-13)
+
+Stack: `docker compose --profile core --profile mocks up`. All seven services reached
+`healthy`. Driven both with `curl` and, for the browser-dependent parts, in a real
+browser against <http://localhost:5173>.
+
+| Check | Method | Result |
+|---|---|---|
+| **`/readyz` all three green over HTTP** — the item M1.2 left explicitly unconfirmed | `curl http://127.0.0.1:8000/readyz` | **200** `{"status":"ok","checks":{"database":true,"broker":true,"migrations":true}}`. Previously never observed end to end |
+| Full login round trip | `/auth/login` → mock IdP `/authorize` → `/auth/callback` → `/auth/session` | **302** to the IdP with `code_challenge_method=S256`; **302** back to `next`; **200** from `/auth/session` with the right identity |
+| The same flow in a real browser | Clicked "Continue to identity provider", chose the synthetic `viewer` account | Landed back on the SPA showing the demo banner, name, email, "No roles granted — ask an administrator", session expiry, and all three readiness checks green |
+| **No token readable by JavaScript** (M1.3 acceptance criterion) | `document.cookie`, `localStorage`, `sessionStorage` read in the browser | `dcp_session` **not visible**; only `dcp_csrf=…` readable; both storages empty; no `eyJ` anywhere. The session value is not a JWT |
+| Cookie flags on the wire | raw `Set-Cookie` headers | `dcp_session=…; HttpOnly; Max-Age=28800; Path=/; SameSite=strict` and `dcp_csrf=…; Max-Age=28800; Path=/; SameSite=strict`. No `Domain`; no `Secure` because the environment is `local`, which is the one permitted deviation |
+| Logout makes the session unusable | `POST /auth/logout` with cookie + CSRF, then `GET /auth/session` | **200** `{"logged_out":true}`, then **401**. Both cookies cleared (`document.cookie` empty afterwards) |
+| CSRF: missing token | `POST /auth/logout` with a valid session, no header | **403** `{"code":"forbidden","message":"CSRF validation failed."}` |
+| CSRF: mismatched token | header ≠ cookie | **403** |
+| CSRF: cross-origin with a **valid** token | `Origin: https://evil.example.invalid` | **403** |
+| The session survived the rejected requests | `GET /auth/session` after the three `403`s | **200** — a failed CSRF check does not destroy the session |
+| CSRF from inside the browser | `fetch('/api/v1/auth/logout', {method:'POST'})` with no header | **403** |
+| `state` replay | replayed the same `?code&state` | first **302**, replay **400**. Single-use via an atomic `GETDEL` |
+| Open redirect on `next` | absolute URL, `//host`, and a shell-mangled `C:/Program Files/Git/servers` | **422** each, with the rejected value not echoed |
+| Disabled user cannot log in | set `status='DISABLED'`, logged in as that account | **403** "This account is disabled.", and one `LOGIN_DENIED` row with `reason: user_disabled` attributed to that user's `actor_id` |
+| Rate limit enforced | repeated `/auth/login` past the budget | **429** with `Retry-After`. Encountered unintentionally first, while hand-testing — the limit is real |
+| Just-in-time provisioning | logged in as `operator` four times and `admin` once | **2** `users` rows, no duplicates. First login per subject audited `provisioned: true`, later ones `false` |
+| **Auth audit rows** | `SELECT … FROM audit_events` on the live `dcp` database | `LOGIN_SUCCEEDED`, `LOGOUT`, `LOGIN_DENIED` attributed to `actor_type='USER'` with the user's `actor_id`; `LOGIN_FAILED` as `actor_type='SYSTEM'`, `actor_label='system:auth'`, `actor_id` NULL — which is what `ck_audit_events_actor_attribution` requires |
+| **No token material in any audit row** | regex over `sanitized_metadata` and `actor_label` for `eyJ`, `id_token`, `access_token`, `nonce`, `secret`, `code_verifier`, `dcp_session` | **0 rows** |
+| **No session id, CSRF token, client secret or JWT in the logs** | grep the live `backend` and `mock-idp` container logs for each value | **0 occurrences** of all four, in both containers |
+| Redis holds only the expected key shapes | `redis-cli --scan --pattern 'dcp:*'` | `dcp:session:<sha256>`, `dcp:user-sessions:<uuid>`, `dcp:oidc-login:<sha256>`, `dcp:ratelimit:<bucket>`. No raw session identifier is a key |
+| Access token is not retained | scanned every `dcp:*` string value for the mock's access token | **not present** — it is read from the token response and dropped |
+| Unconfigured IdP degrades honestly | `/auth/login` with the `mocks` profile down | **503** `not_configured`, naming the variables to set and no values |
+| SPA served and proxied | `GET /` and `/api/v1/auth/session` through the Vite dev server | **200** and **401** respectively (after fixing issue 34) |
+| Compose config validity | `docker compose --profile core --profile mocks config --quiet` | **exit 0** |
+| Schema unchanged by M1.3 | `SELECT version_num FROM alembic_version` before and after | **`0002`** both times. No migration was added; existing data preserved |
+
 ### NOT executed — no result may be claimed
 
 | Check | Why |
 |---|---|
-| `docker compose up` / `scripts/smoke-test.sh` | Docker daemon not running (issue 20) |
+| `scripts/smoke-test.sh` | Never run. The stack itself now comes up healthy (issue 20), but its own gate is unexecuted |
 | Image build and Trivy scan | same, and `trivy` not installed |
 | `pre-commit run --all-files`; planted-secret test | `pre-commit` and `gitleaks` not installed (issue 26) |
 | The GitHub Actions workflow | never triggered; `.github/workflows/ci.yml` is unproven |
-| `/readyz` returning 200 against a fully migrated database | The app starts and `/healthz` returns 200, but a green `/readyz` was **not** observed end to end: the run that would have shown it hit issue 31, which was then fixed. The checks are covered by unit tests and the underlying database is verified migrated, but the three-green HTTP response is unconfirmed — **re-run this first in M1.3** |
+| ~~`/readyz` returning 200 against a fully migrated database~~ | **Done in M1.3** — see the table above. Moved out of this list |
+| A round trip against a **real** identity provider | No provider chosen (`OPEN-01`) and none exists to point at. Everything in M1.3 was verified against the mock IdP, which checks no password. The remaining unknowns are claim shapes, discovery quirks, redirect-URI registration and token-endpoint authentication |
+| `/auth/session`'s `permissions` array proven advisory by a rejected action | No permission-bearing endpoint exists yet; M1.4 adds the first. Issue 36 |
+| Session rotation on a **role change** | The `rotate()` primitive exists and is tested, but nothing calls it yet — role administration is M1.4 |
+| `terminate_user_sessions` from an API | The primitive exists and is tested (three sessions, one call); the administrator endpoint that calls it is M1.4 |
+| Concurrent-session limits, active-session list | `[RECOMMENDED]` in docs/SECURITY.md §5, not mandatory. Not built |
 | E2E tests | none exist yet (M1.7) |
 | Performance tests | none exist yet (M6.3); **no performance figure has been measured** |
 | Backup/recovery rehearsal | nothing to back up yet (M6.4) |
@@ -311,9 +481,9 @@ directory, because a working tree can pass checks that a fresh clone fails.
 
 | Integration | Status | Notes |
 |---|---|---|
-| OIDC identity provider | **Not configured** | Provider not chosen (`OPEN-01`). Mock IdP planned for M1.3 |
-| PostgreSQL | **Running and migrated** | postgres 17.2-alpine via Compose on host port 5433. Schema at revision `0002`; a separate `dcp_test` database serves the integration suite |
-| Redis | **Running** | redis 7.4.1-alpine via Compose on host port 6380; `redis-cli ping` → PONG. Not yet used by any application code beyond the readiness probe |
+| OIDC identity provider | **Mock only — no real provider configured** | A **mock** OIDC provider (`infra/compose/mock-idp/`, `mocks` profile) is running and in use: discovery, JWKS/RS256, PKCE S256, single-use codes. It **checks no password** and is a development aid, so this is not an operational integration (CLAUDE.md §7). No real provider chosen (`OPEN-01`), no real client registered, no real credential created |
+| PostgreSQL | **Running and migrated** | postgres 17.2-alpine via Compose on host port 5433. Schema still at revision `0002` — M1.3 added no migration. Holds two JIT-provisioned users and the auth audit trail. A separate `dcp_test` database serves the integration suite |
+| Redis | **Running and in use** | redis 7.4.1-alpine via Compose on host port 6380. Now carries the session store, the single-use OIDC login state and the rate-limit counters (database `0`; the integration suite uses `1`). Verified by the live login flow |
 | Prometheus | **Declared, never started** | Compose service + placeholder `infra/prometheus/prometheus.yml`. No rules, no real targets (M2.1) |
 | Node Exporter | **Declared, never started** | In the `observability` profile as a sample scrape target (M2.1) |
 | systemd exporter | **Not configured** | Source not selected (`TS-02`); M2.4 |
@@ -330,59 +500,93 @@ directory, because a working tree can pass checks that a fresh clone fails.
 | Restricted agent | **Not designed** | Adopt-vs-build undecided (`OPEN-05`). M6.1 |
 
 **No cloud resource has been provisioned. No production account has been contacted.
-No credential has been created.** Every value in `.env.example` is a placeholder;
-the only non-placeholder connection attempt made during M1.1 was a local psycopg
-probe against `127.0.0.1:5432` using placeholder credentials, which failed
-authentication as expected (see issue 23).
+No credential has been created.** Every value in `.env.example` is a placeholder,
+including `DCP_OIDC_CLIENT_SECRET`, whose value is literally
+`placeholder-client-secret` and is shared with the local mock IdP. The only
+non-placeholder connection attempt made during M1.1 was a local psycopg probe
+against `127.0.0.1:5432` using placeholder credentials, which failed authentication
+as expected (see issue 23).
 
 ---
 
 ## 9. Next recommended task
 
-**M1.3 — OIDC authentication and sessions**
-([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m13--oidc-authentication-and-sessions))
+**M1.4 — RBAC and authorisation enforcement**
+([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m14--rbac-and-authorisation-enforcement))
 
-M1.2 created the `users` table and left `app/auth/` holding nothing but a model, so
-M1.3 is the next increment and the prerequisite for M1.4's authorisation work.
+M1.3 left the application able to say *who* a caller is and unable to say what they
+may do. Every seeded role and permission exists, `/auth/session` already reads them,
+and no endpoint enforces anything — so M1.4 is the next increment and the
+prerequisite for every domain endpoint from M1.5 on.
 
-Scope reminder: OIDC discovery with a JWKS cache, authorisation code + PKCE,
-`state`/`nonce` single-use in Redis, opaque session cookie with idle and absolute
-deadlines, CSRF double-submit middleware, just-in-time user provisioning, auth-event
-audit writing, and a mock IdP in the Compose `mocks` profile.
+**What M1.4 can build on:**
 
-**Before starting:**
+- `require_session` in `app/auth/dependencies.py` — one place a request becomes
+  attributable, already fail-closed. `require_permission` composes on top of it.
+- `app/auth/service.py` holds `granted_roles` and `effective_permissions`, which read
+  grants from PostgreSQL per request with no cache. They are **advisory and
+  scope-blind** on purpose; M1.4's matcher is a different function that takes a
+  resolved target. Do not extend these into a matcher.
+- `audit.record()` in `app/audit/service.py` — `AUTHZ_DENIED` has somewhere to go on
+  day one, and the attribution `CHECK` is already proven by the M1.3 rows.
+- `session_store.rotate()` and `terminate_user_sessions()` exist and are tested but
+  have no callers. The role-change and user-disable endpoints are their callers.
 
-1. **Decide `OPEN-04`.** Redis-only sessions, or a durable `user_sessions` table?
-   M1.2 created no such table, following the documented default. If the answer is
-   "durable", M1.3 opens with an additive migration.
-2. **Decide `OPEN-01`** at least provisionally. The mock IdP is enough to build
-   against, but the claim-to-role question shapes `app/authz/` in M1.4.
+**Decide early in M1.4:**
 
-**What M1.3 can now build on:**
+1. **How the first administrator is granted** (issue 37). `user_roles.granted_by` is
+   `NOT NULL` and references `users`, so the schema forbids an unattributed grant.
+   Options: a self-granted first row, a one-shot CLI command, or an explicit
+   bootstrap migration. Picking this before the endpoints is cheaper than after.
+2. **Prove the `permissions` array is advisory** (issue 36) as soon as the first
+   permission-bearing endpoint exists, and tick that box in the M1.3 checklist.
 
-- `User` with `(identity_provider_issuer, identity_provider_subject)` unique — the
-  stable identity key for just-in-time provisioning. Email uniqueness is
-  case-insensitive and scoped to active users, so a retired address can be reused.
-- `AuditEvent` with `actor_type`/`actor_label`, so `LOGIN_SUCCEEDED`,
-  `LOGIN_FAILED` and `LOGIN_DENIED` have somewhere to go on day one, and
-  `ck_audit_events_actor_attribution` already enforces that a `USER` event names its
-  user.
-- `get_session()` in `app/db/session.py` — one session per request, commit on
-  success, rollback on exception. Auth-event writes should ride that transaction
-  rather than opening their own.
-- Seeded roles and permissions, so M1.4 has a matrix to resolve against. Note that
-  `ADMINISTRATOR` deliberately holds no `approve` permission.
-
-**Also worth clearing in the same session**, since Docker is now running: start the
-full `core` stack, run `scripts/smoke-test.sh`, run `scripts/pin-digests.sh`, and
-install `pre-commit` to prove the secret scanner fails on a planted secret. Those are
-issues 20, 21 and 26, all left over from M1.1.
+**Also still outstanding, and cheap to clear:** `scripts/smoke-test.sh` has never run
+(issue 20), images are tag-pinned rather than digest-pinned (issue 21), and the secret
+scanner has never been shown to fail on a planted secret (issue 26). The Docker daemon
+is available now, so all three are unblocked.
 
 ## 10. Scope confirmation
 
 **Documentation session (earlier, 2026-10-13).** Documentation only: no code, no
 migrations, no packages, no cloud resources, no credentials. Only `PRD.md` pre-existed
 and it was read, not modified.
+
+**M1.3 implementation session (2026-10-13).** Scope was milestone M1.3. Added the OIDC
+client (discovery, JWKS with bounded rotation, PKCE S256, token exchange, ID-token
+verification), the Redis session store, cookie assembly, the CSRF middleware, the
+`/auth/*` router, JIT provisioning, the audit writer, Redis-backed rate limiting, a
+shared Redis client, the mock OIDC provider in the `mocks` profile, and the frontend
+session context, login page and logout. `OPEN-04` resolved as Redis-only, so **no
+migration was added** and the schema is unchanged at `0002`.
+
+Two dependencies added: `pyjwt[crypto]` (new) and `httpx` (moved from the dev group
+to runtime). Justified against [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §10 in §3
+above and in that document.
+
+Changes touching code outside M1.3, each forced by this milestone rather than
+opportunistic: `AppError` gained response headers so a `429` can carry `Retry-After`;
+`vite.config.ts` now reads the `VITE_DEV_PROXY_TARGET` that Compose had been setting
+unused since M1.1 (issue 34); the health panel moved out of `App.tsx` into
+`components/BackendStatus.tsx` so `App` could become the session gate, and its test
+file moved with it; one M1.2 error test now supplies CSRF credentials because the
+middleware runs before routing (assumption A-08); and `test_no_user_is_seeded` moved
+from `test_constraints.py` to `test_migrations.py`, where a freshly migrated schema is
+in scope — it is a claim about the migrations, and the auth tests legitimately create
+users in the shared session schema.
+
+Specifically **not** implemented, to avoid pulling later milestones forward: no
+permission matcher, no `require_permission` dependency and no route-coverage test
+(M1.4); no user or role administration endpoints (M1.4); no domain endpoints (M1.5+);
+no routing shell (M1.6). `rotate()` and `terminate_user_sessions()` were built because
+docs/SECURITY.md §5 makes them mandatory session-store behaviour, but no endpoint
+calls them yet, and that is stated rather than hidden.
+
+Existing data was preserved: PostgreSQL and Redis were the already-running Compose
+services, no volume was reset, no database was created, and the `dcp` schema stayed at
+`0002`. The integration suite continued to use the existing `dcp_test` database, whose
+schema it drops and rebuilds per session as it has since M1.2. No cloud resource was
+provisioned, no production system contacted, and no real credential created or stored.
 
 **M1.2 implementation session (2026-10-13).** Scope was milestone M1.2. Created the
 13 Phase 1 tables, two migrations, partition helpers and their maintenance task, the

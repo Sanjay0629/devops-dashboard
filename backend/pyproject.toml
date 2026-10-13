@@ -16,6 +16,15 @@ dependencies = [
     "celery[redis]>=5.4,<6.0",
     "structlog>=24.4,<26.0",
     "alembic>=1.14,<2.0",
+    # M1.3: outbound HTTP (OIDC discovery, JWKS, token exchange). Already an
+    # approved choice (docs/TECH_STACK.md §4); promoted from the dev group
+    # because the OIDC client is runtime code.
+    "httpx>=0.27,<1.0",
+    # M1.3: ID-token (JWS) verification. TECH_STACK §10 rung 3 fails here —
+    # hand-rolling RS256/JWKS verification is the one place not to save
+    # lines. Pulls `cryptography`. Alternatives: authlib (larger surface,
+    # bundles an OAuth client we do not want), python-jose (stale).
+    "pyjwt[crypto]>=2.10,<3.0",
 ]
 
 [dependency-groups]
@@ -24,7 +33,6 @@ dev = [
     "pytest-asyncio>=0.24,<2.0",
     "pytest-cov>=6.0,<8.0",
     "pytest-timeout>=2.3,<3.0",
-    "httpx>=0.27,<1.0",
     "ruff>=0.8,<1.0",
     "mypy>=1.13,<2.0",
     "bandit>=1.8,<2.0",

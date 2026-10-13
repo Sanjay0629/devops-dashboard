@@ -155,7 +155,7 @@ Durable record for inventory, identity/permissions, operation and deployment sta
 
 ### 2.5 Redis
 
-Celery broker and result backend, session store (AD-02, OPEN-04), rate-limit counters, short-TTL caches for dashboard aggregates and provider metadata.
+Celery broker and result backend, session store (AD-02; OPEN-04 resolved in M1.3 as Redis-only), rate-limit counters, short-TTL caches for dashboard aggregates and provider metadata.
 
 **Constraint (PRD §5.4):** Redis is never the only durable record of a privileged operation. Every operation and deployment row is written to PostgreSQL **before** a task is enqueued, and the task carries only the row id.
 
@@ -807,7 +807,7 @@ Recorded rather than silently resolved. Each has a working default so Phase 1 is
 | OPEN-01 | Which OIDC provider, and how do IdP groups map to DCP roles? | Generic OIDC discovery; roles assigned in DCP, not from claims | Phase 1 hardening |
 | OPEN-02 | PRD §4.9 lists `environment` as an application attribute, but §6 `applications` has no such column while `deployments` does. Is an application per-environment or environment-agnostic? | Environment-agnostic (AD-12) | Database + API shape; **needs product confirmation** |
 | OPEN-03 | Are alert rules file-managed or editable in-app? | File-managed in git (AD-06) | Phase 3 scope |
-| OPEN-04 | Session store: Redis-only, or a durable `user_sessions` table? | Redis-only; login/logout still audited in PostgreSQL | Phase 1 |
+| ~~OPEN-04~~ | Session store: Redis-only, or a durable `user_sessions` table? | **RESOLVED 2026-10-13 (M1.3): Redis-only.** No `user_sessions` table. Login, logout and denial are still audited in PostgreSQL, so the authentication record survives a flushed Redis even though live sessions do not. Accepted cost: a Redis restart logs everyone out. | ~~Phase 1~~ — closed |
 | OPEN-05 | Restricted agent for non-cloud Linux: adopt SSM hybrid activations / Azure Arc, or build one? | Prefer adopt; defer build | Phase 4 |
 | OPEN-06 | Which secret store is canonical in a multi-cloud portal? | Pluggable interface; one configured backend per deployment | Phase 1 config |
 | OPEN-07 | RPO/RTO targets | Undefined; backups daily + WAL archiving as a starting point | Phase 6 |

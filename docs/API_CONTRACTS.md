@@ -247,6 +247,8 @@ Every state-changing endpoint writes an `audit_event` **in the same transaction*
 
 **12.2** `?code&state`. Validation: `state` must exist and be unconsumed (single-use); ID token signature/`iss`/`aud`/`exp`/`nonce` all verified. Errors: `400 bad_request` (missing/replayed state), `401 unauthenticated` (token verification failed), `503 provider_unavailable` (IdP unreachable). Timeout: 10 s on token exchange. Audit: `LOGIN_SUCCEEDED` / `LOGIN_FAILED` (never any token material). A disabled user gets `403` and an audited `LOGIN_DENIED`.
 
+Also `403` + `LOGIN_DENIED` (M1.3, assumption A-05): a **new** identity whose email is already held by an **active** user is refused rather than merged, renamed or duplicated — `users` has a case-insensitive unique index over active users, so the case is reachable (a re-provisioned directory account, two providers). `403` rather than `409 duplicate_resource` deliberately: a `409` would confirm to an unauthenticated caller that the address is registered. An administrator resolves it by retiring the existing row, after which the address is reusable. Identity is keyed on `(issuer, subject)`, so an email *change* on an existing subject updates that user and never creates a second one.
+
 **12.3** Requires CSRF token. Idempotent: logging out twice succeeds. Audit `LOGOUT`.
 
 **12.4** Response:

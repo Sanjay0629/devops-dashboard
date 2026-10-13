@@ -7,6 +7,8 @@ arrives with M1.2 (docs/TESTING.md §2).
 
 from __future__ import annotations
 
+import asyncio
+import sys
 from collections.abc import Iterator
 
 import pytest
@@ -25,6 +27,27 @@ TEST_ENV = {
     "DCP_DATABASE_URL": "postgresql+psycopg://placeholder:placeholder@localhost:5432/placeholder",
     "DCP_REDIS_URL": "redis://localhost:6379/0",
 }
+
+
+def pytest_asyncio_loop_factories() -> dict[str, object]:
+    """Force a selector-based event loop on Windows.
+
+    psycopg's async driver refuses ``ProactorEventLoop``, which is what asyncio
+    picks by default on Windows — so without this, every test that touches the
+    async engine fails with ``InterfaceError`` (PROGRESS.md issue 22). The
+    sync-engine integration tests from M1.2 never hit it, which is why this
+    only surfaced with M1.3's first async-database tests.
+
+    This is a **test-harness** fix and does not contradict the note in issue 22
+    that an asyncio *policy* fix was removed from application code: uvicorn
+    selects its loop through a factory and ignores the policy, so that change
+    fixed nothing while looking like it did. pytest-asyncio takes a loop
+    factory, which is exactly what is needed. The application-side answer on
+    Windows is still `--reload`, or Linux.
+    """
+    if sys.platform == "win32":
+        return {"selector": asyncio.SelectorEventLoop}
+    return {"default": asyncio.new_event_loop}
 
 
 def _clear_caches() -> None:
