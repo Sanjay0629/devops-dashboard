@@ -21,7 +21,7 @@ def test_readyz_ok_when_required_checks_pass(client: TestClient, all_checks_pass
     assert body["checks"] == {"database": True, "broker": True, "migrations": True}
 
 
-@pytest.mark.parametrize("failing", ["database", "broker"])
+@pytest.mark.parametrize("failing", ["database", "broker", "migrations"])
 def test_readyz_503_when_a_required_check_fails(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, failing: str
 ) -> None:
@@ -42,16 +42,16 @@ def test_readyz_503_when_a_required_check_fails(
     assert response.json()["checks"][failing] is False
 
 
-def test_migrations_check_is_reported_but_not_yet_required(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """M1.1: no schema exists yet, so 'migrations' must not gate readiness.
+def test_migrations_now_gate_readiness(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """M1.2 promoted `migrations` into REQUIRED_CHECKS.
 
-    M1.2 adds "migrations" to REQUIRED_CHECKS and this test changes with it.
+    An instance whose schema is behind the code it runs must not serve traffic:
+    every query it makes is against the wrong shape. This replaces M1.1's
+    assertion that the check was reported but not required.
     """
     import app.health.checks as checks
 
-    assert "migrations" not in checks.REQUIRED_CHECKS
+    assert "migrations" in checks.REQUIRED_CHECKS
 
     async def ok() -> bool:
         return True
@@ -64,8 +64,18 @@ def test_migrations_check_is_reported_but_not_yet_required(
     monkeypatch.setattr(checks, "check_migrations", fail)
 
     response = client.get("/readyz")
-    assert response.status_code == 200
+    assert response.status_code == 503
     assert response.json()["checks"]["migrations"] is False
+
+
+def test_expected_head_is_readable_from_the_migration_scripts() -> None:
+    """The readiness check needs the Alembic scripts present in the image."""
+    from app.health.checks import expected_head
+
+    expected_head.cache_clear()
+    head = expected_head()
+    assert head is not None, "alembic head unreadable; is alembic/ in the image?"
+    assert head.isalnum()
 
 
 @pytest.mark.security

@@ -87,12 +87,13 @@ PRD §12 names these; each gets a table-driven suite.
 Against a **real PostgreSQL container**.
 
 - `alembic upgrade head` from an empty database creates every table, constraint, index, partition and grant.
+- **Autogenerate reports no drift** against the models — the strongest form of the model/schema consistency check, and the reason `server_default` must be `text("now()")` rather than a bare string (a literal string never compares equal to the reflected default, so the check would cry wolf on every timestamp column and be ignored).
 - `downgrade -1` then `upgrade head` round trip.
 - Full `downgrade base` where supported; where a revision is irreversible, assert the documented comment exists.
 - Seed revisions are idempotent when re-applied.
 - Each unique and partial index actually rejects a duplicate: `(cloud_account_id, provider_resource_id)`; `(server_id, service_name)`; `(requested_by, idempotency_key)`; the one-in-flight operation index; `metrics_instance`; the open-alert `dedup_key` index.
 - Each `CHECK` rejects an invalid value, including `ck_operations_verified_success` and the deployment health-check-evidence check.
-- **Audit immutability:** `UPDATE` and `DELETE` on `audit_events` as the application role both fail (AD-11).
+- **Audit immutability:** `UPDATE`, `DELETE` and `TRUNCATE` on `audit_events` all fail, including when issued directly against a partition, and including as a superuser (AD-11). The suite also asserts that the test role *is* privileged, so the tests cannot pass for the wrong reason — grants alone were measured to be insufficient, because a superuser bypasses them.
 - Partition routing: a row with a future `occurred_at` lands in the right partition; a missing partition **fails loudly** rather than silently losing an audit row.
 - `updated_at` trigger fires on update, not on insert-only columns.
 - Soft-delete semantics: a deleted row is excluded from scope resolution and can never be an operation target; a name can be reused after deletion.
@@ -353,7 +354,7 @@ uv run ruff format --check .             # formatting
 uv run mypy app                          # type check
 uv run pytest -q                         # all tests
 uv run pytest -q -m "not integration"    # unit only
-uv run pytest -q -m integration          # integration (needs containers)
+uv run pytest -q -m integration          # integration (needs TEST_DATABASE_URL)
 uv run pytest --cov=app --cov-report=term-missing
 uv run bandit -r app                     # security lint
 uv run pip-audit                         # dependency CVEs
@@ -398,7 +399,22 @@ uv run pytest -q -m real_integration --integration-profile=nonprod-sandbox
 ./scripts/check-all.sh
 ```
 
-**Markers:** `unit` (default), `integration` (containers required), `security`, `slow`, `real_integration` (opt-in, excluded from CI). A test lacking a marker is treated as `unit` and must not touch the network or the filesystem outside a temporary directory.
+**Markers:** `unit` (default), `integration` (containers required), `security`, `slow`, `real_integration` (opt-in, excluded from CI). A test lacking a marker is treated as `unit` and must not touch the network or the filesystem outside a temporary directory. Everything under `backend/tests/integration/` is marked `integration` automatically by a collection hook, so a new file there cannot be silently excluded.
+
+### Integration tests need a database **[implemented in M1.2]**
+
+```bash
+docker compose -f infra/compose/docker-compose.yml --profile core up -d postgres redis
+docker compose -f infra/compose/docker-compose.yml exec -T postgres   psql -U dcp -d postgres -c 'CREATE DATABASE dcp_test OWNER dcp;'
+
+cd backend
+export TEST_DATABASE_URL='postgresql+psycopg://dcp:placeholder-password@127.0.0.1:5433/dcp_test'
+uv run pytest -m integration
+```
+
+`TEST_DATABASE_URL` is deliberately **not** `DCP_`-prefixed: that prefix is reserved for application settings, and an unrecognised `DCP_*` variable is a startup error by design, so a test-harness variable wearing it would force that guard to be loosened.
+
+Unset, the integration tests **skip with a reason**. Set but unreachable, they **fail** — "the database was configured and did not work" is a result, not a reason to skip. CI additionally fails the build if the integration suite reports zero collected tests, because a skipped suite and a passing suite look identical in a summary.
 
 ---
 

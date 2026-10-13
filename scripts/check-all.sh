@@ -5,6 +5,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 failed=()
+skipped=()
 
 run() {
   local label="$1"; shift
@@ -21,7 +22,18 @@ run "backend: ruff lint"      bash -c 'cd backend && uv run ruff check .'
 run "backend: ruff format"    bash -c 'cd backend && uv run ruff format --check .'
 run "backend: mypy"           bash -c 'cd backend && uv run mypy'
 run "backend: bandit"         bash -c 'cd backend && uv run bandit -q -r app'
-run "backend: pytest"         bash -c 'cd backend && uv run pytest'
+run "backend: unit tests"     bash -c 'cd backend && uv run pytest -m "not integration"'
+
+# Integration tests need a real PostgreSQL. Without this branch the script
+# printed "ALL CHECKS PASSED" while 61 tests silently skipped — a pass it had
+# not earned, and the suite that covers the constraints, partitioning and audit
+# immutability the schema depends on.
+if [[ -n "${TEST_DATABASE_URL:-}" ]]; then
+  run "backend: integration"  bash -c 'cd backend && uv run pytest -m integration'
+else
+  printf '\n=== backend: integration\n    SKIPPED — TEST_DATABASE_URL is not set (see docs/TESTING.md §16)\n'
+  skipped+=("backend: integration")
+fi
 # Not --strict: see the comment in .github/workflows/ci.yml.
 run "backend: pip-audit"      bash -c 'cd backend && uv run pip-audit'
 run "frontend: eslint"        bash -c 'cd frontend && npx eslint .'
@@ -34,6 +46,12 @@ run "docs: link check"        python scripts/check_doc_links.py .
 
 printf '\n========================================\n'
 if (( ${#failed[@]} == 0 )); then
+  if (( ${#skipped[@]} > 0 )); then
+    printf 'CHECKS PASSED, but %d SKIPPED — a skipped suite is not a passing suite:\n' \
+      "${#skipped[@]}"
+    printf '  - %s\n' "${skipped[@]}"
+    exit 0
+  fi
   printf 'ALL CHECKS PASSED\n'
   exit 0
 fi

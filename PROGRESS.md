@@ -2,7 +2,7 @@
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
 **Last updated:** 2026-10-13
-**Updated by:** M1.1 implementation session
+**Updated by:** M1.2 implementation session
 
 > **Rules for this file**
 > - Record only what has **actually happened**. Never mark anything complete because a plan says it should be.
@@ -14,29 +14,41 @@
 
 ## 1. Current project stage
 
-**Stage: Phase 1 — Foundation. Milestone M1.1 complete; M1.2 not started.**
+**Stage: Phase 1 — Foundation. Milestones M1.1 and M1.2 complete; M1.3 not started.**
 
-The repository now contains a running application skeleton: FastAPI backend with
-liveness/readiness endpoints, a React frontend, Celery worker and beat, a profiled
-Docker Compose stack, and CI. It monitors nothing and authenticates nobody — see
-[§4](#4-pending-milestones) for what each later milestone adds.
+The application has a running skeleton and a migrated PostgreSQL schema. It still
+monitors nothing and authenticates nobody — see [§4](#4-pending-milestones).
 
 ```
 PRD.md  CLAUDE.md  PROGRESS.md  README.md
-.env.example  .gitignore  .dockerignore  .pre-commit-config.yaml
+.env.example  .gitattributes  .gitignore  .dockerignore  .pre-commit-config.yaml
 .github/workflows/ci.yml
-backend/     pyproject.toml, uv.lock, Dockerfile, app/{core,health,db,workers}, tests/
-frontend/    package.json, package-lock.json, Dockerfile, vite/ts/eslint/prettier config, src/
+backend/     pyproject.toml, uv.lock, Dockerfile, alembic.ini
+  app/core/        config, logging, redaction, errors, middleware
+  app/health/      liveness, readiness (database, broker, migrations-at-head)
+  app/db/          base, types (uuid7), engines, session, partition helpers
+  app/auth/        User
+  app/authz/       Role, Permission, RolePermission, UserRole
+  app/inventory/   CloudAccount, Server, Application, ApplicationServer,
+                   Service, ServiceActionPolicy
+  app/approvals/   ApprovalPolicy
+  app/audit/       AuditEvent (partitioned, append-only)
+  app/workers/     Celery app, ping, partition maintenance
+  alembic/         0001 initial schema, 0002 seed reference data
+  tests/           unit; tests/integration/ needs real PostgreSQL
+frontend/    React + TypeScript + Vite + Tailwind SPA
 infra/       compose/docker-compose.yml, prometheus/, loki/, alloy/
 scripts/     check-all.sh, smoke-test.sh, check_doc_links.py, pin-digests.sh
 docs/        eight design documents
 ```
 
-There is still **no** database schema, no Alembic directory, no authentication, no
-authorisation, no domain model and no integration of any kind.
+There is still **no** authentication, no authorisation enforcement, no domain API
+and no integration of any kind. 13 of the 19 tables in
+[`docs/DATABASE.md`](docs/DATABASE.md) exist; the six that record operations,
+deployments and alerts arrive with the milestones that write to them.
 
-Version control: branch `main` tracking `origin/main` on GitHub. Initial
-documentation commit `d7dad3d`; `944558b` updated this file.
+Version control: branch `main` tracking `origin/main`. Last pushed commit
+`fec466d`; M1.2 work is uncommitted at the time of writing.
 
 ## 2. Completed milestones
 
@@ -44,6 +56,7 @@ documentation commit `d7dad3d`; `944558b` updated this file.
 |---|---|---|---|
 | Documentation set drafted (8 documents + this file) | **Drafted, awaiting review** | 2026-10-13 | Committed as `d7dad3d`, pushed to `origin/main` |
 | **M1.1** — repository skeleton, Compose core, health endpoints, CI | **Complete, with two caveats** | 2026-10-13 | All 13 local checks pass ([§7](#7-tests-executed-and-their-actual-results)); endpoints verified over real HTTP |
+| **M1.2** — database schema, migrations, partitioning, audit immutability, seed data | **Complete** | 2026-10-13 | Migrations applied, downgraded and re-applied against **real PostgreSQL 17.2**; immutability verified against a confirmed superuser ([§7](#7-tests-executed-and-their-actual-results)) |
 
 **M1.1 caveats — neither blocks M1.2, both are tracked in [§6](#6-known-issues):**
 
@@ -62,29 +75,43 @@ documentation commit `d7dad3d`; `944558b` updated this file.
 
 ## 3. In-progress milestone
 
-**None.** M1.1 is finished; M1.2 (database schema and migrations) has not begun.
+**None.** M1.2 is finished; M1.3 (OIDC authentication and sessions) has not begun.
 
 Outstanding decisions, in the order they bite:
 
-- [ ] **`OPEN-02` — before M1.5.** `PRD.md` §4.9 lists `environment` as an application
-      attribute, but §6's `applications` table omits it while `deployments` carries it.
-      The documents assume applications are environment-agnostic (`AD-12`). This
-      changes the schema and the applications API, so confirm it before M1.5.
-- [ ] `OPEN-04` (session store: Redis-only vs a durable table) — before M1.3.
-- [ ] `OPEN-01` (identity provider) — before M1.3 hardening; the mock IdP is enough to start.
+- [ ] **`OPEN-04` — before M1.3.** Redis-only sessions, or a durable `user_sessions`
+      table? M1.2 did **not** create one, following the documented default. Adding it
+      later is an additive migration, so this is not urgent, merely next.
+- [ ] **`OPEN-01` — before M1.3 hardening.** Which identity provider, and does any
+      claim ever map to a role? The documented default is "roles are assigned in DCP
+      only", which is what the seeded schema assumes. The mock IdP is enough to start.
+- [ ] **`OPEN-02` — before M1.5.** `applications` was created **without** an
+      `environment` column (`AD-12`). Reversing that after M1.5 means a data
+      migration, so confirm it before then.
 - [ ] `TS-02` (systemd metrics source) and `TS-01` (charting library) — before M2.
-- [ ] Run the Compose stack and `scripts/smoke-test.sh` on a machine with a working
-      Docker daemon, then record the result here.
+- [ ] `OPEN-15` — the audit-immutability hardening M1.2 could not finish: a
+      non-superuser application role separate from the migration owner. Scheduled
+      M6.2; see issue 28.
 
-Decisions settled during M1.1:
+Decisions settled during M1.2:
 
-- **`TS-03` → uv.** It was already installed on the implementation machine. `uv.lock` is
-  committed and CI installs with `--frozen`.
-- **`OPEN-06` → environment variables for now.** Credentials arrive as `DCP_*` variables
-  injected by the platform, held as `SecretStr`. A pluggable secret-store resolver was
-  deliberately **not** built: nothing in M1.1 has a provider to read from, and an
-  interface with one unused implementation is scaffolding. It lands with the first real
-  provider (M4.x). `OPEN-06` stays open for that choice.
+- **UUIDv7 over v4.** `uuid.uuid7` is Python 3.14+ and this project pins 3.12, so
+  `app/db/types.py` implements RFC 9562 in twelve lines. Time-ordered ids keep index
+  inserts at the right-hand edge of the B-tree on the append-heavy tables instead of
+  scattering them. Ids are opaque, so swapping the generator later needs no migration.
+- **Enums as `text` + `CHECK`, not native PostgreSQL enums**, per
+  [`docs/DATABASE.md`](docs/DATABASE.md) §1 rule 5 — now exercised by tests that
+  assert invalid values are rejected.
+- **Alembic runs synchronously** while the app is async. Migrations have no reason to
+  be concurrent, and psycopg3 serves both modes behind one dialect, so there is one
+  driver and no second code path.
+- **The initial migration was autogenerated, then hand-edited**, as
+  [`docs/DATABASE.md`](docs/DATABASE.md) §16 item 2 prescribes. Autogenerate produced
+  13 tables, the partial and functional indexes and the partition declaration; the
+  `updated_at` trigger, the initial partitions and the immutability triggers were
+  added by hand. It also omitted `from sqlalchemy.dialects import postgresql` despite
+  emitting `postgresql.*` types — that import is now in `script.py.mako` so the gap
+  does not recur on every future revision.
 
 ## 4. Pending milestones
 
@@ -92,7 +119,7 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 
 | Phase | Milestones | Status |
 |---|---|---|
-| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · M1.2 schema + migrations · M1.3 OIDC auth · M1.4 RBAC · M1.5 inventory · M1.6 dashboard shell · M1.7 consolidation | **M1.2 next** |
+| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · M1.3 OIDC auth · M1.4 RBAC · M1.5 inventory · M1.6 dashboard shell · M1.7 consolidation | **M1.3 next** |
 | 2 — Monitoring | M2.1 Prometheus client · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | Pending |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
@@ -134,6 +161,12 @@ Once a decision is reviewed, record the date and the outcome here.
 | docs/SECURITY.md §7 headers | `SecurityHeadersMiddleware`, asserted on success *and* error responses |
 | docs/SECURITY.md §12 CORS | wildcard rejected in every environment at config load |
 | docs/API_CONTRACTS.md §3/§8 | error envelope and structured validation errors, with the rejected value never echoed |
+| AD-11 audit append-only | `audit_events` triggers + revoked grants; verified against a confirmed superuser (M1.2) |
+| AD-12 applications environment-agnostic | `applications` created without an `environment` column — **still `OPEN-02`** |
+| AD-14 derived server status | `servers.status` defaults to `PENDING`; the stale sweep owns the rest (M2.5) |
+| Mandatory rule 10 attribution | `ck_audit_events_actor_attribution`: a `USER` event must name its user, enforced by the database |
+| docs/DATABASE.md §10 soft delete | `deleted_at` only on inventory tables, each with partial unique indexes; a test asserts both |
+| docs/DATABASE.md §16 migrations | autogenerated then hand-edited; drift test asserts models and schema agree |
 
 ---
 
@@ -172,13 +205,18 @@ Once a decision is reviewed, record the date and the outcome here.
 
 | # | Issue | Severity | Handling |
 |---|---|---|---|
-| 20 | **The Compose stack has never been started.** No Docker daemon on the implementation machine. `docker compose --profile core config` validates (exit 0), but `up` is unexecuted, so "every service starts healthy" is **unverified**. `scripts/smoke-test.sh` has likewise never run. | Blocks the M1.7 smoke gate, not M1.2 | Run both on a machine with a daemon and record the result here. Expect to fix something. |
+| 20 | **PARTLY RESOLVED 2026-10-13.** The Docker daemon became available during M1.2, and the `postgres` and `redis` services were started and verified healthy (PostgreSQL 17.2, `redis-cli ping` → PONG). The **full** `core` stack and `scripts/smoke-test.sh` are **still unexecuted**. Originally: **the Compose stack has never been started.** No Docker daemon on the implementation machine. `docker compose --profile core config` validates (exit 0), but `up` is unexecuted, so "every service starts healthy" is **unverified**. `scripts/smoke-test.sh` has likewise never run. | Blocks the M1.7 smoke gate, not M1.2 | Run both on a machine with a daemon and record the result here. Expect to fix something. |
 | 21 | **Images use exact tags, not digests**, contrary to AD-16. A digest cannot be resolved without a daemon, and inventing one would be fabricating a fact. | Reproducibility | `scripts/pin-digests.sh` resolves them; commit the result and close this entry. |
 | 22 | **Native Windows without `--reload` cannot reach PostgreSQL.** uvicorn 0.54 picks its loop by platform: no `--reload` on Windows means `ProactorEventLoop`, which psycopg's async driver rejects, so `/readyz` reports `database: false` even with PostgreSQL up. Verified directly. | Local dev ergonomics only; production is Linux | Documented in `README.md`. An attempted `asyncio` policy fix was **removed** — uvicorn uses a loop *factory* and ignores the policy, so the code fixed nothing while looking like it did. |
 | 23 | **Compose host ports moved off the defaults.** A PostgreSQL instance is already listening on 5432 on the implementation machine, so the original mapping would have collided on first `up`. | Avoided | PostgreSQL now publishes on host 5433 and Redis on 6380, both overridable. Container-to-container traffic is unchanged. |
 | 24 | **`uv run pip-audit --strict` fails on the local project**, which is not on PyPI. | Avoided | `--strict` dropped from CI and `check-all.sh`, with the reason in a comment. Verified empirically that plain `pip-audit` still exits 1 on a real vulnerability (reproduced with pytest 8.4.2, 2 findings) and 0 when clean. |
+| 28 | **Audit immutability is enforced by triggers, not by grants — and the grant layer is currently inert.** Measured directly: with the single development database user (a superuser and the table owner), `information_schema` reported `UPDATE`/`DELETE` as revoked while both statements still succeeded. Triggers close it for every role, including superusers, but a superuser can still drop a trigger. | Accepted for now, documented | The remaining hardening is a non-superuser application role separate from the migration owner, plus audit export to an independently protected store. Both are M6.2 (`OPEN-15`). The grant layer is already in place and becomes effective the moment the app connects as a dedicated role. |
+| 29 | **RESOLVED 2026-10-13. A DSN host of `localhost` hung the integration suite indefinitely.** First diagnosed as "slow" (25+ minutes); `pytest-timeout` showed pytest at **0 CPU seconds** with no database activity, and the stack pinned it to a sync `psycopg` connect inside `selectors.select()` with no deadline. Cause: Compose publishes these ports on IPv4 loopback only, `localhost` resolves to `::1` first on Windows, and the filtered IPv6 attempt had no connect timeout. | Was blocking the M1.2 DoD | Three fixes: `connect_timeout` on both application engines and on the test engine; host-side DSNs changed to `127.0.0.1`; `pytest-timeout` added with a 120s default so a hang fails instead of stalling. **Suite went from 25+ minutes to 9 seconds.** |
+| 31 | **The readiness probe used one shared wall clock for all three checks**, so a single slow dependency consumed the budget and every check reported `false` — including the broker, which was healthy. Found while investigating issue 29. | Fixed | Each check now has its own deadline, so per-dependency verdicts are accurate. |
+| 32 | **`compare_server_default` produces permanent false drift** on function defaults: Alembic compares the model's `TextClause` against the reflected string form, and `now()` never matches. | Fixed | Disabled in `alembic/env.py` and the drift test, with the reason in a comment. Table, column, index and constraint drift are still detected — `text("now()")` in `TimestampMixin` was also needed and is kept. |
+| 30 | **`alembic.ini` needed `path_separator = os`.** Without it Alembic warns that it is falling back to legacy splitting of `prepend_sys_path` on spaces, commas and colons. | Fixed | Added; the deprecation warning is gone. |
 | 25 | **One upstream deprecation warning remains** in the backend suite: starlette advises `httpx2` for `TestClient`. Left visible rather than silenced, as a migration signal. | Cosmetic | Revisit when `httpx2` is stable. |
-| 27 | **Fixed 2026-10-13: no `.gitattributes`, so a Windows checkout produced CRLF and `npm run format:check` failed on 14 files** while Linux CI passed — a check that fails only on some machines. The shell scripts would have broken the same way on Linux (`bash: : command not found`). Found by running the checks from a fresh clone, not from the working tree. | Was blocking local verification | `.gitattributes` with `* text=auto eol=lf` added (`ef1de2b`); working tree renormalised. Committed blobs were already LF, so no file content changed. Re-verified from a fresh clone: LF checkout, all frontend and backend checks pass. |
+| 27 | **Fixed 2026-10-13: no `.gitattributes`, so a Windows checkout produced CRLF and `npm run format:check` failed on 14 files** while Linux CI passed — a check that fails only on some machines. The shell scripts would have broken the same way on Linux, where a CRLF `.sh` fails with a carriage-return error. Found by running the checks from a fresh clone, not from the working tree. | Was blocking local verification | `.gitattributes` with `* text=auto eol=lf` added (`ef1de2b`); working tree renormalised. Committed blobs were already LF, so no file content changed. Re-verified from a fresh clone: LF checkout, all frontend and backend checks pass. |
 | 26 | **The secret scanner, image scan and Compose smoke gate are unverified locally.** `pre-commit`, `gitleaks` and `trivy` are not installed on the implementation machine, so the M1.1 criterion "the scanner fails on a planted test secret" has **not** been demonstrated. The hooks and CI jobs are configured but unproven. | Verification gap | Run `pre-commit install && pre-commit run --all-files`, plant a test secret, confirm it fails, then record it here. |
 
 ---
@@ -241,6 +279,19 @@ directory, because a working tree can pass checks that a fresh clone fails.
 | Lockfiles committed; `.venv` / `node_modules` / `dist` ignored | **confirmed** |
 | Re-verified from a second fresh clone after the fix | **LF checkout; all checks pass** |
 
+### Executed — M1.2, against real PostgreSQL 17.2 (2026-10-13)
+
+| Check | Result |
+|---|---|
+| `alembic upgrade head` from empty | **pass** — 13 tables, 4 audit partitions, 9 `updated_at` triggers, seed data |
+| `alembic downgrade base` then `upgrade head` | **pass** — full round trip, twice |
+| Seed counts | roles 5, permissions 20, role_permissions 62, approval_policies 2, service_action_policies 2, cloud_accounts 1, **users 0** |
+| **Audit immutability** | `INSERT` succeeds; `UPDATE`, `DELETE`, `TRUNCATE` all raise `audit_events is append-only`, **as a confirmed superuser** (`usesuper = t`), including directly against a partition. Grants alone were measured **not** to work — see issue 28 |
+| Integration suite | **61 passed** in 9.01s (`-m integration`) |
+| Unit suite | **108 passed** in 7.60s (`-m "not integration"`) |
+| ruff / ruff format / mypy strict | **pass** — 31 source files |
+| `/healthz` against the live app | **200** |
+
 ### NOT executed — no result may be claimed
 
 | Check | Why |
@@ -249,7 +300,7 @@ directory, because a working tree can pass checks that a fresh clone fails.
 | Image build and Trivy scan | same, and `trivy` not installed |
 | `pre-commit run --all-files`; planted-secret test | `pre-commit` and `gitleaks` not installed (issue 26) |
 | The GitHub Actions workflow | never triggered; `.github/workflows/ci.yml` is unproven |
-| Integration tests against real PostgreSQL/Redis | none exist yet (M1.2) |
+| `/readyz` returning 200 against a fully migrated database | The app starts and `/healthz` returns 200, but a green `/readyz` was **not** observed end to end: the run that would have shown it hit issue 31, which was then fixed. The checks are covered by unit tests and the underlying database is verified migrated, but the three-green HTTP response is unconfirmed — **re-run this first in M1.3** |
 | E2E tests | none exist yet (M1.7) |
 | Performance tests | none exist yet (M6.3); **no performance figure has been measured** |
 | Backup/recovery rehearsal | nothing to back up yet (M6.4) |
@@ -261,8 +312,8 @@ directory, because a working tree can pass checks that a fresh clone fails.
 | Integration | Status | Notes |
 |---|---|---|
 | OIDC identity provider | **Not configured** | Provider not chosen (`OPEN-01`). Mock IdP planned for M1.3 |
-| PostgreSQL | **Declared, never started** | Compose service defined (postgres 17.2-alpine, host port 5433). Never run — no daemon. No schema (M1.2) |
-| Redis | **Declared, never started** | Compose service defined (redis 7.4.1-alpine, appendonly, noeviction, host port 6380). Never run |
+| PostgreSQL | **Running and migrated** | postgres 17.2-alpine via Compose on host port 5433. Schema at revision `0002`; a separate `dcp_test` database serves the integration suite |
+| Redis | **Running** | redis 7.4.1-alpine via Compose on host port 6380; `redis-cli ping` → PONG. Not yet used by any application code beyond the readiness probe |
 | Prometheus | **Declared, never started** | Compose service + placeholder `infra/prometheus/prometheus.yml`. No rules, no real targets (M2.1) |
 | Node Exporter | **Declared, never started** | In the `observability` profile as a sample scrape target (M2.1) |
 | systemd exporter | **Not configured** | Source not selected (`TS-02`); M2.4 |
@@ -288,45 +339,66 @@ authentication as expected (see issue 23).
 
 ## 9. Next recommended task
 
-**M1.2 — Database schema and migrations**
-([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m12--database-schema-and-migrations))
+**M1.3 — OIDC authentication and sessions**
+([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m13--oidc-authentication-and-sessions))
 
-It is the natural next increment: M1.1 left a readiness probe that already reports a
-`migrations` check, and M1.2 is what makes that check meaningful and promotes it into
-`REQUIRED_CHECKS`. Every later milestone needs the schema.
+M1.2 created the `users` table and left `app/auth/` holding nothing but a model, so
+M1.3 is the next increment and the prerequisite for M1.4's authorisation work.
 
-Scope reminder from the plan: models for the Phase 1 tables, an Alembic initial
-revision that includes the `CHECK` constraints, partial unique indexes, `audit_events`
-monthly partitions and the `INSERT, SELECT`-only grant, a seed revision, partition
-pre-creation on the `maintenance` queue, and migration tests against **real
-PostgreSQL** (never SQLite — the partial indexes and grants are the point).
+Scope reminder: OIDC discovery with a JWKS cache, authorisation code + PKCE,
+`state`/`nonce` single-use in Redis, opaque session cookie with idle and absolute
+deadlines, CSRF double-submit middleware, just-in-time user provisioning, auth-event
+audit writing, and a mock IdP in the Compose `mocks` profile.
 
 **Before starting:**
 
-1. **Confirm `OPEN-02`** if you intend to continue past M1.2 into M1.5. It does not
-   block M1.2's identity and inventory tables, but it decides whether `applications`
-   carries an `environment` column, so settling it now avoids a rewrite.
-2. Decide `OPEN-04` (durable session table vs Redis-only) — it determines whether
-   M1.2 creates a `user_sessions` table.
-3. Get a Docker daemon running and clear issues 20, 21 and 26: start the Compose
-   stack, run `scripts/smoke-test.sh`, run `scripts/pin-digests.sh`, and install
-   `pre-commit` to prove the secret scanner fails on a planted secret. M1.2's tests
-   need containerised PostgreSQL anyway, so this is the cheapest moment to do it.
+1. **Decide `OPEN-04`.** Redis-only sessions, or a durable `user_sessions` table?
+   M1.2 created no such table, following the documented default. If the answer is
+   "durable", M1.3 opens with an additive migration.
+2. **Decide `OPEN-01`** at least provisionally. The mock IdP is enough to build
+   against, but the claim-to-role question shapes `app/authz/` in M1.4.
 
-**Two specific code changes M1.2 must make**, both flagged in M1.1's source:
+**What M1.3 can now build on:**
 
-- `backend/app/health/checks.py` — add `"migrations"` to `REQUIRED_CHECKS` and replace
-  `check_migrations()` ("is `alembic_version` present?") with a real head comparison.
-  `tests/test_health.py::test_migrations_check_is_reported_but_not_yet_required`
-  asserts the current state and must change with it.
-- `backend/app/db/session.py` — add the declarative base and the per-request session
-  dependency; only the engine and session factory exist today.
+- `User` with `(identity_provider_issuer, identity_provider_subject)` unique — the
+  stable identity key for just-in-time provisioning. Email uniqueness is
+  case-insensitive and scoped to active users, so a retired address can be reused.
+- `AuditEvent` with `actor_type`/`actor_label`, so `LOGIN_SUCCEEDED`,
+  `LOGIN_FAILED` and `LOGIN_DENIED` have somewhere to go on day one, and
+  `ck_audit_events_actor_attribution` already enforces that a `USER` event names its
+  user.
+- `get_session()` in `app/db/session.py` — one session per request, commit on
+  success, rollback on exception. Auth-event writes should ride that transaction
+  rather than opening their own.
+- Seeded roles and permissions, so M1.4 has a matrix to resolve against. Note that
+  `ADMINISTRATOR` deliberately holds no `approve` permission.
+
+**Also worth clearing in the same session**, since Docker is now running: start the
+full `core` stack, run `scripts/smoke-test.sh`, run `scripts/pin-digests.sh`, and
+install `pre-commit` to prove the secret scanner fails on a planted secret. Those are
+issues 20, 21 and 26, all left over from M1.1.
 
 ## 10. Scope confirmation
 
 **Documentation session (earlier, 2026-10-13).** Documentation only: no code, no
 migrations, no packages, no cloud resources, no credentials. Only `PRD.md` pre-existed
 and it was read, not modified.
+
+**M1.2 implementation session (2026-10-13).** Scope was milestone M1.2. Created the
+13 Phase 1 tables, two migrations, partition helpers and their maintenance task, the
+per-request session dependency, and the unit and integration test suites. Promoted the
+`migrations` readiness check into `REQUIRED_CHECKS` and replaced its body with a real
+head comparison. Added PostgreSQL and Redis service containers to CI.
+
+Specifically **not** implemented, to avoid pulling later milestones forward: no OIDC
+client, session handling or CSRF enforcement (M1.3); no permission matcher or route
+dependencies (M1.4); no domain endpoints (M1.5+); and none of the six tables that
+record operations, deployments or alerts (M3–M5). A test asserts those tables are
+absent, so they cannot appear by accident.
+
+A `dcp_test` database was created in the local Compose PostgreSQL for the integration
+suite. No cloud resource was provisioned, no production system contacted, and no real
+credential created or stored.
 
 **M1.1 implementation session (2026-10-13).** Scope was milestone M1.1 and nothing
 beyond it. Specifically **not** implemented, to avoid pulling later milestones forward:
@@ -378,3 +450,21 @@ Re-run this review whenever a contract document changes.
 
 No documentation change was needed as a result of M1.1 — the contracts were followed
 rather than amended. The two deviations are tracked as issues, not absorbed.
+
+### M1.2 code-vs-documentation review (2026-10-13)
+
+| Check | Result |
+|---|---|
+| All 13 Phase 1 tables from [`docs/DATABASE.md`](docs/DATABASE.md) exist | Yes, with every documented column, constraint and index |
+| The five added entities are present and justified | Yes — `role_permissions`, `service_action_policies`, `approval_policies` created in M1.2; `deployment_targets`, `notification_channels`/`notification_deliveries` deferred to the milestones that write to them |
+| Enum values match [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §9 | Yes — `ServiceState`, `ServerStatus`, `Environment`, `Provider` asserted by unit tests against the published sets |
+| Soft deletion applied only where [`docs/DATABASE.md`](docs/DATABASE.md) §10 permits | Yes, and every unique index on those tables is partial on `deleted_at IS NULL` — asserted by a test, not by inspection |
+| Role matrix matches [`docs/SECURITY.md`](docs/SECURITY.md) §4 | Yes, including that `ADMINISTRATOR` holds no `approve` permission and `VIEWER` holds only `read` |
+| `audit_events` append-only (AD-11) | Enforced, **after the first implementation was measured not to work** — see issue 28 |
+| No secrets in migrations or seed data | Confirmed: `cloud_accounts.credential_reference` is a reference column and is left NULL by the seed; no user and no credential is seeded |
+| **Documentation amended** | [`docs/DATABASE.md`](docs/DATABASE.md) §8 and §16 (trigger-based immutability, `text("now()")` defaults, downgrade must drop the triggers), §20 (implementation status); [`docs/TESTING.md`](docs/TESTING.md) §4 and §16 (drift check, `TEST_DATABASE_URL`) |
+
+Two documentation changes were **substantive, not cosmetic**: the audit-immutability
+mechanism changed from grants to grants-plus-triggers because grants were measured to
+be insufficient, and the `server_default` convention was tightened to `text("now()")`
+because a bare string makes the drift check fail permanently and therefore get ignored.

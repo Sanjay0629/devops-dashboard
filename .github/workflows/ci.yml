@@ -26,6 +26,33 @@ jobs:
   backend:
     name: Backend (lint, types, tests, audit)
     runs-on: ubuntu-latest
+    services:
+      # Real PostgreSQL, never SQLite: the migration tests exist to verify
+      # partial unique indexes, CHECK constraints, partitioning and triggers,
+      # and SQLite would pass tests that PostgreSQL fails
+      # (docs/TESTING.md §1).
+      postgres:
+        image: postgres:17.2-alpine
+        env:
+          POSTGRES_DB: dcp_test
+          POSTGRES_USER: dcp
+          POSTGRES_PASSWORD: placeholder-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dcp -d dcp_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4.1-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
@@ -46,7 +73,44 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run bandit -q -r app
-      - run: uv run pytest --cov=app --cov-report=term-missing --cov-report=xml
+      # Unit tests first: they are fast, need nothing, and failing here means
+      # there is no point paying for the integration run.
+      - name: Unit tests
+        run: uv run pytest -m "not integration" --cov=app --cov-report=term-missing
+
+      - name: Integration tests (real PostgreSQL)
+        env:
+          # Deliberately not DCP_-prefixed: that prefix is reserved for
+          # application settings, and an unrecognised DCP_* variable is a
+          # startup error by design.
+          TEST_DATABASE_URL: postgresql+psycopg://dcp:placeholder-password@localhost:5432/dcp_test
+        run: uv run pytest -m integration --cov=app --cov-append --cov-report=term-missing --cov-report=xml
+
+      - name: Fail if integration tests were skipped
+        # A skipped integration suite looks identical to a passing one in the
+        # summary. This makes "the database was not reachable" a build failure
+        # rather than a green tick.
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://dcp:placeholder-password@localhost:5432/dcp_test
+        run: |
+          set -euo pipefail
+          output="$(uv run pytest -m integration --collect-only -q 2>&1 | tail -3)"
+          echo "$output"
+          if echo "$output" | grep -qi "no tests ran\|skipped"; then
+            echo "Integration tests did not run against PostgreSQL." >&2
+            exit 1
+          fi
+      - name: Migrations apply to an empty database
+        env:
+          DCP_ENVIRONMENT: local
+          DCP_DEMO_MODE: "true"
+          DCP_DATABASE_URL: postgresql+psycopg://dcp:placeholder-password@localhost:5432/dcp_test
+          DCP_REDIS_URL: redis://localhost:6379/0
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+
       - name: Dependency vulnerability audit
         # NOT --strict: the local project is not published to PyPI, and --strict
         # turns that unauditable-package notice into a failure. Plain pip-audit
