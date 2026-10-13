@@ -49,7 +49,8 @@ Within `v1`, **only additive changes**: new endpoints, new optional request fiel
 - **Fail closed.** Any error resolving the session, scope or policy ⇒ `401`/`403`, never a permissive fallback (mandatory rule 9).
 - **Scope filtering, not post-filtering.** Collections apply the caller's readable set inside the query, so `total` never counts unreadable rows and totals cannot be used to infer hidden inventory.
 - **404 vs 403 (deliberate per endpoint).** For `servers`, `services`, `applications` and `deployments`, an out-of-scope target returns **`404`**, because confirming existence is itself information. For `operations`, `deployments` and `approvals` the caller *created* or is named on, an in-scope-but-insufficient-action attempt returns **`403`**. Each endpoint states which applies.
-- Permissions are re-resolved per request from PostgreSQL, so a revocation takes effect on the next request with no re-login (PRD §4.1).
+- Permissions are re-resolved per request from PostgreSQL — no cache, no version counter — so a revocation takes effect on the next request with no re-login (PRD §4.1; amended in M1.4, see [ARCHITECTURE.md §9.2](ARCHITECTURE.md#92-authorization--rbac-with-scope-evaluated-per-request-ad-03)).
+- **Read-only mode.** While the incident switch is on ([§25.10](#2510-read-only-mode)), a state-changing request to any permission-bearing endpoint is refused with `423 read_only_mode`. Reads continue working.
 
 ---
 
@@ -82,6 +83,7 @@ Every non-2xx response uses exactly this envelope:
 | 409 | `operation_in_progress` | One in-flight operation already exists for this target |
 | 409 | `invalid_state_transition` | Action not legal from the current status |
 | 422 | `validation_failed` | Schema/semantic validation; `details` populated ([§8](#8-validation-errors)) |
+| 422 | `not_permitted` | The caller holds the permission; the action is refused for what it would do (self-disable, delegation escalation, unknown scope reference) |
 | 422 | `query_limit_exceeded` | Range, point count or result limit exceeded |
 | 423 | `read_only_mode` | Portal is in incident read-only mode ([SECURITY.md §27](SECURITY.md#27-incident-response)) |
 | 429 | `rate_limited` | Includes `Retry-After` |
@@ -271,7 +273,9 @@ Also `403` + `LOGIN_DENIED` (M1.3, assumption A-05): a **new** identity whose em
 }
 ```
 
-**The `permissions` array exists to render the UI and carries no authority.** Every action is independently authorised server-side (mandatory rule 5).
+**The `permissions` array exists to render the UI and carries no authority.** Every action is independently authorised server-side (mandatory rule 5). It is also **scope-blind**: it lists a permission reachable through any unexpired grant, without applying the grant's scope, so it can say yes to something the server then refuses on a specific target. Proven rather than asserted — `tests/integration/test_admin_roles.py::test_the_permissions_array_is_advisory` grants an empty-scope `ADMINISTRATOR`, reads `admin:users` out of this array, and watches the endpoint answer `403`.
+
+`read_only_mode` reflects the durable setting in [§25.10](#2510-read-only-mode) and is read per request, like the permissions.
 
 ---
 
@@ -787,11 +791,42 @@ Query: `execution_status`, `action_type`, `environment`, `server_id`, `service_i
 }
 ```
 
-Validation: `role_name` ∈ the five roles; `scope_definition` keys ∈ `{environment, cloud_account, server, application}`, values UUIDs or `"*"`; referenced ids must exist; **granting `environment: ["production"]` requires the granting Administrator to hold production scope themselves** (no privilege escalation through delegation); `expires_at` must be in the future. Errors `409 duplicate_resource` on an identical grant, `422`, `403`. Side effects: bumps `permissions_version` so the change takes effect on the target's next request without a re-login (PRD §4.1 acceptance criterion). Audit `ROLE_GRANTED` with before/after scope.
+Validation: `role_name` ∈ the five roles; `scope_definition` keys ∈ `{environment, cloud_account, server, application}`, values UUIDs or `"*"`, `"*"` not combined with specific values; referenced ids must exist; **granting `environment: ["production"]` requires the granting Administrator to hold production scope themselves** (no privilege escalation through delegation — refused with `422 not_permitted` and audited `AUTHZ_DENIED`); `expires_at` must be in the future and carry an offset. Errors `409 duplicate_resource` on an identical grant, `422`, `403`, `404` (unknown user), `423` in read-only mode. Side effects: **none beyond the row and its audit event** — grants are resolved per request from PostgreSQL with no cache, so the change takes effect on the target's next request without a re-login and without an invalidation step (PRD §4.1 acceptance criterion; amended in M1.4, see [ARCHITECTURE.md §9.2](ARCHITECTURE.md#92-authorization--rbac-with-scope-evaluated-per-request-ad-03)). Audit `ROLE_GRANTED` with before/after scope.
 
-**25.4** Setting `status: "DISABLED"` terminates the user's sessions in the same transaction. Audit `USER_DISABLED`. A user cannot disable themselves (`422 not_permitted`) — locking the last Administrator out is a self-inflicted outage.
+**25.2** Body:
 
-**25.6** Audit `ROLE_REVOKED`. The system refuses to remove the last Administrator grant (`409 conflict`).
+```json
+{
+  "email": "operator@example.invalid",
+  "display_name": "Example Operator",
+  "identity_provider_subject": "00000000-0000-0000-0000-000000000000",
+  "identity_provider_issuer": null
+}
+```
+
+`identity_provider_subject` is **required**: the column is `NOT NULL` ([DATABASE.md §3.1](DATABASE.md#31-users)) and keying a pre-created row on email instead would require adopting it at first login, which is the identity merge assumption `A-05` refuses (`OPEN-26`). The administrator reads the subject from the IdP (`sub`, `oid`, object id). `identity_provider_issuer` defaults to the configured issuer, the only one this deployment accepts tokens from. The user is created `ACTIVE` with **no roles**; grant them separately with 25.5. Errors `409 duplicate_resource` (identity or active email already present — which of the two is deliberately not disclosed), `422`. Audit `USER_CREATED`.
+
+**25.4** Setting `status: "DISABLED"` terminates the user's sessions in the same unit of work. Audit `USER_DISABLED`, or `USER_ENABLED` when re-enabling. A user cannot disable themselves (`422 not_permitted`) — locking the last Administrator out is a self-inflicted outage. `email` and the identity key are **not** editable: the email is refreshed from the IdP on every login, and editing the identity key would silently point one person's audit history at another's account.
+
+**25.6** Audit `ROLE_REVOKED`. The system refuses to remove the last Administrator grant (`409 conflict`), counting only unexpired grants held by active users.
+
+**25.7** Audit `SESSION_TERMINATED`, with the count and never a session identifier. Zero is a success: the user simply had none live.
+
+### 25.10 Read-only mode
+
+| # | Method | Path | Purpose | Permission |
+|---|---|---|---|---|
+| 25.10 | POST | `/api/v1/admin/settings/read-only-mode` | Enable or disable incident read-only mode | `admin:manage` |
+
+Added in M1.4. [SECURITY.md §27](SECURITY.md#27-incident-response) requires this flag and makes it the first containment step in an incident involving this portal; §28 already listed `READ_ONLY_MODE_CHANGED` while no endpoint existed to produce it.
+
+```json
+{ "enabled": true, "reason": "Investigating unexpected production restarts" }
+```
+
+Response: `{ "read_only_mode": true }`. `reason` is **required when enabling** (`422 not_permitted` without it) and is recorded in the audit event — a containment switch with no stated cause is an unexplained outage to whoever finds it later. The state is a durable row ([DATABASE.md §3.6](DATABASE.md#36-system_settings--added-entity-m14)), so it survives a restart and a Redis flush, and it is reported on `GET /auth/session` as `read_only_mode` ([§12](#12-authentication-endpoints)).
+
+**While enabled**, every state-changing request to a permission-bearing endpoint is refused with `423 read_only_mode` and audited as `AUTHZ_DENIED` with `reason: read_only_mode`. Reads are untouched. Three paths deliberately keep working: the health probes, `/auth/login` and `/auth/callback` (public, no permission dependency), `/auth/logout` (containment must not trap the operator at their keyboard), and this endpoint itself — otherwise the switch could not be turned off. Audit `READ_ONLY_MODE_CHANGED`.
 
 ---
 

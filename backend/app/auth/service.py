@@ -29,7 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
 from app.auth.oidc_client import IdentityClaims
-from app.authz.models import Permission, Role, RolePermission, UserRole
+from app.authz import service as authz_service
+from app.authz.models import Role, UserRole
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -154,22 +155,19 @@ async def effective_permissions(db: AsyncSession, user_id: uuid.UUID) -> list[st
     (docs/SECURITY.md §4 rule 3). Scope is *not* applied here — it needs a
     target to be evaluated against, and this list has none. So the array can be
     wider than what the caller may actually do, which is exactly why it has no
-    authority and why M1.4's matcher is the only thing that decides.
+    authority and why the matcher is the only thing that decides
+    (docs/API_CONTRACTS.md §12.4).
+
+    Reads the same grants the matcher does (``authz.service.resolve_grants``),
+    so the advisory list and the real decision can never drift apart on *which
+    grants exist*. What they deliberately differ on is scope: this one ignores
+    it. Proven advisory by
+    ``tests/integration/test_admin_roles.py::test_the_permissions_array_is_advisory``.
     """
-    now = datetime.now(UTC)
-    rows = (
-        await db.execute(
-            select(Permission.resource_type, Permission.action, RolePermission.effect)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .join(UserRole, UserRole.role_id == RolePermission.role_id)
-            .where(
-                UserRole.user_id == user_id,
-                (UserRole.expires_at.is_(None)) | (UserRole.expires_at > now),
-            )
-        )
-    ).all()
+    grants = await authz_service.resolve_grants(db, user_id)
     allowed: set[str] = set()
     denied: set[str] = set()
-    for resource_type, action, effect in rows:
-        (denied if effect == "DENY" else allowed).add(f"{resource_type}:{action}")
+    for grant in grants:
+        name = f"{grant.resource_type}:{grant.action}"
+        (denied if grant.effect == "DENY" else allowed).add(name)
     return sorted(allowed - denied)

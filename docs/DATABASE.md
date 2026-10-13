@@ -56,6 +56,7 @@ erDiagram
     users ||--o{ approvals : "decided"
 
     users ||--o{ audit_events : "actor of"
+    users ||--o{ system_settings : "last changed"
     servers ||--o{ alert_events : "about"
     services ||--o{ alert_events : "about"
     applications ||--o{ alert_events : "about"
@@ -148,9 +149,24 @@ PK `(role_id, permission_id)`. `DENY` beats `ALLOW` in the matcher ([SECURITY.md
 
 - `UNIQUE (user_id, role_id, scope_definition)` — prevents duplicate identical grants.
 - Index `(user_id)` for per-request resolution; GIN on `scope_definition` if scope filtering becomes a hot path (add only when measured).
-- Every insert, update and delete writes an `audit_event` and bumps `permissions_version` so caches invalidate immediately (PRD §4.1).
+- Every insert, update and delete writes an `audit_event`. There is **no** `permissions_version` column or counter: grants are resolved per request with no cache, so there is nothing to invalidate (amended in M1.4 — [ARCHITECTURE.md §9.2](ARCHITECTURE.md#92-authorization--rbac-with-scope-evaluated-per-request-ad-03)).
 
-**Scope JSON shape** (validated by Pydantic, not by the database): keys from `{environment, cloud_account, server, application}`, each an array of UUIDs or the literal `"*"`. An empty object means "no scope" and grants nothing. `"*"` on `environment` does **not** include `production` ([SECURITY.md §4](SECURITY.md#4-permissions-scope-and-resourceenvironment-restrictions)).
+**Scope JSON shape** (validated by Pydantic, not by the database): keys from `{environment, cloud_account, server, application}`, each an array of UUIDs or the literal `"*"`. An empty object means "no scope" and grants nothing. `"*"` on `environment` does **not** include `production` ([SECURITY.md §4](SECURITY.md#4-permissions-scope-and-resourceenvironment-restrictions)). A dimension that is **absent** is unconstrained — except that production is never implicit ([SECURITY.md §4](SECURITY.md#4-permissions-scope-and-resourceenvironment-restrictions) dimension semantics, assumption `A-09`).
+
+### 3.6 `system_settings` — *added entity (M1.4)*
+
+**Justification:** [SECURITY.md §27](SECURITY.md#27-incident-response) requires a read-only mode flag and names it the *first* containment step in an incident involving this portal. It therefore has to survive a restart and a Redis flush (which rules out Redis) and be flippable without a redeploy (which rules out an environment variable). The PRD defines no table for it.
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `key` | `text` | PK, CHECK in (`read_only_mode`) | A closed set: a typo would otherwise create a second, dead row while the real switch stayed off |
+| `value` | `jsonb` | NOT NULL | `true`/`false` for `read_only_mode`; compared against the JSON literal, never coerced |
+| `updated_by` | `uuid` | NULL, FK → `users(id)` ON DELETE RESTRICT | NULL for the migration-seeded default — no operator set it |
+| `updated_at` | `timestamptz` | NOT NULL DEFAULT `now()` | Maintained by the shared `set_updated_at` trigger |
+
+- Seeded by migration `0003` with `read_only_mode = false`. The row's **presence** is part of the contract: the reader fails closed on a missing or non-boolean value, so "no row" means "refuse writes", not "writes allowed".
+- Every change writes a `READ_ONLY_MODE_CHANGED` audit event in the same transaction ([API_CONTRACTS.md §25.10](API_CONTRACTS.md#25-user-and-role-administration)).
+- No `created_at` and no soft delete: the row set is fixed by the `CHECK`, so there is nothing to create or retire at runtime.
 
 ---
 
@@ -607,7 +623,7 @@ Retention jobs run on the `maintenance` queue, are serialised, and are themselve
 | Record a terminal result | One transaction: status + `completed_at` + `sanitized_result` + `observed_state_after` + `audit_event` | A success is never visible without its verification evidence (rule 8) |
 | Approval decision | One transaction: `approvals` row + parent `approval_status`/`execution_status` + `audit_event` | No window where an approval exists but the target is unchanged |
 | Server registration | One transaction; duplicate constraint violation → `409` | PRD §4.3 acceptance criterion |
-| Role/scope change | One transaction: `user_roles` change + `audit_event` + bump `permissions_version` | Revocation must be atomic and immediate (PRD §4.1) |
+| Role/scope change | One transaction: `user_roles` change + `audit_event` | Revocation must be atomic and immediate (PRD §4.1). No counter to bump — see [§3.5](#35-user_roles) |
 | Alert ingestion | One transaction per alert in the batch | One malformed alert in a webhook batch must not reject the batch |
 | Read endpoints | Read-only transaction, `statement_timeout` applied | — |
 | Migrations | Transactional where PostgreSQL allows; concurrent index builds declared non-transactional | Avoids long locks on large tables |
@@ -708,6 +724,7 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 | OPEN-15 | Is audit export to an independent store required for v1? | Phase 6, before production rollout |
 | OPEN-17 | Do service state transitions need a history table, or is Prometheus sufficient? | Prometheus only; PRD §4.5 says "where collection is supported" |
 | OPEN-18 | Multiple `deployment_targets` per application+environment (e.g. canary vs full) | One per pair for v1 |
+| OPEN-26 | **New in M1.4.** How is a user *pre-created* ([API_CONTRACTS.md §25.2](API_CONTRACTS.md#25-user-and-role-administration)) when `identity_provider_subject` is `NOT NULL`? Keying the row on email instead would need a nullable subject **and** an adoption-at-first-login rule, which is the identity merge assumption `A-05` deliberately refuses. | The administrator supplies the subject from the IdP; the issuer defaults to the configured one. Implemented that way in M1.4 |
 
 ---
 
@@ -722,6 +739,8 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 ## 20. Implementation status
 
 **Created in M1.2** (verified against PostgreSQL 17.2): `users`, `roles`, `permissions`, `role_permissions`, `user_roles`, `cloud_accounts`, `servers`, `applications`, `application_servers`, `services`, `service_action_policies`, `approval_policies`, `audit_events` (partitioned, with four monthly partitions), plus the `updated_at` trigger on all nine timestamped tables and the audit immutability triggers.
+
+**Created in M1.4** (migration `0003`, applied to the development database on 2026-10-14 with its existing rows preserved): `system_settings` ([§3.6](#36-system_settings--added-entity-m14)), with its `updated_at` trigger and its seeded `read_only_mode = false` row. The same revision added the `admin:users` and `admin:roles` permissions the contracts name per endpoint, which the M1.2 seed had collapsed into `admin:manage`.
 
 **Not yet created** — each arrives with the milestone that writes to it: `deployment_targets`, `deployments`, `operations`, `approvals` (M4–M5), `alert_events`, `notification_channels`, `notification_deliveries` (M3).
 

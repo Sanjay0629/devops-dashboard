@@ -38,6 +38,7 @@ from app.auth.schemas import (
     SessionUser,
     SessionWindow,
 )
+from app.authz import service as authz
 from app.core.config import Settings, get_settings
 from app.core.csrf import new_csrf_token
 from app.core.logging import get_logger
@@ -341,6 +342,10 @@ async def read_session(
     settings = get_settings()
     roles = await service.granted_roles(db, current.user.id)
     permissions = await service.effective_permissions(db, current.user.id)
+    # Read, not assumed: the UI needs to show the read-only banner and disable
+    # its own controls, and the value is a durable row rather than a setting
+    # this process was started with (docs/SECURITY.md §27).
+    read_only = await authz.is_read_only(db)
     return SessionResponse(
         user=SessionUser(
             id=current.user.id,
@@ -355,4 +360,5 @@ async def read_session(
             idle_timeout_seconds=settings.session_idle_timeout_seconds,
         ),
         demo_mode=settings.demo_mode,
+        read_only_mode=read_only,
     )

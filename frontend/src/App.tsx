@@ -1,7 +1,7 @@
 import { BackendStatus } from '@/components/BackendStatus';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { SessionProvider } from '@/auth/SessionProvider';
-import { useSession } from '@/auth/useSession';
+import { useIsReadOnly, useSession } from '@/auth/useSession';
 import { Login } from '@/pages/Login';
 
 /**
@@ -21,6 +21,9 @@ import { Login } from '@/pages/Login';
 
 function Shell(): React.JSX.Element {
   const { state, signOut } = useSession();
+  // Advisory, like every permission the UI reads: the backend answers 423 on a
+  // state-changing request whatever this says (docs/SECURITY.md §27).
+  const readOnly = useIsReadOnly();
 
   if (state.kind === 'loading') {
     return (
@@ -53,12 +56,25 @@ function Shell(): React.JSX.Element {
         </div>
       )}
 
+      {readOnly && (
+        // The first containment step in an incident involving this portal, so
+        // it says so plainly rather than letting writes fail unexplained.
+        <div
+          role="status"
+          className="mb-6 rounded border px-4 py-2 text-sm"
+          style={{ borderColor: 'var(--c-warning)', color: 'var(--c-warning)' }}
+        >
+          <strong>Read-only mode.</strong> State-changing actions are disabled. Monitoring and
+          history remain available.
+        </div>
+      )}
+
       <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M1.3 — authentication. No monitoring, inventory or integrations are
-            implemented yet.
+            Milestone M1.4 — authentication and authorisation. No monitoring, inventory or
+            integrations are implemented yet.
           </p>
         </div>
         <ThemeToggle />

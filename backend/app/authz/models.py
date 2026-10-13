@@ -30,6 +30,10 @@ ROLE_NAMES: Final[tuple[str, ...]] = (
 
 PERMISSION_EFFECTS: Final[tuple[str, ...]] = ("ALLOW", "DENY")
 
+#: The only key ``system_settings`` accepts. See :class:`SystemSetting`.
+READ_ONLY_MODE_KEY: Final = "read_only_mode"
+SETTING_KEYS: Final[tuple[str, ...]] = (READ_ONLY_MODE_KEY,)
+
 RESOURCE_TYPES: Final[tuple[str, ...]] = (
     "dashboard",
     "server",
@@ -147,3 +151,38 @@ class UserRole(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         # (docs/ARCHITECTURE.md §9.2).
         Index("ix_user_roles_user_id", "user_id"),
     )
+
+
+class SystemSetting(Base):
+    """Operational switches that must survive a restart and a Redis flush.
+
+    Holds exactly one row today: ``read_only_mode``. It lives in PostgreSQL
+    rather than in Redis or an environment variable because
+    docs/SECURITY.md §27 names read-only mode the *first* containment step in
+    an incident involving this portal — so it has to be durable (a Redis flush
+    must not re-enable writes) and flippable without a redeploy.
+
+    Not RBAC, but it belongs with the authorisation layer: it is enforced in
+    ``app/authz/dependencies.py``, on the same code path as the permission
+    check, and nothing else reads it.
+
+    ``key`` is a closed set rather than free text. A typo in a setting name
+    would otherwise create a second, dead row while the real switch stayed off
+    — and a switch that silently does nothing is worse than no switch
+    (docs/DATABASE.md §1 rule 5).
+    """
+
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    # NULL for the seeded default: no operator set it (mandatory rule 10 is
+    # satisfied by the audit event, which every change writes).
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (enum_check("key", SETTING_KEYS, "key"),)

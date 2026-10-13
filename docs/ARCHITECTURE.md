@@ -516,7 +516,9 @@ No token is readable by JavaScript; the SPA holds no token at all. Logout delete
 
 ### 9.2 Authorization — RBAC with scope, evaluated per request (AD-03)
 
-Permissions are **never** read from token claims. On every request the identity's roles and scopes are resolved from PostgreSQL (short-TTL cache keyed by `user_id` + a `permissions_version` bumped on any role/permission change), so revocation takes effect immediately with no release (PRD §4.1 acceptance).
+Permissions are **never** read from token claims. On every request the identity's roles and scopes are resolved from PostgreSQL — one indexed join on `user_roles`, with **no cache** — so revocation takes effect immediately with no release (PRD §4.1 acceptance).
+
+> **Amended in M1.4 (2026-10-14), with product-owner agreement.** This section and `AD-03` previously specified a short-TTL cache keyed by `user_id` + a `permissions_version` counter bumped on any role, permission or scope change. Neither is built. The correctness requirement in PRD §4.1 is per-request resolution; the cache was an optimisation with no measured need, and a wrong invalidation can only ever make revocation *less* immediate than no cache at all. `permissions_version` does not exist in the schema and nothing bumps it. Revisit only if a measurement shows per-request resolution is too slow — the counter is an additive change whenever that happens.
 
 ```mermaid
 graph LR
@@ -777,7 +779,7 @@ DCP is monitored by the same stack it operates (PRD §10): its own `/metrics` en
 |---|---|---|
 | AD-01 | Modular monolith (FastAPI) + separate Celery workers | PRD §5.2; avoids distributed complexity before it is needed |
 | AD-02 | OIDC auth code + PKCE, backend-for-frontend, opaque HttpOnly session cookie | No token in the browser; enables instant revocation; PRD §9 cookie/CSRF language implies cookie sessions |
-| AD-03 | RBAC + scope rows, resolved per request from PostgreSQL, fail closed | PRD §4.1 "revoked permissions take effect without a new release" |
+| AD-03 | RBAC + scope rows, resolved per request from PostgreSQL, fail closed, **no cache** (amended M1.4 — see [§9.2](#92-authorization--rbac-with-scope-evaluated-per-request-ad-03)) | PRD §4.1 "revoked permissions take effect without a new release" |
 | AD-04 | Metrics stay in Prometheus; backend renders allowlisted PromQL templates; `servers.metrics_instance` is the join key | PRD §6 forbids duplicating metrics; closes injection/cardinality abuse |
 | AD-05 | Logs stay in Loki; backend builds LogQL from structured filters; raw LogQL from clients is rejected | Prevents scope bypass and cross-environment reads |
 | AD-06 | Alert rules authored as Prometheus rule files in version control; Alertmanager posts to a DCP webhook; DCP owns lifecycle only | Reuses a proven evaluator; keeps rules reviewable |

@@ -1,8 +1,10 @@
 # PROGRESS — DevOps Control Plane
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
-**Last updated:** 2026-10-13
-**Updated by:** M1.3 implementation session
+**Last updated:** 2026-10-14
+**Updated by:** M1.4 implementation session (RBAC and authorisation enforcement).
+Previously: M1.3 implementation session, amended with the three decisions taken for
+M1.4, all three of which are now implemented as agreed (see [§3](#3-in-progress-milestone))
 
 > **Rules for this file**
 > - Record only what has **actually happened**. Never mark anything complete because a plan says it should be.
@@ -14,19 +16,20 @@
 
 ## 1. Current project stage
 
-**Stage: Phase 1 — Foundation. Milestones M1.1, M1.2 and M1.3 complete; M1.4 next.**
+**Stage: Phase 1 — Foundation. Milestones M1.1 – M1.4 complete; M1.5 next.**
 
-The application has a running skeleton, a migrated PostgreSQL schema, and working
-OIDC authentication with server-side sessions. It **authorises** nobody: there is
-no permission enforcement yet, and the only protected endpoints are the two auth
-routes that need a session. It still monitors nothing — see
-[§4](#4-pending-milestones).
+The application has a running skeleton, a migrated PostgreSQL schema, working OIDC
+authentication with server-side sessions, and — as of M1.4 — **authorisation**: one
+matcher, one `require_permission` dependency, ten administrative endpoints behind it,
+`AUTHZ_DENIED` auditing, and a route-coverage test that fails the build if any route
+escapes a permission. It still monitors nothing — see [§4](#4-pending-milestones).
 
-A user can now sign in through the mock IdP, see their identity, and sign out. They
-will see **no roles and no permissions**, because nothing grants a role yet; role
-administration is M1.4. That is deliberate (there is no bootstrap administrator), and
-it means the only way to grant the first role today is a manual `INSERT` into
-`user_roles`.
+The first administrator is granted by a one-shot CLI
+(`python -m app.admin.bootstrap --email …`), which refuses to run if an administrator
+already exists. After that, roles are granted and revoked through
+`/api/v1/admin/users/{id}/roles`, and a change takes effect on the target's **next
+request** with no re-login and nothing to invalidate — verified against the running
+stack, not only in tests.
 
 ```
 PRD.md  CLAUDE.md  PROGRESS.md  README.md
@@ -39,17 +42,22 @@ backend/     pyproject.toml, uv.lock, Dockerfile, alembic.ini
   app/db/          base, types (uuid7), engines, session, partition helpers
   app/auth/        User, OIDC client, Redis session store, cookies,
                    dependencies, service (JIT provisioning), router, schemas
-  app/authz/       Role, Permission, RolePermission, UserRole
+  app/authz/       Role, Permission, RolePermission, UserRole, SystemSetting,
+                   matcher (the one decision), service (per-request resolution,
+                   read-only flag, denial audit), dependencies
+                   (require_permission), schemas (scope validation)
+  app/admin/       router (§25.1–25.10), service, schemas, bootstrap CLI
   app/inventory/   CloudAccount, Server, Application, ApplicationServer,
                    Service, ServiceActionPolicy
   app/approvals/   ApprovalPolicy
   app/audit/       AuditEvent (partitioned, append-only), record() writer
   app/workers/     Celery app, ping, partition maintenance
-  alembic/         0001 initial schema, 0002 seed reference data
-  tests/           unit + tests/auth/; tests/integration/ needs real
-                   PostgreSQL, and the auth suite also needs real Redis
+  alembic/         0001 initial schema, 0002 seed reference data,
+                   0003 system_settings + admin permission split
+  tests/           unit + tests/auth/ + tests/authz/; tests/integration/ needs
+                   real PostgreSQL, and the auth/admin suites also need Redis
 frontend/    React + TypeScript + Vite + Tailwind SPA
-  src/auth/        SessionProvider, sessionContext, useSession
+  src/auth/        SessionProvider, sessionContext, useSession, permissions
   src/pages/       Login
   src/api/         health, session
 infra/       compose/docker-compose.yml, compose/mock-idp/ (dev aid),
@@ -58,16 +66,17 @@ scripts/     check-all.sh, smoke-test.sh, check_doc_links.py, pin-digests.sh
 docs/        eight design documents
 ```
 
-There is still **no authorisation enforcement**, no domain API and no external
-integration of any kind. 13 of the 19 tables in
+There is still **no domain API** (inventory, metrics, logs, operations, deployments)
+and **no external integration of any kind**. 14 of the 20 tables in
 [`docs/DATABASE.md`](docs/DATABASE.md) exist; the six that record operations,
-deployments and alerts arrive with the milestones that write to them. **M1.3 added
-no table and no migration** — the schema is still at revision `0002`, because
-`OPEN-04` resolved as Redis-only sessions and `users` already had every column the
-milestone needed.
+deployments and alerts arrive with the milestones that write to them. M1.4 added one
+table — `system_settings` — in migration `0003`, so the schema is at revision `0003`.
+It was applied to the existing development database (`dcp`) with its three users and
+14 audit rows preserved; no volume was reset and no database created.
 
-Version control: branch `main` tracking `origin/main`. Last pushed commit `131461a`
-(the M1.2 merge); M1.3 work is on branch `phase-M1.3` at the time of writing.
+Version control: branch `main` tracking `origin/main`. Last pushed commit `1093311`
+(the M1.3 merge); M1.4 work is uncommitted in the working tree at the time of
+writing.
 
 ## 2. Completed milestones
 
@@ -77,6 +86,7 @@ Version control: branch `main` tracking `origin/main`. Last pushed commit `13146
 | **M1.1** — repository skeleton, Compose core, health endpoints, CI | **Complete, with two caveats** | 2026-10-13 | All 13 local checks pass ([§7](#7-tests-executed-and-their-actual-results)); endpoints verified over real HTTP |
 | **M1.2** — database schema, migrations, partitioning, audit immutability, seed data | **Complete** | 2026-10-13 | Migrations applied, downgraded and re-applied against **real PostgreSQL 17.2**; immutability verified against a confirmed superuser ([§7](#7-tests-executed-and-their-actual-results)) |
 | **M1.3** — OIDC authentication, Redis sessions, CSRF, JIT provisioning, auth audit, mock IdP, frontend session | **Complete against the mock IdP** | 2026-10-13 | Login and logout driven through the Compose `core` + `mocks` stack **in a real browser**; 126 auth unit + 39 auth integration tests pass; all 14 checks in `scripts/check-all.sh` pass ([§7](#7-tests-executed-and-their-actual-results)) |
+| **M1.4** — RBAC matcher, `require_permission`, admin endpoints 25.1–25.10, `AUTHZ_DENIED` audit, read-only mode, bootstrap CLI, route-coverage gate | **Complete** | 2026-10-14 | 270 unit + 132 integration tests pass against **real PostgreSQL 17.2 and real Redis**; the whole flow driven over HTTP against the running Compose stack (login → 403 → bootstrap → 200 → grant → revoke → read-only → 423); all 14 checks in `scripts/check-all.sh` pass ([§7](#7-tests-executed-and-their-actual-results)) |
 
 **M1.3 caveat — the honest limit of what was verified.** Everything was tested
 against the **mock** OIDC provider in `infra/compose/mock-idp/`, which checks no
@@ -104,9 +114,44 @@ development aid and is labelled as one in its own README, in the Compose file an
 
 ## 3. In-progress milestone
 
-**None.** M1.3 is finished; M1.4 (RBAC and authorisation enforcement) has not begun.
+**None.** M1.4 is finished; M1.5 (server and application inventory) has not begun —
+and **must not start before `OPEN-02` is confirmed** (it decides whether
+`applications` carries an `environment` column, and reversing that after M1.5 means a
+data migration).
 
-Outstanding decisions, in the order they bite:
+### What M1.4 implemented (2026-10-14)
+
+The three decisions recorded below as "Decided for M1.4" were implemented exactly as
+agreed, and the documentation debt the second one created has been paid in full.
+
+- **One matcher, one dependency.** `app/authz/matcher.py` holds the only
+  authorisation decision in the codebase — a pure function, 27 table-driven cases.
+  `app/authz/dependencies.py` holds the only dependency, `require_permission`, which
+  resolves grants from PostgreSQL per request, audits every denial, and then applies
+  the read-only gate. The scoped question (`Authorized.permits(…, target)`) calls the
+  same matcher from the handler, because
+  [`docs/SECURITY.md`](docs/SECURITY.md) §20 requires scope to be checked *after* the
+  row is loaded — which is why the `scope_source` parameter sketched in the plan is
+  not built.
+- **Ten endpoints** (§25.1–25.9 plus the new §25.10 read-only toggle), each with an
+  explicit permission dependency, each mutation audited.
+- **A route-coverage gate** that walks the live routing table and fails if any route
+  carries neither a permission dependency nor an explicit exception. Its exception
+  list distinguishes *public* from *session-authenticated* and asserts both claims,
+  and the gate has a test of its own that plants a bypass and proves it is caught.
+- **Scope semantics the contracts left open**, recorded as assumption `A-09` below
+  and written into [`docs/SECURITY.md`](docs/SECURITY.md) §4.
+
+Deliberately **not** built, to avoid pulling later milestones forward: no domain
+endpoints (M1.5+), no scope-filtered list queries (there is no scoped collection yet),
+no permission-aware navigation (there is no navigation until M1.6's routing shell), no
+read-class rate limiting on the admin reads (`docs/SECURITY.md` §13 defines no admin
+class, and no read endpoint is rate-limited yet — the first domain reads in M1.5 are
+where that belongs).
+
+### Outstanding decisions
+
+In the order they bite:
 
 - [x] **`OPEN-04` — RESOLVED 2026-10-13 as Redis-only.** No `user_sessions` table was
       created, following the documented default and the instruction for this session.
@@ -128,6 +173,97 @@ Outstanding decisions, in the order they bite:
 - [ ] `OPEN-15` — the audit-immutability hardening M1.2 could not finish: a
       non-superuser application role separate from the migration owner. Scheduled
       M6.2; see issue 28.
+
+### Decided for M1.4 — agreed 2026-10-13, **implemented 2026-10-14**
+
+Three questions M1.4 could not start without. None was settled by the PRD or the
+contract documents, each was put to the product owner, and each answer below is
+theirs. All three are now implemented as written; what each one became in code is
+noted inline.
+
+- [x] **The first administrator is granted by a one-shot CLI command.**
+      `app.admin.bootstrap` grants `ADMINISTRATOR` to an **existing** user, writes an
+      audit event, and refuses if any administrator already exists.
+      `user_roles.granted_by` is `NOT NULL` and references `users`, so the schema
+      forbids an unattributed grant and the first one has to name an attributable
+      granter. Rejected: an auto-grant keyed on a configured subject at first login —
+      it works with zero operator steps, but it puts a privilege-granting branch
+      inside the authentication path, which is the last place to want one. Also
+      rejected: documented SQL only, which leaves the first grant unaudited. Closes
+      issue 37.
+      **Implemented** as `backend/app/admin/bootstrap.py`
+      (`python -m app.admin.bootstrap --email …`). It grants only to an **existing
+      active** user, so it cannot invent an identity; refuses with exit code 2 if any
+      unexpired ADMINISTRATOR grant held by an active user exists; grants a full scope
+      with `production` named **literally**, because the matcher never lets `"*"`
+      imply production; and audits `ROLE_GRANTED` as `actor_type='SYSTEM'`,
+      `actor_label='system:bootstrap'` — the initiator holds shell access and has no
+      user row, so attributing it to the granted user would be a false attribution.
+      `granted_by` is a self-reference forced by the schema and is flagged as such in
+      the audit metadata. Verified in the container: first run granted, second run
+      exited 2, unknown address exited 1.
+
+- [x] **No permissions cache. Resolve per request from PostgreSQL.** The
+      `permissions_version` counter is **not** built. This is an **agreed divergence
+      from `AD-03`**, approved by the product owner rather than taken unilaterally
+      (CLAUDE.md §3): the correctness requirement in PRD §4.1 is per-request
+      resolution, the cache is an optimisation with no measured need, and a wrong
+      invalidation can only ever make revocation *less* immediate than no cache at
+      all. **Documentation debt this creates, to be paid in the same commit as the
+      implementation:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) `AD-03` and
+      §9.2, [`docs/SECURITY.md`](docs/SECURITY.md) §4 rule 6,
+      [`docs/DATABASE.md`](docs/DATABASE.md) §12 and
+      [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §25.5 all currently describe a
+      cache and a counter that will not exist. None of them may be left saying so.
+      Revisit only if a measurement shows per-request resolution is too slow; the
+      counter is additive whenever that happens.
+      **Implemented and the debt is paid:** all four documents now describe
+      per-request resolution with no cache
+      ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) `AD-03` and §9.2,
+      [`docs/SECURITY.md`](docs/SECURITY.md) §4 rule 6,
+      [`docs/DATABASE.md`](docs/DATABASE.md) §3.5 and §12,
+      [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §2 and §25.5), each amendment
+      dated and attributed to this decision rather than silently rewritten. Nothing in
+      the schema or the code mentions `permissions_version`.
+
+- [x] **Read-only mode lives in a `system_settings` row, toggled by a new audited
+      admin endpoint.** [`docs/SECURITY.md`](docs/SECURITY.md) §27 names it as the
+      *first* containment step in an incident involving this portal, so it has to
+      survive a restart and a Redis flush — which rules out a Redis flag — and has to
+      be flippable without a redeploy, which rules out an environment variable. Needs
+      **migration `0003`** (the first since M1.2) and a **new entry in
+      [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §25**, which today defines no
+      toggle endpoint at all despite `READ_ONLY_MODE_CHANGED` already being in the
+      audit catalogue (§28).
+      **Implemented:** migration `0003` creates `system_settings`
+      ([`docs/DATABASE.md`](docs/DATABASE.md) §3.6) with a closed `key` set and a
+      seeded `read_only_mode = false` row, and §25.10 is now in the contract. The gate
+      lives **inside `require_permission`** rather than in middleware with a list of
+      exempt paths: every state-changing endpoint has a permission dependency by
+      construction, so that covers all of them with nothing to keep in sync, while the
+      paths that must keep working during an incident — health probes, login, callback,
+      logout — are exactly the ones with no permission dependency. The toggle itself
+      opts out explicitly (`allow_in_read_only=True`), or it could not be switched off.
+      Permission is checked **before** the read-only gate, so an unauthorised caller
+      learns nothing about whether the portal is contained. Reading the flag fails
+      **closed**: a missing or non-boolean row means refuse writes.
+
+Assumption recorded during M1.4 (CLAUDE.md §9 — the contracts are silent on it):
+
+- **`A-09` Scope dimension semantics.** [`docs/SECURITY.md`](docs/SECURITY.md) §4
+  gives five evaluation rules and does not say what an **absent** dimension means, so
+  the matcher had to decide. Chosen: a dimension the grant does not mention is
+  **unconstrained**, because [`docs/DATABASE.md`](docs/DATABASE.md) §3.5's own example
+  scope omits `cloud_account` entirely and would otherwise grant nothing; an **empty
+  scope `{}` grants nothing at all**, which is the same document read literally; a
+  grant constraining a dimension the **target does not have** is a denial; and a
+  permission with **no target** (the admin endpoints) is a capability check whose
+  grant must still be non-empty. Rule 4 overrides all of it: a production target
+  requires `environment` to name `production` literally, so an absent or wildcard
+  dimension can never *imply* production. Written into
+  [`docs/SECURITY.md`](docs/SECURITY.md) §4 and
+  [`docs/DATABASE.md`](docs/DATABASE.md) §3.5 in the same change, and each clause has
+  its own case in `tests/authz/test_matcher.py`.
 
 Assumptions recorded during M1.3 (CLAUDE.md §9 — the PRD is silent on each):
 
@@ -222,7 +358,7 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 
 | Phase | Milestones | Status |
 |---|---|---|
-| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · M1.4 RBAC · M1.5 inventory · M1.6 dashboard shell · M1.7 consolidation | **M1.4 next** |
+| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · M1.5 inventory · M1.6 dashboard shell · M1.7 consolidation | **M1.5 next (confirm `OPEN-02` first)** |
 | 2 — Monitoring | M2.1 Prometheus client · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | Pending |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
@@ -274,11 +410,18 @@ Once a decision is reviewed, record the date and the outcome here.
 | docs/SECURITY.md §11 CSRF | `app/core/csrf.py` double-submit plus `Origin`/`Referer`, constant-time compare, checked before routing. 24 unit tests plus the live `403`s for missing, mismatched and cross-origin |
 | Mandatory rule 9 never fetch a user-supplied URL | Every discovered OIDC endpoint must share the configured issuer's origin before it is fetched, so a tampered discovery document cannot redirect the token exchange (which carries the client secret). Redirects are not followed |
 | Mandatory rule 6 fail closed | `require_session` answers `401` for every failure mode including an unreachable Redis; rate limiting fails closed on `/auth/*`; a provisioning `IntegrityError` denies rather than `500`s |
-| PRD §4.1 immediate revocation | `/auth/session` re-reads roles and permissions from PostgreSQL on every call and the session record holds none. Tests grant and revoke with no re-login and no restart |
+| PRD §4.1 immediate revocation | `/auth/session` re-reads roles and permissions from PostgreSQL on every call and the session record holds none. Tests grant and revoke with no re-login and no restart. **M1.4:** the same is now true of enforcement — `require_permission` resolves grants per request, and `test_grant_then_revoke_takes_effect_on_the_next_request` watches a `403` become a `200` and back |
 | AD-15 demonstration banner | `demo_mode: true` on `/auth/session` renders a persistent banner; observed in the browser |
 | Mandatory rule 10 attribution | `ck_audit_events_actor_attribution`: a `USER` event must name its user, enforced by the database |
 | docs/DATABASE.md §10 soft delete | `deleted_at` only on inventory tables, each with partial unique indexes; a test asserts both |
 | docs/DATABASE.md §16 migrations | autogenerated then hand-edited; drift test asserts models and schema agree |
+| **AD-03** RBAC per request, fail closed, **no cache** (amended, agreed) | `app/authz/service.resolve_grants` (one indexed join), `app/authz/matcher.permits` (the single decision), `app/authz/dependencies.require_permission` (the single dependency). Fault injection into resolution answers `403` |
+| docs/SECURITY.md §4 rules 1–7 | 27 table-driven matcher cases: deny by default, stored-attribute targets, deny-beats-allow, production never implicit, malformed/empty scope denies, one matcher |
+| docs/SECURITY.md §6 never rely on frontend authz | Four non-admin roles × ten admin endpoints all answer `403` over HTTP with a valid session; the frontend's `permissions.ts` is advisory and its test says so |
+| docs/SECURITY.md §20 every route declares a permission | `tests/authz/test_route_coverage.py` walks the live routing table; exceptions are listed individually as *public* or *session-authenticated* and both claims are asserted |
+| docs/SECURITY.md §27 read-only mode | `system_settings.read_only_mode` + §25.10 toggle; writes answer `423` while reads and logout keep working. Verified over HTTP |
+| docs/TESTING.md §8 no debug bypass | Grep gate over detokenised source, with its own test that plants a bypass and proves it is caught |
+| docs/API_CONTRACTS.md §25 admin endpoints | `app/admin/router.py`, ten routes, each mutation audited; delegation escalation, last-administrator revocation and self-disable all refused |
 
 ---
 
@@ -338,16 +481,66 @@ Once a decision is reviewed, record the date and the outcome here.
 | 33 | **`mock-idp` detaches when `backend` is recreated on its own.** It uses `network_mode: service:backend` so that one issuer URL resolves from both the browser and the backend; recreating only `backend` (e.g. `up -d --build frontend`, which recreates it as a dependency) leaves `mock-idp` in the old network namespace, and `/auth/login` then answers `503 provider_unavailable`. Hit during this session and diagnosed from `docker exec dcp-backend-1 curl localhost:9000` returning nothing. | Local development only | Documented in `README.md` and `infra/compose/mock-idp/README.md`: a plain `up -d` with both profiles recreates both. Not worked around in code, because the alternatives are to weaken the issuer-origin check or to depend on `host.docker.internal`. |
 | 34 | **RESOLVED 2026-10-13. The Vite dev server ignored `VITE_DEV_PROXY_TARGET`.** Compose has set it since M1.1 but `vite.config.ts` hard-coded `http://localhost:8000`, which inside the frontend container is the frontend. Invisible until M1.3 gave the SPA an API call to make; then `/api/v1/auth/session` through the dev server failed with `ECONNREFUSED`. | Was blocking the M1.3 Compose DoD | `vite.config.ts` now reads the variable. `vite.config.ts` is also mounted into the container — previously only `src/` and `index.html` were, so a config change needed an image rebuild, which is why the dead variable survived three milestones. |
 | 35 | **RESOLVED 2026-10-13. Windows `ProactorEventLoop` broke every async-database test.** M1.2's integration tests use the *sync* engine, so this only appeared with M1.3's first async-database tests: psycopg refuses that loop and all 39 failed with `InterfaceError`. | Was blocking the M1.3 test suite | A `pytest_asyncio_loop_factories` hook in `backend/tests/conftest.py` selects `SelectorEventLoop` on Windows. This does **not** contradict issue 22's note that an asyncio *policy* fix was removed from application code: uvicorn picks its loop through a factory and ignores the policy, whereas pytest-asyncio takes a factory. The application answer on Windows is still `--reload`, or Linux. |
-| 36 | **`/auth/session`'s `permissions` array is not yet *proven* advisory.** The M1.3 security checklist asks for an endpoint that still rejects an action the array implies. There is no permission-bearing endpoint yet, so the claim rests on structure: the array is scope-blind, nothing server-side reads it, and no `require_permission` dependency exists to be bypassed. | Verification gap, not a defect | Prove it in M1.4, which adds the first such endpoint. Recorded as an unticked box in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) M1.3 rather than quietly ticked. |
-| 37 | **No way to grant the first role through the application.** JIT provisioning deliberately creates users with no roles, and there is no bootstrap administrator (alembic `0002`). Role administration is M1.4, so today the only way to grant a role is a manual `INSERT` into `user_roles` — whose `granted_by` is `NOT NULL` and references `users`, so the first grant has to name an existing user as its own granter. | Expected at this milestone | M1.4 adds the role endpoints. Worth deciding there how the *first* administrator is bootstrapped, since the schema forbids an unattributed grant. |
+| 36 | **RESOLVED 2026-10-14 (M1.4).** `/auth/session`'s `permissions` array is now *proven* advisory: `test_the_permissions_array_is_advisory` grants an empty-scope `ADMINISTRATOR`, reads `admin:users` out of the array, and watches `GET /api/v1/admin/users` answer `403`. The M1.3 checklist box in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) is now ticked with that evidence. Previously: the claim rested on structure alone, because no permission-bearing endpoint existed to reject anything. | Was a verification gap | None. |
+| 37 | **RESOLVED 2026-10-14 (M1.4)** — `python -m app.admin.bootstrap --email …` exists, refuses to run twice, grants only to an existing active user and audits the grant as `system:bootstrap`. Verified in the running container (granted, then exit 2, then exit 1 for an unknown address). Previously: **no way to grant the first role through the application.** JIT provisioning deliberately creates users with no roles, and there is no bootstrap administrator (alembic `0002`). Role administration is M1.4, so today the only way to grant a role is a manual `INSERT` into `user_roles` — whose `granted_by` is `NOT NULL` and references `users`, so the first grant has to name an existing user as its own granter. | Expected at this milestone | **Answered 2026-10-13** — a one-shot `app.admin.bootstrap` CLI command, see [§3](#3-in-progress-milestone). Implemented in M1.4 alongside the role endpoints. |
 | 38 | **A restart of Redis signs every user out.** The accepted cost of `OPEN-04` resolving as Redis-only. Login, logout and denial remain in PostgreSQL, so the record survives; the live sessions do not. | Accepted, by decision | None. Revisit only if operators report it as a real problem; adding a durable table later is an additive migration. |
+
+### Implementation issues (found during M1.4, 2026-10-14)
+
+| # | Issue | Severity | Handling |
+|---|---|---|---|
+| 39 | **The seeded permission catalogue does not use the names the contracts do, and M1.4 only reconciled the two it needed.** [`docs/SECURITY.md`](docs/SECURITY.md) §4 and [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §18/§24/§26 name `admin:integrations`, `logs:read:application` and `logs:read:system`; the M1.2 seed created `integration:manage`, `logs:read` and `logs:query`. Migration `0003` added the contract-named `admin:users` and `admin:roles` (needed by §25) and narrowed `admin:manage` to system settings, but left the integration and log permissions alone — renaming permissions nothing enforces yet would be churn, and the log split carries a real security distinction that the milestone enforcing it should design. | Naming drift; no behavioural effect today, because only ADMINISTRATOR holds any of them | Reconcile `integration:manage` → `admin:integrations` in M1.5 (the first endpoint to require it, §18.2) and `logs:read`/`logs:query` → `logs:read:application`/`logs:read:system` in M3.2. [`docs/SECURITY.md`](docs/SECURITY.md) §4 now names both forms so the divergence is visible rather than latent. |
+| 40 | **A CSRF rejection answers `code: "forbidden"`, not `code: "csrf_failed"`.** [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §3 defines `403 csrf_failed` as a distinct code; `app/core/csrf.py` emits `forbidden` with the message "CSRF validation failed." Found while exercising the admin endpoints over HTTP without the header. | Contract divergence; a client switching on `code` cannot tell CSRF failure from permission failure | One-word fix in `app/core/csrf.py` plus the M1.3 CSRF tests that assert the current code. **Not done here**: `app/core/csrf.py` is M1.3's module and outside this milestone's scope (CLAUDE.md §3). |
+| 41 | **A privilege change affecting *another* user does not rotate their session identifier,** which [`docs/SECURITY.md`](docs/SECURITY.md) §5 lists among the rotation triggers ("role change affecting the user"). Rotation requires issuing a new cookie, which can only happen on a request from that user's own browser, so a third party's grant change cannot rotate it. Nothing is cached in the session, so there is no stale authority to invalidate — the change takes effect on their next request regardless — and terminating their sessions instead would contradict [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §25.5's "without a re-login". `session_store.rotate()` therefore still has no caller. | Documented gap, no known exploit: the session record holds a `user_id` and nothing about authority | Either mark the session for rotation on its next use (a flag the session store would honour in `require_session`), or amend §5 to say rotation applies to the caller's own privilege change. Needs a decision; not invented here. |
 
 ---
 
 ## 7. Tests executed and their actual results
 
-All results below were produced by running the commands on 2026-10-13 and reading
-the output. Nothing here is inferred.
+All results below were produced by running the commands and reading the output.
+Nothing here is inferred.
+
+### Executed — `./scripts/check-all.sh`, 14/14 passed (M1.4, 2026-10-14)
+
+| Check | Command | Result |
+|---|---|---|
+| Backend lint | `uv run ruff check .` | **pass** — "All checks passed!" |
+| Backend format | `uv run ruff format --check .` | **pass** — 80 files already formatted |
+| Backend types | `uv run mypy` (strict) | **pass** — "no issues found in 51 source files" |
+| Backend security lint | `uv run bandit -q -r app` | **pass** — no findings (4 633 lines scanned) |
+| Backend unit tests | `uv run pytest -m "not integration"` | **270 passed**, 132 deselected, 1 warning, 18.74s |
+| Backend integration tests | `uv run pytest -m integration` | **132 passed**, 270 deselected, 1 warning, 28.91s |
+| Backend dependency audit | `uv run pip-audit` | **pass** |
+| Frontend lint | `npx eslint .` | **pass** |
+| Frontend format | `npx prettier --check .` | **pass** |
+| Frontend types | `npx tsc --noEmit` | **pass** |
+| Frontend tests | `npx vitest run` | **39 passed** (4 files), 2.51s |
+| Frontend build | `npm run build` | **pass** — 38 modules, 234.35 kB JS / 72.66 kB gzip |
+| Frontend audit | `npm audit --audit-level=high` | **pass** — 0 vulnerabilities |
+| Documentation links | `python scripts/check_doc_links.py .` | **pass** — 342 links, 13 files, 0 problems |
+
+Both `TEST_DATABASE_URL` and `TEST_REDIS_URL` were set (the existing `dcp_test`
+database on the Compose PostgreSQL, Redis database `1`), so **nothing skipped**.
+
+New in M1.4: **35 unit tests** (27 table-driven matcher cases, 8 route-coverage and
+bypass-gate tests) and **32 integration tests** (the role matrix — four roles × ten
+endpoints in one parametrised case per role — revocation, delegation, read-only mode,
+the bootstrap CLI). Frontend: **9** new tests for the advisory permission read. One pre-existing test changed in each suite: the model
+registry gained `SystemSetting`, and the migration round-trip now reads head and its
+predecessor from the script directory instead of hard-coding `0002`/`0001`.
+
+One deliberate deviation: the plan's expected path for the admin suite was
+`backend/tests/authz/test_admin_roles.py`. It lives at
+`backend/tests/integration/test_admin_roles.py`, because every assertion in it needs
+the real schema and real Redis, and both the `migrated` fixture and the `integration`
+marker come from `tests/integration/conftest.py`.
+
+#### Two mutation checks, to show the suite is not vacuous
+
+| What was broken on purpose | Result |
+|---|---|
+| Fault injected into `resolve_grants` (raises `OperationalError`) | An administrator's request answers **403**, not 200 — `test_resolution_failure_denies` asserts it |
+| A bypass planted in a throwaway module (`if settings.debug: return None  # skip_authz`) | The grep gate **finds it**, and ignores the same words in a docstring — `test_the_bypass_gate_would_catch_one` |
 
 ### Executed — `./scripts/check-all.sh`, 14/14 passed (M1.3, 2026-10-13)
 
@@ -457,6 +650,48 @@ browser against <http://localhost:5173>.
 | Compose config validity | `docker compose --profile core --profile mocks config --quiet` | **exit 0** |
 | Schema unchanged by M1.3 | `SELECT version_num FROM alembic_version` before and after | **`0002`** both times. No migration was added; existing data preserved |
 
+### Executed — M1.4, over HTTP against the live Compose stack (2026-10-14)
+
+Driven with `curl` against the running `core` + `mocks` stack (the audit rows below
+are timestamped `2026-10-13T18:2x` UTC). The backend mounts `backend/app`
+read-only, so the new code was live without a rebuild; migration `0003` was applied
+from the host, because `alembic/versions` is **not** mounted into the container.
+
+| Step | Result |
+|---|---|
+| Real login through the mock IdP as `admin` | **302** to `/`, session cookie set |
+| `GET /api/v1/auth/session` with no roles granted | `roles: []`, `permissions: []`, `read_only_mode: false` |
+| `GET /api/v1/admin/users` with that session | **403** `{"code":"forbidden"}` — a real session with no grant |
+| `python -m app.admin.bootstrap --email admin@example.invalid` in the container | **granted**, audited `ROLE_GRANTED` / `SYSTEM` / `system:bootstrap` |
+| The same command again | **exit 2**, "An administrator already exists" |
+| The same command for an unknown address | **exit 1**, "No active user with address …" |
+| `GET /api/v1/auth/session` again, **no re-login** | `ADMINISTRATOR` with the full scope, 20 permissions including `admin:users` |
+| `GET /api/v1/admin/users` again | **200**, three users, `page: {limit:50, offset:0, total:3, has_more:false}` |
+| `POST …/{viewer}/roles` with CSRF, scope `{environment:[staging], server:[*]}` | **201**, `granted_by` = the administrator |
+| The same `POST` **without** the CSRF header | **403** (CSRF, before routing — assumption A-08) |
+| `POST …/roles` with `environment: ["nonsense"]` | **422** `validation_failed`, field `scope_definition.environment` |
+| `POST /api/v1/admin/settings/read-only-mode {enabled:true, reason:…}` | **200** `{"read_only_mode":true}` |
+| `GET /api/v1/admin/users` while read-only | **200** — reads keep working |
+| `GET /api/v1/auth/session` while read-only | `read_only_mode: true` |
+| `POST …/roles` while read-only | **423** `{"code":"read_only_mode"}`, audited `AUTHZ_DENIED` with `reason: read_only_mode` |
+| `POST …/read-only-mode {enabled:false}` while read-only | **200** — the switch is exempt from its own gate |
+| `POST …/roles` after disabling it | **201** |
+| `DELETE …/{viewer}/roles/{id}` ×2 | **204** each, audited `ROLE_REVOKED` |
+| `DELETE` the administrator's own last grant | **409** `{"code":"conflict"}` "The last Administrator grant cannot be revoked." |
+| `PATCH` the administrator's own account to `DISABLED` | **422** `{"code":"not_permitted"}` "You cannot disable your own account." |
+
+Audit rows read back from PostgreSQL afterwards: `ROLE_GRANTED` (×3, one of them
+`SYSTEM`/`system:bootstrap` with `actor_id` NULL and
+`granted_by_is_self_reference: true`), `ROLE_REVOKED`, `READ_ONLY_MODE_CHANGED` (×2,
+with the operator's reason), and `AUTHZ_DENIED` (×3, each naming the permission, the
+rule that refused it, the method and the path, attributed to a real `actor_id`).
+`SESSION_TERMINATED` metadata carries the count and **no session identifier**.
+
+Existing data preserved: the development database still holds the same three users
+and its pre-existing audit rows; the only grants added were the bootstrap
+administrator (left in place — it is the point of the command) and two test grants on
+`viewer@example.invalid`, both revoked through the API afterwards.
+
 ### NOT executed — no result may be claimed
 
 | Check | Why |
@@ -466,10 +701,11 @@ browser against <http://localhost:5173>.
 | `pre-commit run --all-files`; planted-secret test | `pre-commit` and `gitleaks` not installed (issue 26) |
 | The GitHub Actions workflow | never triggered; `.github/workflows/ci.yml` is unproven |
 | ~~`/readyz` returning 200 against a fully migrated database~~ | **Done in M1.3** — see the table above. Moved out of this list |
+| A **real production-like** deployment of the authorisation layer | Everything was verified locally: one host, one PostgreSQL, one Redis, the mock IdP. No reverse proxy, no TLS, no non-superuser database role (issue 28) |
 | A round trip against a **real** identity provider | No provider chosen (`OPEN-01`) and none exists to point at. Everything in M1.3 was verified against the mock IdP, which checks no password. The remaining unknowns are claim shapes, discovery quirks, redirect-URI registration and token-endpoint authentication |
-| `/auth/session`'s `permissions` array proven advisory by a rejected action | No permission-bearing endpoint exists yet; M1.4 adds the first. Issue 36 |
-| Session rotation on a **role change** | The `rotate()` primitive exists and is tested, but nothing calls it yet — role administration is M1.4 |
-| `terminate_user_sessions` from an API | The primitive exists and is tested (three sessions, one call); the administrator endpoint that calls it is M1.4 |
+| ~~`/auth/session`'s `permissions` array proven advisory by a rejected action~~ | **Done in M1.4** — `test_the_permissions_array_is_advisory`. Moved out of this list (issue 36 closed) |
+| Session rotation on a **role change** | **Still not done, and now a documented gap rather than a pending task** — see issue 41. `rotate()` has no caller: a third party's grant change cannot issue them a new cookie, and nothing about authority is stored in the session, so there is nothing stale to invalidate |
+| ~~`terminate_user_sessions` from an API~~ | **Done in M1.4** — §25.7, plus the implicit termination on `status: DISABLED` (§25.4). Both verified against real Redis |
 | Concurrent-session limits, active-session list | `[RECOMMENDED]` in docs/SECURITY.md §5, not mandatory. Not built |
 | E2E tests | none exist yet (M1.7) |
 | Performance tests | none exist yet (M6.3); **no performance figure has been measured** |
@@ -511,42 +747,84 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-**M1.4 — RBAC and authorisation enforcement**
-([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m14--rbac-and-authorisation-enforcement))
+**M1.5 — Server and application inventory**
+([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m15--server-and-application-inventory))
 
-M1.3 left the application able to say *who* a caller is and unable to say what they
-may do. Every seeded role and permission exists, `/auth/session` already reads them,
-and no endpoint enforces anything — so M1.4 is the next increment and the
-prerequisite for every domain endpoint from M1.5 on.
+**Confirm `OPEN-02` before starting it.** It decides whether `applications` carries an
+`environment` column; `AD-12` says no and that is what M1.2 built, but reversing it
+after M1.5 means a data migration. This is the one blocking question.
 
-**What M1.4 can build on:**
+**What M1.5 can build on:**
 
-- `require_session` in `app/auth/dependencies.py` — one place a request becomes
-  attributable, already fail-closed. `require_permission` composes on top of it.
-- `app/auth/service.py` holds `granted_roles` and `effective_permissions`, which read
-  grants from PostgreSQL per request with no cache. They are **advisory and
-  scope-blind** on purpose; M1.4's matcher is a different function that takes a
-  resolved target. Do not extend these into a matcher.
-- `audit.record()` in `app/audit/service.py` — `AUTHZ_DENIED` has somewhere to go on
-  day one, and the attribution `CHECK` is already proven by the M1.3 rows.
-- `session_store.rotate()` and `terminate_user_sessions()` exist and are tested but
-  have no callers. The role-change and user-disable endpoints are their callers.
+- `require_permission(resource_type, action)` in `app/authz/dependencies.py` — the
+  only dependency, already fail-closed and already auditing denials. Inventory routes
+  declare `("server", "read")`, `("server", "write")` and so on, and the
+  route-coverage test will fail them if they forget.
+- `Authorized.permits(resource_type, action, target)` — the **scoped** question, for
+  use after the row is loaded, as [`docs/SECURITY.md`](docs/SECURITY.md) §20 requires.
+  `Target` carries the four stored dimensions. This is the half of the matcher M1.4
+  built and could not yet exercise against a real row, because no scoped resource
+  exists; `servers` is the first.
+- `app/authz/schemas.py` — scope validation, including the existence checks against
+  `servers`, `applications` and `cloud_accounts` that §25.5 needs.
+- The `0003` migration pattern for a hand-edited autogenerated revision.
 
-**Decide early in M1.4:**
+**Things M1.5 must not skip, which M1.4 deliberately left for it:**
 
-1. **How the first administrator is granted** (issue 37). `user_roles.granted_by` is
-   `NOT NULL` and references `users`, so the schema forbids an unattributed grant.
-   Options: a self-granted first row, a one-shot CLI command, or an explicit
-   bootstrap migration. Picking this before the endpoints is cheaper than after.
-2. **Prove the `permissions` array is advisory** (issue 36) as soon as the first
-   permission-bearing endpoint exists, and tick that box in the M1.3 checklist.
+1. **Scope filtering inside the query, not after it**
+   ([`docs/SECURITY.md`](docs/SECURITY.md) §20): the caller's readable set applied in
+   SQL so unreadable rows are never counted in `total`. M1.4 has no scoped collection,
+   so nothing proves this yet.
+2. **`404` rather than `403` for an out-of-scope server, service, application or
+   deployment** ([`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §2), decided per
+   endpoint. The admin endpoints answer `403` because administration is not scoped;
+   inventory is the opposite case.
+3. **Reconcile `integration:manage` → `admin:integrations`** (issue 39) in the same
+   migration as the first endpoint that requires it (§18.2).
+4. **A read-class rate limit** ([`docs/SECURITY.md`](docs/SECURITY.md) §13), which no
+   read endpoint has yet.
 
 **Also still outstanding, and cheap to clear:** `scripts/smoke-test.sh` has never run
 (issue 20), images are tag-pinned rather than digest-pinned (issue 21), and the secret
-scanner has never been shown to fail on a planted secret (issue 26). The Docker daemon
-is available now, so all three are unblocked.
+scanner has never been shown to fail on a planted secret (issue 26). The Docker
+daemon is available, so all three are unblocked. The CSRF error code (issue 40) is a
+one-word fix in an M1.3 module and would suit whoever next touches it.
 
 ## 10. Scope confirmation
+
+**M1.4 implementation session (2026-10-14).** Scope was milestone M1.4. Added the
+authorisation layer (`app/authz/matcher.py`, `service.py`, `dependencies.py`,
+`schemas.py`, and `SystemSetting` in `models.py`), the administration module
+(`app/admin/router.py`, `service.py`, `schemas.py`, `bootstrap.py`), migration `0003`,
+the matcher and route-coverage suites, the admin integration suite, and the
+frontend's advisory permission module plus the read-only banner.
+
+Changes touching code outside M1.4, each forced by this milestone rather than
+opportunistic: `app/main.py` mounts the admin router and its docstring now describes
+the route-coverage gate; `/auth/session` reports the real `read_only_mode` instead of
+a hardcoded `false`; `app/auth/service.effective_permissions` now derives the
+advisory list from `authz.service.resolve_grants` rather than running its own copy of
+the same join, so the advisory list and the real decision cannot drift on *which
+grants exist*; `tests/test_db_units.py` expects the new model; and
+`tests/integration/test_migrations.py` reads head and its predecessor from the script
+directory instead of hard-coding `0002`/`0001`.
+
+Deliberately **not** changed, though noticed: the CSRF error code (issue 40) is in
+`app/core/csrf.py`, an M1.3 module, and the permission-name drift for integrations and
+logs (issue 39) belongs to the milestones that first enforce those permissions. Both
+are recorded in [§6](#6-known-issues) instead.
+
+No dependency was added. `EmailStr` was considered for the pre-create body and
+rejected — it needs the `email-validator` package, and
+[`docs/TECH_STACK.md`](docs/TECH_STACK.md) §10 rung 6 applies: a bounded pattern is
+enough for a value that is display and routing only, never an authorisation input.
+
+Existing data was preserved: PostgreSQL and Redis were the already-running Compose
+services, no volume was reset, no database was created. Migration `0003` was applied
+to the existing `dcp` database, whose three users and 14 audit rows are intact; the
+integration suite continued to use `dcp_test`, whose schema it drops and rebuilds per
+session as it has since M1.2. No cloud resource was provisioned, no production system
+contacted, and no real credential created or stored.
 
 **Documentation session (earlier, 2026-10-13).** Documentation only: no code, no
 migrations, no packages, no cloud resources, no credentials. Only `PRD.md` pre-existed
@@ -637,6 +915,18 @@ Performed 2026-10-13 across `PRD.md` and the eight documents.
 | Relative links | All inter-document links verified as existing files with matching heading anchors |
 
 Re-run this review whenever a contract document changes.
+
+### M1.4 code-vs-documentation review (2026-10-14)
+
+| Claim | Verified how |
+|---|---|
+| `AD-03` is described as the code behaves | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §9.2 and the `AD-03` row, [`docs/SECURITY.md`](docs/SECURITY.md) §4 rule 6, [`docs/DATABASE.md`](docs/DATABASE.md) §3.5 and §12, [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §2 and §25.5 all now say per-request, no cache, no counter — each amendment dated and attributed. `grep -rn permissions_version backend/` matches only two docstrings, both stating that it does not exist |
+| Every §25 endpoint exists with the permission the contract names | Asserted in code by `test_admin_routes_declare_the_permissions_the_contract_names`, which transcribes the contract table rather than reading the router |
+| §25.10 and `system_settings` are documented, not just built | [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §25.10, [`docs/DATABASE.md`](docs/DATABASE.md) §3.6 (plus the ERD and §20 status), [`docs/SECURITY.md`](docs/SECURITY.md) §27 already required the flag |
+| The permission catalogue matches the matrix | `/api/v1/admin/roles` read back from the live stack: ADMINISTRATOR holds `admin:users`/`admin:roles` and **not** `deployment:approve`/`operation:approve`; APPROVER holds both approvals; VIEWER holds no `admin:*` and no `server:write`. Asserted by `test_approver_and_administrator_permissions_match_the_matrix` |
+| The scope semantics the matcher implements are written down | `A-09` in [§3](#3-in-progress-milestone) and [`docs/SECURITY.md`](docs/SECURITY.md) §4; one matcher case per clause |
+| Divergences are recorded, not hidden | Issue 39 (permission naming), issue 40 (CSRF code), issue 41 (session rotation on another user's role change), `OPEN-26` (pre-create keying) — all four are in writing, none is silently resolved |
+| Error codes used exist in the contract | `forbidden`, `not_found`, `conflict`, `duplicate_resource`, `validation_failed`, `read_only_mode` were already in [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §3; `not_permitted` was used by §25.4 without being listed, and §3 now lists it |
 
 ### M1.1 code-vs-documentation review (2026-10-13)
 
