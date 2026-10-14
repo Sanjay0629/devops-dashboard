@@ -2,11 +2,14 @@
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
 **Last updated:** 2026-10-14
-**Updated by:** M1.4 implementation session (RBAC and authorisation enforcement),
-then amended the same day with the four decisions taken for M1.5 — including
-`OPEN-02`, now closed (see [§3](#3-in-progress-milestone)).
-Previously: M1.3 implementation session, amended with the three decisions taken for
-M1.4, all three of which are now implemented as agreed (see [§3](#3-in-progress-milestone))
+**Updated by:** M1.5 implementation session (server and application inventory). The
+four decisions recorded for M1.5 are implemented as agreed; one of them — the
+authorisation layer meeting its first scoped resource — exposed a defect in M1.4's
+`A-09` scope semantics that had to be amended to deliver the milestone at all. That
+amendment, and the new `OPEN-27` it did *not* resolve, are the two things to read
+first (see [§3](#3-in-progress-milestone)).
+Previously: M1.4 implementation session (RBAC and authorisation enforcement), amended
+with the four decisions taken for M1.5 including `OPEN-02`; before that, M1.3
 
 > **Rules for this file**
 > - Record only what has **actually happened**. Never mark anything complete because a plan says it should be.
@@ -18,13 +21,19 @@ M1.4, all three of which are now implemented as agreed (see [§3](#3-in-progress
 
 ## 1. Current project stage
 
-**Stage: Phase 1 — Foundation. Milestones M1.1 – M1.4 complete; M1.5 next.**
+**Stage: Phase 1 — Foundation. Milestones M1.1 – M1.5 complete; M1.6 next.**
 
 The application has a running skeleton, a migrated PostgreSQL schema, working OIDC
-authentication with server-side sessions, and — as of M1.4 — **authorisation**: one
-matcher, one `require_permission` dependency, ten administrative endpoints behind it,
-`AUTHZ_DENIED` auditing, and a route-coverage test that fails the build if any route
-escapes a permission. It still monitors nothing — see [§4](#4-pending-milestones).
+authentication with server-side sessions, authorisation (one matcher, one
+`require_permission` dependency, `AUTHZ_DENIED` auditing, and a route-coverage test
+that fails the build if any route escapes a permission), and — as of M1.5 — a
+**server and application inventory**: twelve endpoints, scope filtering applied
+inside the SQL, cursor pagination, row-level idempotency, and five routed frontend
+pages. It still monitors nothing — see [§4](#4-pending-milestones).
+
+M1.5 is where the authorisation layer first met a real scoped row, and it found a
+defect: under `A-09` as M1.4 wrote it, the bootstrap administrator's full-scope grant
+reached **no server at all**. See [§3](#3-in-progress-milestone).
 
 The first administrator is granted by a one-shot CLI
 (`python -m app.admin.bootstrap --email …`), which refuses to run if an administrator
@@ -90,6 +99,8 @@ writing.
 | **M1.3** — OIDC authentication, Redis sessions, CSRF, JIT provisioning, auth audit, mock IdP, frontend session | **Complete against the mock IdP** | 2026-10-13 | Login and logout driven through the Compose `core` + `mocks` stack **in a real browser**; 126 auth unit + 39 auth integration tests pass; all 14 checks in `scripts/check-all.sh` pass ([§7](#7-tests-executed-and-their-actual-results)) |
 | **M1.4** — RBAC matcher, `require_permission`, admin endpoints 25.1–25.10, `AUTHZ_DENIED` audit, read-only mode, bootstrap CLI, route-coverage gate | **Complete** | 2026-10-14 | 270 unit + 132 integration tests pass against **real PostgreSQL 17.2 and real Redis**; the whole flow driven over HTTP against the running Compose stack (login → 403 → bootstrap → 200 → grant → revoke → read-only → 423); all 14 checks in `scripts/check-all.sh` pass ([§7](#7-tests-executed-and-their-actual-results)) |
 
+| **M1.5** — server and application inventory, endpoints 14.1–14.7 and 18.1–18.5, scope-filtered queries, cursor pagination, idempotency, React Router and five pages | **Complete** | 2026-10-14 | 349 unit + 209 integration + 55 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; the lifecycle driven over HTTP against the running Compose stack (register → replay → duplicate → patch → environment change → retire → 404) and the UI exercised in a real browser; all 14 checks in `scripts/check-all.sh` pass ([§7](#7-tests-executed-and-their-actual-results)) |
+
 **M1.3 caveat — the honest limit of what was verified.** Everything was tested
 against the **mock** OIDC provider in `infra/compose/mock-idp/`, which checks no
 password. That proves the OIDC client is self-consistent and that the session, CSRF,
@@ -116,10 +127,103 @@ development aid and is labelled as one in its own README, in the Compose file an
 
 ## 3. In-progress milestone
 
-**None.** M1.4 is finished; M1.5 (server and application inventory) has not begun —
-and **must not start before `OPEN-02` is confirmed** (it decides whether
-`applications` carries an `environment` column, and reversing that after M1.5 means a
-data migration).
+**None.** M1.5 is finished; M1.6 (dashboard shell) has not begun.
+
+### What M1.5 implemented (2026-10-14)
+
+All four decisions recorded below as "Decided for M1.5" were implemented as agreed.
+One of them had a consequence nobody could have seen from the documents, and it is
+the most important thing in this section.
+
+#### The A-09 defect, and the amendment it forced
+
+**Read this before anything else in M1.5.** M1.4 recorded assumption `A-09`: "a grant
+that constrains a dimension the **target does not have** is a denial, not a pass."
+M1.4 could not test that against a real row, because no scoped resource existed —
+PROGRESS said so at the time. M1.5 added the first one, and the rule turned out to
+deny everything:
+
+- A **server** has no `application` dimension. The bootstrap CLI grants
+  `{"environment": [...], "cloud_account": ["*"], "server": ["*"], "application": ["*"]}`,
+  so under `A-09` the deliberately omnipotent first administrator could not list,
+  read, register or edit a single server.
+- **Registration** was worse: before the row exists there is no id either, so
+  `server: ["*"]` failed too, and no scope could ever authorise a create.
+
+This was not a corner case — it was every realistic grant against every endpoint the
+milestone exists to ship. **`A-09` was amended, narrowly: a dimension scoped `["*"]`
+constrains nothing, so it is satisfied by a target that does not carry that
+dimension.** A grant naming a *specific* application still reaches no server — that
+is `A-09`'s own worked example and the case that carries the security meaning — and
+rule 4 is evaluated before the loop and is untouched, so `environment: ["*"]` still
+does not reach production.
+
+This is a change to a security rule and it is **more permissive than what M1.4
+wrote**, so it is flagged rather than buried: it was taken because the milestone
+could not be delivered without it, it is written into
+[`docs/SECURITY.md`](docs/SECURITY.md) §4 and `app/authz/matcher.py`, and it is
+pinned by four new matcher cases including "the bootstrap administrator's full scope
+reaches a staging server" and "a wildcard still does not make production implicit".
+If the product owner prefers a different resolution, the matcher is the one place to
+change and the cases say exactly what the current behaviour is.
+
+A second consequence of the same rules could **not** be resolved this way and is open
+— see `OPEN-27` below.
+
+#### The endpoints
+
+- **§14.1–§14.7 and §18.1–§18.5**, twelve endpoints across
+  `app/inventory/router_servers.py` and `router_applications.py`. **§14.8
+  (connectivity check) is deliberately absent**: it is a synchronous probe through a
+  provider adapter and the first adapter is M4.1, so shipping it would mean shipping
+  a stub that looks operational (CLAUDE.md §7). §18.6 and §18.7 are absent for the
+  same reason (health runner, deployments).
+- **Scope filtering inside the query** (`app/authz/queries.py`), which
+  [`docs/SECURITY.md`](docs/SECURITY.md) §20 requires and M1.4 explicitly left for
+  this milestone. It is a *translation* of the matcher, not a second decision, and
+  `tests/integration/test_scope_filtering.py` cross-checks the two across 28
+  grant/effect combinations against real rows — if a rule changes in one and not the
+  other, that test fails.
+- **`404`, not `403`, for an out-of-scope server** (§2), because on a scoped
+  resource a `403` on a specific id confirms the id exists.
+- **Cursor pagination** (`app/core/pagination.py`): keyset over `(sort key, id)` as a
+  row-value comparison, signed with a key derived from the configured database URL.
+  `page.total` is `null` by §5. Pagination stability under a concurrent insert is
+  tested directly.
+- **Row-level idempotency** per the decision below, with replay → `200` +
+  `idempotent_replay: true` and key reuse with a different body → `409`.
+- **A read-class rate limit** (`require_read_budget`, 600/min per identity, failing
+  **open**) — the fourth thing M1.4 listed for this milestone.
+- **Audit** on every mutation, with `SERVER_ENVIRONMENT_CHANGED` as its own event and
+  requiring Administrator, since it moves the authorisation boundary for every future
+  operation on that host.
+- **Frontend**: React Router plus `ServerList`, `ServerDetail`, `ServerForm`,
+  `ApplicationList`, `ApplicationDetail`, with honest data states throughout — health,
+  open alerts, provider capabilities and deployment targets each say *which* kind of
+  "no data" they are rather than rendering a zero.
+- **A seed script** (`python -m app.inventory.seed`), refusing to run outside
+  `local`, marking every row `[DEMO]` / `.invalid` / `provider_metadata.synthetic`.
+
+#### New assumptions and open questions
+
+- **`OPEN-27` — how is a resource with no scope dimensions scoped?** An application
+  has no environment, no cloud account and no server (AD-12), so the dimension rules
+  have nothing to evaluate it against, and the `["*"]` amendment above does not help:
+  the bootstrap grant names four *specific* environments, not `["*"]`. **Working
+  default taken: applications are not scope-filtered** — `server:read` is the whole
+  check for §18.1 and §18.3. That costs nothing operationally (an application row is
+  metadata; every privileged action targets a server or a deployment target, each
+  scope-filtered on its own dimensions; writes need Administrator-only
+  `admin:integrations`), but it is a product decision, not an implementation one.
+  Recorded in [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §30 with the two
+  alternatives.
+- **`A-10` — the stored shape of `health_check_config`.** §18.2 names the field and
+  §18.6 shows the checks it drives, but neither pins the shape. Chosen:
+  `{"checks": [{"name", "url", "environment", "expected_status"}]}`, every URL
+  allowlist-validated at write time (docs/SECURITY.md §19). Recorded in
+  [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §18.2.
+- **Assumption 4 in [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §31 was amended**
+  ("all list endpoints are scope-filtered") to match `OPEN-27`.
 
 ### What M1.4 implemented (2026-10-14)
 
@@ -183,7 +287,7 @@ In the order they bite:
       non-superuser application role separate from the migration owner. Scheduled
       M6.2; see issue 28.
 
-### Decided for M1.5 — agreed 2026-10-14, **not yet implemented**
+### Decided for M1.5 — agreed 2026-10-14, **implemented 2026-10-14**
 
 Four questions put to the product owner before M1.5 started. `OPEN-02` was the only
 blocker; the other three have schema or dependency consequences that should not be
@@ -192,6 +296,9 @@ session that implements them may be a different one.
 
 - [x] **`OPEN-02`: applications are environment-agnostic.** See the closed entry
       above. No migration owed, §18 response shapes stand as written.
+      **Implemented:** `applications` still has no `environment` column, and
+      `ApplicationDetail` groups its servers by environment instead, which is what
+      "where does this run" actually means under AD-12.
 
 - [x] **Inventory idempotency lives on the row, not in a side table.**
       [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §7 requires an
@@ -209,6 +316,16 @@ session that implements them may be a different one.
       **Documentation debt this creates, to be paid in the same commit:**
       [`docs/DATABASE.md`](docs/DATABASE.md) §4.2, §4.3 and §14 must describe the two
       new columns and say that inventory creates are deduplicated this way.
+      **Implemented** as migration `0004`, and the documentation debt is paid in the
+      same change. Two things worth knowing that the decision did not anticipate:
+      (a) the partial index is on `created_by IS NOT NULL AND idempotency_key IS NOT
+      NULL` and deliberately **not** on `deleted_at IS NULL`, because a key must stay
+      claimed after a retire or a replayed create would register a second server —
+      both halves are tested; (b) the request body is not stored, so "replay with an
+      identical body" compares the request against the stored row's *current*
+      columns, which means a key replayed after the resource was edited reads as a
+      different body and is refused. That is the safe direction but it is stricter
+      than §7 describes; see issue 42.
 
 - [x] **React Router is added, and M1.5 builds its five pages.** No milestone owned
       routing: M1.5's expected files list `ServerList`, `ServerDetail`, `ServerForm`,
@@ -224,6 +341,12 @@ session that implements them may be a different one.
       definition of done unmet and makes M1.6 large.
       **This is the first new frontend dependency since M1.1**, so
       [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §6 gets an entry in the same change.
+      **Implemented:** `react-router-dom` pinned at `7.18.4`, with the §10 rung
+      analysis written into [`docs/TECH_STACK.md`](docs/TECH_STACK.md) **§2.6** —
+      that is where routing is listed, rather than §6, which is infrastructure and
+      integrations. The version matters: every release up to and including 7.17.0
+      carries open-redirect and SSR advisories, and `npm audit --audit-level=high`
+      fails on them. It reports 0 vulnerabilities at 7.18.4.
 
 - [x] **`integration:manage` is renamed to `admin:integrations` in M1.5's
       migration.** Issue 39. §18.2 is the first endpoint to require it, the contracts
@@ -236,6 +359,12 @@ session that implements them may be a different one.
       reverse. The log permissions (`logs:read`/`logs:query` vs
       `logs:read:application`/`logs:read:system`) stay as they are until M3.2, which
       is the milestone that first enforces the distinction.
+      **Implemented** in migration `0004` as an `UPDATE` keyed on the old name, so
+      the existing `role_permissions` row followed the permission id rather than
+      having to be recreated. Verified against the live catalogue, not just the
+      migration source: `admin:integrations` is present, `integration:manage` is
+      gone, and ADMINISTRATOR still holds it. The live `/auth/session` for
+      `admin@example.invalid` lists `admin:integrations`.
 
 ### Decided for M1.4 — agreed 2026-10-13, **implemented 2026-10-14**
 
@@ -421,7 +550,7 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 
 | Phase | Milestones | Status |
 |---|---|---|
-| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · M1.5 inventory · M1.6 dashboard shell · M1.7 consolidation | **M1.5 next (confirm `OPEN-02` first)** |
+| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · M1.6 dashboard shell · M1.7 consolidation | **M1.6 next** |
 | 2 — Monitoring | M2.1 Prometheus client · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | Pending |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
@@ -485,6 +614,17 @@ Once a decision is reviewed, record the date and the outcome here.
 | docs/SECURITY.md §27 read-only mode | `system_settings.read_only_mode` + §25.10 toggle; writes answer `423` while reads and logout keep working. Verified over HTTP |
 | docs/TESTING.md §8 no debug bypass | Grep gate over detokenised source, with its own test that plants a bypass and proves it is caught |
 | docs/API_CONTRACTS.md §25 admin endpoints | `app/admin/router.py`, ten routes, each mutation audited; delegation escalation, last-administrator revocation and self-disable all refused |
+| **AD-12** applications environment-agnostic | No `environment` column; `ApplicationDetail` groups servers by environment instead. `OPEN-02` closed 2026-10-14 |
+| **AD-14** derived server status | `status` defaults to `PENDING`; `STALE`/`UNREACHABLE` are absent from the update schema entirely, so an operator cannot assert an observation. `stale` is computed and reports `null` when `last_seen_at` is `NULL` |
+| **docs/SECURITY.md §20** scope inside the query | `app/authz/queries.readable_servers` builds the `WHERE` clause; `tests/integration/test_scope_filtering.py` cross-checks it against the matcher over 28 grant/effect combinations on real rows |
+| **docs/API_CONTRACTS.md §2** out-of-scope ⇒ 404 | `app/inventory/service.get_server`; asserted by id, not just by absence from a list |
+| **docs/API_CONTRACTS.md §5** cursor pagination | `app/core/pagination.py` — signed keyset cursors, tamper and cross-sort replay both `422 invalid_cursor`; stability under a concurrent insert tested |
+| **docs/API_CONTRACTS.md §6** filter/sort allowlists | `app/core/filters.py` plus `Literal` query types; an unknown parameter name is `422` naming the allowed set, rather than being silently ignored |
+| **docs/API_CONTRACTS.md §7** idempotency | `servers.idempotency_key` / `applications.idempotency_key` + `created_by` (migration 0004); replay → `200` + `idempotent_replay`, reuse with a different body → `409` |
+| **docs/API_CONTRACTS.md §14/§18** inventory | `app/inventory/router_servers.py`, `router_applications.py`; twelve endpoints, every mutation audited |
+| **docs/SECURITY.md §13** read class | `require_read_budget`, 600/min per identity, failing **open** — the documented asymmetry against `/auth/*`, which fails closed |
+| **docs/SECURITY.md §19** SSRF at write time | `app/core/ssrf.py`; `health_check_config` and `repository_reference` URLs are allowlist-checked on write, empty allowlist admits nothing. Request-time DNS checking lands with the first fetcher |
+| **CLAUDE.md §7** synthetic data is marked | `app/inventory/seed.py` — `[DEMO]` prefix, `.invalid` hostnames, `provider_metadata.synthetic`, and it refuses to run outside `local` |
 
 ---
 
@@ -553,8 +693,23 @@ Once a decision is reviewed, record the date and the outcome here.
 | # | Issue | Severity | Handling |
 |---|---|---|---|
 | 39 | **PARTLY DECIDED 2026-10-14** — the integration half is settled: `integration:manage` is renamed to `admin:integrations` in M1.5's migration (see [§3](#3-in-progress-milestone)). The log half stays open until M3.2. **The seeded permission catalogue does not use the names the contracts do, and M1.4 only reconciled the two it needed.** [`docs/SECURITY.md`](docs/SECURITY.md) §4 and [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §18/§24/§26 name `admin:integrations`, `logs:read:application` and `logs:read:system`; the M1.2 seed created `integration:manage`, `logs:read` and `logs:query`. Migration `0003` added the contract-named `admin:users` and `admin:roles` (needed by §25) and narrowed `admin:manage` to system settings, but left the integration and log permissions alone — renaming permissions nothing enforces yet would be churn, and the log split carries a real security distinction that the milestone enforcing it should design. | Naming drift; no behavioural effect today, because only ADMINISTRATOR holds any of them | Reconcile `integration:manage` → `admin:integrations` in M1.5 (the first endpoint to require it, §18.2) and `logs:read`/`logs:query` → `logs:read:application`/`logs:read:system` in M3.2. [`docs/SECURITY.md`](docs/SECURITY.md) §4 now names both forms so the divergence is visible rather than latent. |
+| 39b | **RESOLVED 2026-10-14 (M1.5)** — `integration:manage` → `admin:integrations`, migration 0004, verified against the live catalogue. The log half (`logs:read`/`logs:query` → `logs:read:application`/`logs:read:system`) is still open and belongs to M3.2. | — | See issue 39 above |
 | 40 | **A CSRF rejection answers `code: "forbidden"`, not `code: "csrf_failed"`.** [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §3 defines `403 csrf_failed` as a distinct code; `app/core/csrf.py` emits `forbidden` with the message "CSRF validation failed." Found while exercising the admin endpoints over HTTP without the header. | Contract divergence; a client switching on `code` cannot tell CSRF failure from permission failure | One-word fix in `app/core/csrf.py` plus the M1.3 CSRF tests that assert the current code. **Not done here**: `app/core/csrf.py` is M1.3's module and outside this milestone's scope (CLAUDE.md §3). |
 | 41 | **A privilege change affecting *another* user does not rotate their session identifier,** which [`docs/SECURITY.md`](docs/SECURITY.md) §5 lists among the rotation triggers ("role change affecting the user"). Rotation requires issuing a new cookie, which can only happen on a request from that user's own browser, so a third party's grant change cannot rotate it. Nothing is cached in the session, so there is no stale authority to invalidate — the change takes effect on their next request regardless — and terminating their sessions instead would contradict [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §25.5's "without a re-login". `session_store.rotate()` therefore still has no caller. | Documented gap, no known exploit: the session record holds a `user_id` and nothing about authority | Either mark the session for rotation on its next use (a flag the session store would honour in `require_session`), or amend §5 to say rotation applies to the caller's own privilege change. Needs a decision; not invented here. |
+
+---
+
+### Implementation issues (found during M1.5, 2026-10-14)
+
+| # | Issue | Severity | Handling |
+|---|---|---|---|
+| 42 | **An idempotent replay is judged against the row's *current* columns, not the original request body.** Migration 0004 stores the key and the requester but not the payload, so `create_server` and `create_application` compare the incoming body against the stored row. A key replayed after the resource was edited therefore reads as "a different body" and is refused with `409`, where [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §7 describes `409` only for a genuinely different request. | Contract divergence in one direction only — it never silently returns something the caller did not ask for | Either store a hash of the canonical body in a third column, or accept and document the narrower rule. Needs a decision; the safe behaviour is in place meanwhile. Documented in [`docs/DATABASE.md`](docs/DATABASE.md) §14. |
+| 43 | **TypeScript API types are still hand-written.** [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §11 and CLAUDE.md §5 require them to be generated from the backend OpenAPI schema into a committed file, with CI failing on drift. `frontend/src/api/inventory.ts` is hand-written instead, because wiring `openapi-typescript` would be a **second** new frontend dependency in a milestone that agreed to exactly one (React Router), and that was not a decision to take unilaterally. The shapes are checked against the real responses by the backend suites rather than by the compiler. | Drift risk between frontend and backend; no behavioural fault today | Add `openapi-typescript` (or equivalent) plus the CI drift gate, and delete the hand-written interfaces. It is a small, self-contained change and it should be the next thing done to this file. |
+| 44 | **No UI for editing a server or managing associations.** §14.4, §14.6 and §14.7 are implemented, audited and tested on the backend, and the frontend has no control for them — only registration, read and retire. [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) M1.5 lists "edit forms" and "association management" among the frontend tasks. | Incomplete milestone task, stated rather than hidden | Add an edit form and an association control. Small, and natural to do alongside M1.6's shared `StatusBadge`/`EmptyState` components, which also replace `pages/inventory/states.tsx`. |
+| 45 | **There is no UI for registering an application.** §18.2's body carries `health_check_config`, whose URLs are validated against the SSRF host allowlist at write time — and `DCP_SSRF_HOST_ALLOWLIST` is empty by default, so a form offering a URL box would only ever produce a rejection. Applications are registered through the API until the allowlist is configurable. | Deliberate omission | Revisit when the allowlist has a configuration surface (M4/M6). |
+| 46 | **`page.has_more` is reported but there is no "next page" control.** The backend mints a cursor and the list pages say more results exist; the UI asks the operator to narrow the filters instead. | Usability gap, no correctness fault | Paging controls belong with M1.6's list components. |
+| 47 | **The cursor signing key is derived from `DCP_DATABASE_URL`**, not from a key of its own, so rotating the database password invalidates in-flight cursors (the client sees `422 invalid_cursor` and re-fetches one page). Chosen over a new mandatory secret, which PRD §11 forbids, and over a per-process random key, which would break cursors across instances and restarts. | Accepted, documented in `app/core/pagination.py` | Add an optional `DCP_CURSOR_SIGNING_KEY` with this as the fallback, if it ever matters. |
+| 48 | **Three migration tests needed a rebuilt schema.** `test_full_downgrade_to_base_leaves_no_tables`, `test_the_migrations_seed_no_user` and `test_seed_revision_is_idempotent` run a real downgrade, and revision 0002 deletes the reference rows it seeded — which it cannot do while an inventory test's server references the seeded cloud account (`ON DELETE RESTRICT`, deliberately). The migration is behaving correctly; the tests' precondition was "nothing has created inventory rows", true by luck until M1.5. | Was blocking the integration suite | Fixed: a `rebuilt` fixture drops and recreates the schema before those three tests. |
 
 ---
 
@@ -562,6 +717,75 @@ Once a decision is reviewed, record the date and the outcome here.
 
 All results below were produced by running the commands and reading the output.
 Nothing here is inferred.
+
+### Executed — `./scripts/check-all.sh`, 14/14 passed (M1.5, 2026-10-14)
+
+| Check | Command | Result |
+|---|---|---|
+| Backend lint | `uv run ruff check .` | **pass** — "All checks passed!" |
+| Backend format | `uv run ruff format --check .` | **pass** — 99 files |
+| Backend types | `uv run mypy` (strict) | **pass** — "no issues found in 61 source files" |
+| Backend security lint | `uv run bandit -q -r app` | **pass** — no findings |
+| Backend unit tests | `uv run pytest -m "not integration"` | **349 passed**, 209 deselected, 1 warning, 18.72s |
+| Backend integration tests | `uv run pytest -m integration` | **209 passed**, 349 deselected, 1 warning, 42.96s |
+| Backend dependency audit | `uv run pip-audit` | **pass** |
+| Frontend lint | `npx eslint .` | **pass** |
+| Frontend format | `npx prettier --check .` | **pass** |
+| Frontend types | `npx tsc --noEmit` | **pass** |
+| Frontend tests | `npx vitest run` | **55 passed** (6 files), 7.45s |
+| Frontend build | `npm run build` | **pass** — 57 modules, 293.54 kB JS / 90.73 kB gzip |
+| Frontend audit | `npm audit --audit-level=high` | **pass** — 0 vulnerabilities (see the react-router version note in [§3](#3-in-progress-milestone)) |
+| Documentation links | `python scripts/check_doc_links.py .` | **pass** — 363 links, 13 files, 0 problems |
+
+Both `TEST_DATABASE_URL` and `TEST_REDIS_URL` were set (the existing `dcp_test`
+database on the Compose PostgreSQL, Redis database `1`), so **nothing skipped**.
+
+New in M1.5: **79 backend unit tests** (request-schema validation, cursor
+encode/decode and tamper rejection, the query-parameter allowlist, four new matcher
+cases for the `A-09` amendment) and **77 integration tests** (the server lifecycle,
+duplicate detection, applications, and the scope cross-check, which is 28 of them).
+Frontend: **16** new tests across `ServerList` and `ServerForm`.
+
+Three pre-existing tests were changed, each because M1.5 made a claim they encoded
+no longer the whole truth:
+
+| Test | Why it changed |
+|---|---|
+| `test_soft_deletable_tables_have_partial_unique_indexes` | The new idempotency indexes are unique and partial but deliberately **not** on `deleted_at IS NULL` — a key must stay claimed after a retire. The test now asserts both rules separately instead of one loosened rule |
+| The three downgrade tests in `test_migrations.py` | Issue 48 — they need a rebuilt schema now that another suite creates inventory rows |
+| `test_an_idempotency_key_is_required` (new, but worth noting) | FastAPI reports the header alias as written, `Idempotency-Key`, not lowercased |
+
+#### Verified by hand against the running Compose stack
+
+Driven over HTTP as `admin@example.invalid` (the M1.4 bootstrap administrator),
+through the frontend dev server's proxy so the whole origin and cookie path is the
+real one:
+
+| Step | Result |
+|---|---|
+| `/readyz` after rebuilding the backend image | `200 {"status":"ok","checks":{"database":true,"broker":true,"migrations":true}}` — the M1.4 leftover is cleared |
+| `GET /servers?limit=3&sort=display_name` | 3 of 6 seeded rows, `next_cursor` present, `total: null`, `demo_mode: true` |
+| `GET /servers?environment=production` | 3 rows, all production |
+| `GET /servers?enviroment=x` (typo) | `422`, `unknown_field`, listing the 14 allowed parameters |
+| `POST /servers` | `201`, `status: PENDING`, `idempotent_replay: false` |
+| `POST /servers` again, same key and body | `200`, same id, `idempotent_replay: true`, **no second audit row** |
+| `POST /servers` again, new key, same resource id | `409 duplicate_resource` |
+| `PATCH /servers/{id}` `{"environment":"production"}` | `200`, and **two** audit rows: `SERVER_UPDATED` and `SERVER_ENVIRONMENT_CHANGED` |
+| `DELETE /servers/{id}` then `GET` | `204`, then `404` |
+| Audit trail for that server | `SERVER_REGISTERED → SERVER_UPDATED → SERVER_ENVIRONMENT_CHANGED → SERVER_RETIRED`, all `SUCCESS`, environment recorded |
+| `GET /applications/{id}` | one application across 3 servers in 2 environments — PRD §4.9 in real data |
+| `POST /applications` with `http://169.254.169.254/...` in `health_check_config` | `422` at `["body","health_check_config","checks","0","url"]` |
+| `PATCH /applications/{id}` `{"slug":"renamed"}` | `422` — slug is immutable |
+| `/auth/session` | `admin:integrations` present in the advisory list, `integration:manage` gone |
+
+#### Verified in a real browser
+
+The Compose stack with both profiles, driven through the UI: a deep link to
+`/servers` while signed out renders the login page and returns to `/servers` after
+authenticating; the demonstration banner is shown; the server list renders the six
+seeded `[DEMO]` rows with their five distinct statuses; the detail page reports
+**"Never seen"**, **"Unknown — never seen"** and **"Not configured — … (M2/M3/M4)"**
+rather than zeroes; the applications list and nav work.
 
 ### Executed — `./scripts/check-all.sh`, 14/14 passed (M1.4, 2026-10-14)
 
@@ -771,7 +995,9 @@ administrator (left in place — it is the point of the command) and two test gr
 | ~~`terminate_user_sessions` from an API~~ | **Done in M1.4** — §25.7, plus the implicit termination on `status: DISABLED` (§25.4). Both verified against real Redis |
 | Concurrent-session limits, active-session list | `[RECOMMENDED]` in docs/SECURITY.md §5, not mandatory. Not built |
 | E2E tests | none exist yet (M1.7) |
-| Performance tests | none exist yet (M6.3); **no performance figure has been measured** |
+| Performance tests | none exist yet (M6.3); **no performance figure has been measured** — including for the inventory list query, whose scope predicate and keyset page are untimed against anything larger than six rows |
+| Inventory at realistic scale | The seeded set is **6 servers and 3 applications**. Cursor paging, the scope predicate and the `ilike` search are all correct on that; none has been run against thousands of rows, and the `lower(hostname)` index is not a trigram index, so a non-prefix search would not use it |
+| A generated-then-committed TypeScript API client | Issue 43 — the types are hand-written, so the §11 drift gate does not exist and cannot have passed |
 | Backup/recovery rehearsal | nothing to back up yet (M6.4) |
 
 ## 8. External integrations
@@ -810,53 +1036,104 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-**M1.5 — Server and application inventory**
-([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m15--server-and-application-inventory))
+**M1.6 — Dashboard shell (database-only)**
+([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m16--dashboard-shell-database-only))
 
-**`OPEN-02` is confirmed** (2026-10-14, environment-agnostic), so M1.5 is unblocked.
-Three further decisions were taken with it — row-level idempotency columns, React
-Router plus the five pages, and the `admin:integrations` rename. All four are in
-[§3](#3-in-progress-milestone) with their reasoning and the documentation debt each
-one creates; implement them as written rather than re-opening them.
+M1.5 is complete and M1.6's dependency is satisfied. It is `GET /dashboard/summary`
+and `/dashboard/health` over PostgreSQL only, with metric sections returning
+`data_state: "not_configured"` until Phase 2, plus the dashboard page and
+`StatusBadge`.
 
-**What M1.5 can build on:**
+**What M1.6 can build on, and should take over:**
 
-- `require_permission(resource_type, action)` in `app/authz/dependencies.py` — the
-  only dependency, already fail-closed and already auditing denials. Inventory routes
-  declare `("server", "read")`, `("server", "write")` and so on, and the
-  route-coverage test will fail them if they forget.
-- `Authorized.permits(resource_type, action, target)` — the **scoped** question, for
-  use after the row is loaded, as [`docs/SECURITY.md`](docs/SECURITY.md) §20 requires.
-  `Target` carries the four stored dimensions. This is the half of the matcher M1.4
-  built and could not yet exercise against a real row, because no scoped resource
-  exists; `servers` is the first.
-- `app/authz/schemas.py` — scope validation, including the existence checks against
-  `servers`, `applications` and `cloud_accounts` that §25.5 needs.
-- The `0003` migration pattern for a hand-edited autogenerated revision.
+- `frontend/src/pages/inventory/states.tsx` holds the minimum M1.5 needed —
+  `Loading`, `Empty`, `Failure`, `NotCollected`, `Status`. M1.6's task list names
+  `StatusBadge`, `DataStateBanner`, `EmptyState` and `ErrorState` as the shared
+  components; **they should replace that file**, not sit beside it. `Status` in
+  particular is a placeholder for `StatusBadge` and says so.
+- The routing shell, nav and session gate in `App.tsx` — M1.6 adds a dashboard route
+  and makes it the landing page in place of the current redirect to `/servers`.
+- `app/inventory/queries.py` for the per-environment and per-status counts the
+  summary needs; `ix_servers_environment_status` exists for exactly that.
 
-**Things M1.5 must not skip, which M1.4 deliberately left for it:**
+**Decisions M1.6 should not have to take, but will inherit:**
 
-1. **Scope filtering inside the query, not after it**
-   ([`docs/SECURITY.md`](docs/SECURITY.md) §20): the caller's readable set applied in
-   SQL so unreadable rows are never counted in `total`. M1.4 has no scoped collection,
-   so nothing proves this yet.
-2. **`404` rather than `403` for an out-of-scope server, service, application or
-   deployment** ([`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §2), decided per
-   endpoint. The admin endpoints answer `403` because administration is not scoped;
-   inventory is the opposite case.
-3. **Reconcile `integration:manage` → `admin:integrations`** (issue 39) in the same
-   migration as the first endpoint that requires it (§18.2) — **decided 2026-10-14**,
-   see [§3](#3-in-progress-milestone).
-4. **A read-class rate limit** ([`docs/SECURITY.md`](docs/SECURITY.md) §13), which no
-   read endpoint has yet.
+1. **`OPEN-27`** (see [§3](#3-in-progress-milestone)) — whether applications are
+   scope-filtered, and how. The dashboard will count applications, so it meets this
+   immediately. Worth settling first; it is a product question.
+2. **Issue 42** — the idempotency replay comparison. Not M1.6's problem, but it is
+   the oldest unresolved contract divergence from this milestone.
 
-**Also still outstanding, and cheap to clear:** `scripts/smoke-test.sh` has never run
-(issue 20), images are tag-pinned rather than digest-pinned (issue 21), and the secret
-scanner has never been shown to fail on a planted secret (issue 26). The Docker
-daemon is available, so all three are unblocked. The CSRF error code (issue 40) is a
-one-word fix in an M1.3 module and would suit whoever next touches it.
+**Cheap and worth clearing, in roughly this order:**
+
+- **Issue 43 — generate the TypeScript API types.** Self-contained, closes a standing
+  CLAUDE.md §5 and [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §11 requirement, and
+  gets cheaper the sooner it happens: `inventory.ts` is the first file it deletes and
+  M1.6 would otherwise add a second hand-written client beside it.
+- **Issues 44 and 46** — the server edit form, association management and paging
+  controls. Natural alongside M1.6's list components.
+- **Issue 40** — the CSRF error code, still a one-word fix in an M1.3 module.
+- **Issues 20, 21, 26** — `scripts/smoke-test.sh` has never run, images are tag- not
+  digest-pinned, and the secret scanner has never been shown to fail on a planted
+  secret. All three are unblocked; the Docker daemon is available.
 
 ## 10. Scope confirmation
+
+**M1.5 implementation session (2026-10-14).** Scope was milestone M1.5. Added
+migration `0004`, the inventory module (`app/inventory/router_servers.py`,
+`router_applications.py`, `service.py`, `queries.py`, `schemas.py`, `seed.py`), the
+shared `app/core/pagination.py`, `filters.py` and `ssrf.py`, the SQL scope
+translation `app/authz/queries.py`, five frontend pages plus
+`src/api/inventory.ts` and `src/pages/inventory/states.tsx`, and seven test modules.
+
+Changes touching code outside M1.5, each forced by this milestone rather than
+opportunistic:
+
+- **`app/authz/matcher.py`** — the `A-09` amendment. The milestone could not be
+  delivered without it; see [§3](#3-in-progress-milestone), where it is flagged
+  rather than buried, and `docs/SECURITY.md` §4, amended in the same change. Four
+  matcher cases pin the new behaviour. `_normalise` was also renamed
+  `normalise_scope` so the SQL translation could reuse it instead of importing a
+  private name — the one-matcher rule is better served by sharing the function than
+  by copying it.
+- **`app/auth/dependencies.py`** — `require_read_budget`, the read-class rate limit
+  M1.4 explicitly deferred to the first domain reads (docs/SECURITY.md §13). It
+  lives there because it is keyed on identity and `app/core` does not import from
+  the layers above it.
+- **`app/core/errors.py`** — `FieldValidationError`, so the three places that raise
+  a §8 field list share one class.
+- **`app/core/config.py`** — four settings: the read-class budget, the SSRF host
+  allowlist, and the stale threshold.
+- **`app/main.py`** — mounts the two new routers.
+- **`frontend/src/api/session.ts`** — `request` exported, nothing else changed, so
+  the inventory client reuses the one CSRF-aware fetch wrapper instead of growing a
+  second.
+- **`frontend/src/App.tsx`** — the routing shell. The identity panel was initially
+  lost in the rewrite and restored: removing information the operator had was
+  collateral, not an improvement, and the M1.3 session tests caught it.
+- **`tests/test_db_units.py` and `tests/integration/test_migrations.py`** — issues 48
+  and the index-predicate split, both described in [§6](#6-known-issues).
+
+Deliberately **not** changed, though noticed: the CSRF error code (issue 40) is still
+an M1.3 module; the log permission names (issue 39) still belong to M3.2.
+
+One dependency added: `react-router-dom` 7.18.4, by prior agreement, with the §10
+rung analysis in [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §2.6. A **second** was
+considered and refused: `openapi-typescript`, which [`docs/TECH_STACK.md`](docs/TECH_STACK.md)
+§11 and CLAUDE.md §5 call for. Adding it was not in the agreed scope and would have
+been a unilateral second dependency, so the API types are hand-written and the gap is
+recorded as issue 43 rather than quietly filled or quietly ignored.
+
+Existing data was preserved. Migration `0004` was applied to the existing `dcp`
+database; its three users, one role grant and one `ON_PREM` cloud account are intact,
+and the migration only adds nullable columns and renames one permission row. No
+database was created, no volume reset. The integration suite continued to use
+`dcp_test`, whose schema it drops and rebuilds per session as it has since M1.2. Six
+synthetic servers and three synthetic applications were seeded into `dcp` by
+`app.inventory.seed`, all visibly marked; two servers created by hand during
+verification were retired through the API rather than deleted, so the audit trail is
+intact. No cloud resource was provisioned, no production system contacted, and no
+real credential created or stored.
 
 **M1.4 implementation session (2026-10-14).** Scope was milestone M1.4. Added the
 authorisation layer (`app/authz/matcher.py`, `service.py`, `dependencies.py`,
@@ -981,6 +1258,19 @@ Performed 2026-10-13 across `PRD.md` and the eight documents.
 | Relative links | All inter-document links verified as existing files with matching heading anchors |
 
 Re-run this review whenever a contract document changes.
+
+### M1.5 code-vs-documentation review (2026-10-14)
+
+| Claim | Verified how |
+|---|---|
+| Every §14 and §18 endpoint shipped carries the permission the contract names | Read endpoint by endpoint against [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §14 and §18, and enforced over HTTP: four non-administrator roles get `403` on every write and `200` on every read, parametrised per role |
+| The permission rename actually happened | Asserted against the **live catalogue**, not the migration source (`test_the_permission_was_renamed_by_migration_0004`): `admin:integrations` present, `integration:manage` absent, ADMINISTRATOR's grant followed the permission id. Confirmed again in `/auth/session` on the running stack |
+| The SQL scope filter and the matcher agree | `test_the_sql_filter_selects_exactly_what_the_matcher_allows` — 14 scopes × 2 effects against 5 real rows, comparing the set SQL returns with the set `permits()` allows. This is what keeps docs/SECURITY.md §4 rule 7 true across two evaluation strategies |
+| The `A-09` amendment is written down everywhere it is relied on | `app/authz/matcher.py` docstring, [`docs/SECURITY.md`](docs/SECURITY.md) §4, [§3](#3-in-progress-milestone) — and four matcher cases, including the one that proves production is still not implicit under a wildcard |
+| The new columns are documented, not just built | [`docs/DATABASE.md`](docs/DATABASE.md) §4.2, §4.3 and §14, including **why** the idempotency index is not partial on `deleted_at` and why the predicate is needed at all |
+| Honest data states are real, not claimed | Read in a browser: "Never seen", "Unknown — never seen", "Not configured — … (M2/M3/M4)". No zero, no dash. `test_an_administrator_registers_a_server_and_it_is_pending` asserts the same four nulls on the API |
+| Divergences are recorded, not hidden | Issues 42–48 and `OPEN-27`, all in writing. The two that most invite quiet resolution — the hand-written API types (43) and the missing edit UI (44) — are stated as gaps against the documents that require them |
+| What is **not** implemented is said so | §14.8, §18.6 and §18.7 are marked in [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) and in the router docstrings, with the milestone each waits on. §31's "no endpoint exists yet" line is replaced with an accurate implementation-status note |
 
 ### M1.4 code-vs-documentation review (2026-10-14)
 

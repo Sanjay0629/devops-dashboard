@@ -3,8 +3,8 @@
 The modular monolith's composition root (AD-01). Domain routers are mounted here
 as they arrive; M1.1 had only the health router.
 
-As of M1.4 this mounts health, authentication and administration. Every route
-the admin router adds carries a ``require_permission`` dependency, and
+As of M1.5 this mounts health, authentication, administration and inventory.
+Every route those routers add carries a ``require_permission`` dependency, and
 ``tests/authz/test_route_coverage.py`` walks this application's routing table
 to prove that no route anywhere escapes one — so a future router added here
 cannot quietly ship unauthorised. The exceptions are explicit in that test: the
@@ -31,6 +31,8 @@ from app.core.middleware import CorrelationIdMiddleware, SecurityHeadersMiddlewa
 from app.core.redis import dispose_redis
 from app.db.session import dispose_engine
 from app.health.router import router as health_router
+from app.inventory.router_applications import router as applications_router
+from app.inventory.router_servers import router as servers_router
 
 logger = get_logger(__name__)
 
@@ -88,6 +90,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router, prefix=settings.api_base_path)
     app.include_router(admin_router, prefix=settings.api_base_path)
+    app.include_router(servers_router, prefix=settings.api_base_path)
+    app.include_router(applications_router, prefix=settings.api_base_path)
 
     return app
 

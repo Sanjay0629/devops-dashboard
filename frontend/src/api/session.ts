@@ -87,7 +87,14 @@ function isSession(value: unknown): value is Session {
   );
 }
 
-async function request(path: string, init: RequestInit = {}): Promise<Response> {
+/**
+ * The one fetch wrapper: base path, Accept, timeout, CSRF, credentials.
+ *
+ * Exported since M1.5 so `inventory.ts` uses it rather than growing a second
+ * copy. Nothing about its behaviour changed — a second wrapper would be a
+ * second place for the CSRF rule to be got wrong.
+ */
+export async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort();

@@ -140,14 +140,37 @@ class TestModelMetadata:
         ],
     )
     def test_soft_deletable_tables_have_partial_unique_indexes(self, table: str) -> None:
-        """A unique index that ignores deleted_at makes a name unreusable."""
+        """A unique index that ignores deleted_at makes a name unreusable.
+
+        Every unique index on a soft-deletable table must be partial. The
+        *identity* ones must be partial on ``deleted_at IS NULL`` specifically,
+        or a hostname, slug or provider resource id can never be reused after
+        a retire — which `test_duplicate_detection.py` exercises end to end.
+
+        The idempotency indexes added by migration 0004 are the deliberate
+        exception, and the opposite rule applies to them: a key must stay
+        claimed *after* the row is soft-deleted, because a replay of the
+        original create has to keep returning the original row rather than
+        registering a second server (docs/API_CONTRACTS.md §7). They are
+        partial on their own two columns instead, for the NULL-distinctness
+        reason in docs/DATABASE.md §4.2.
+        """
         indexes = Base.metadata.tables[table].indexes
         unique = [index for index in indexes if index.unique]
         assert unique, f"{table} has no unique index"
+        identity = [index for index in unique if not str(index.name).endswith("_idempotency_key")]
+        assert identity, f"{table} has no identity unique index"
         for index in unique:
             where = index.dialect_options["postgresql"].get("where")
             assert where is not None, f"{index.name} is unique but not partial"
-            assert "deleted_at IS NULL" in str(where)
+            if index in identity:
+                assert "deleted_at IS NULL" in str(where)
+            else:
+                assert "idempotency_key IS NOT NULL" in str(where)
+                assert "deleted_at" not in str(where), (
+                    f"{index.name} must survive a soft delete, or a replayed "
+                    "Idempotency-Key would create a second row"
+                )
 
     @pytest.mark.parametrize(
         "table",

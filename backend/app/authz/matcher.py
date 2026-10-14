@@ -34,6 +34,26 @@ Two points the contracts leave open, decided here and recorded as assumption
 * **An empty scope grants nothing at all**, including permissions that have no
   target, which is docs/DATABASE.md §3.5 read literally. So a grant must say
   *something* about reach before it carries any authority.
+
+**A-09 amended in M1.5 (2026-10-14): a dimension scoped ``["*"]`` constrains
+nothing, so it is satisfied by a target that does not carry that dimension.**
+A-09 said a grant constraining a dimension the target lacks is a denial, full
+stop. M1.4 could not test that against a real row, because no scoped resource
+existed; M1.5 added one and the rule turned out to deny everything. The
+bootstrap CLI grants
+``{"environment": [...], "cloud_account": ["*"], "server": ["*"], "application": ["*"]}``,
+and a server has no ``application`` dimension — so the deliberately
+omnipotent first administrator could not read, register or edit a single
+server. Registration was worse still: before the row exists there is no id, so
+``server: ["*"]`` failed too.
+
+The amendment is as narrow as it can be. A grant naming a *specific*
+``application`` still reaches no server, which is A-09's own example and the
+case that carries the security meaning; only ``["*"]`` changes, and ``["*"]``
+already means "do not narrow by this". Rule 4 is untouched and is still
+evaluated before this loop, so ``environment: ["*"]`` reaches production no
+more than it did before. Recorded in docs/SECURITY.md §4 and PROGRESS.md in
+the same change.
 """
 
 from __future__ import annotations
@@ -131,7 +151,7 @@ def permits(
     # target there is nothing to narrow it by, so it applies.
     for grant in relevant:
         if grant.effect == "DENY":
-            scope = _normalise(grant.scope)
+            scope = normalise_scope(grant.scope)
             # Unreadable or empty scope on a *deny* means it applies: for an
             # allow those shapes grant nothing, and the safe reading of both is
             # the same one — the row restricts rather than widens.
@@ -144,7 +164,7 @@ def permits(
             # Not ALLOW and not DENY: the CHECK constraint forbids it, so
             # seeing one means the database is not what this code expects.
             return Decision(allowed=False, reason="unknown_effect")
-        scope = _normalise(grant.scope)
+        scope = normalise_scope(grant.scope)
         if scope is None:
             # Fail closed on this grant, but keep looking: one malformed grant
             # must not revoke a sound one. The reason is kept so a denial
@@ -163,7 +183,7 @@ def permits(
     return Decision(allowed=False, reason=reason)
 
 
-def _normalise(scope: Mapping[str, Any] | Any) -> dict[str, frozenset[str]] | None:
+def normalise_scope(scope: Mapping[str, Any] | Any) -> dict[str, frozenset[str]] | None:
     """Validate a stored scope into dimension → allowed values.
 
     Returns ``None`` for anything that is not a well-formed scope. The column
@@ -196,12 +216,17 @@ def _in_scope(scope: dict[str, frozenset[str]], target: Target) -> Decision:
         return Decision(allowed=False, reason="production_not_explicit")
 
     for dimension, allowed in scope.items():
+        if WILDCARD in allowed:
+            # ``["*"]`` constrains nothing, so there is nothing for a target
+            # to fail — including a target that has no such dimension at all.
+            # See the A-09 amendment in the module docstring.
+            continue
         value = target.dimension(dimension)
         if value is None:
             # The grant constrains something this target does not have, so the
             # constraint cannot be satisfied.
             return Decision(allowed=False, reason=f"target_has_no_{dimension}")
-        if WILDCARD in allowed or value in allowed:
+        if value in allowed:
             continue
         return Decision(allowed=False, reason=f"{dimension}_out_of_scope")
     return _ALLOWED

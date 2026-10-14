@@ -29,6 +29,12 @@ export const PERMISSIONS = {
   adminRoles: 'admin:roles',
   /** Change system settings, including read-only mode. */
   adminSettings: 'admin:manage',
+  /** Read server and application inventory. Held by every role. */
+  serverRead: 'server:read',
+  /** Register, edit and retire servers. Administrator only. */
+  serverWrite: 'server:write',
+  /** Register and edit applications and integrations. Administrator only. */
+  adminIntegrations: 'admin:integrations',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

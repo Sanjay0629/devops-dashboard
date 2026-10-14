@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, inspect, text
 
 from app.db.base import Base, all_models
+from tests.integration.conftest import _drop_everything
 
 EXPECTED_TABLES = {
     "alembic_version",
@@ -101,14 +103,35 @@ def test_downgrade_and_upgrade_round_trip(migrated: Engine, alembic_config: Conf
     assert revision == head
 
 
-def test_full_downgrade_to_base_leaves_no_tables(migrated: Engine, alembic_config: Config) -> None:
+@pytest.fixture
+def rebuilt(migrated: Engine, alembic_config: Config) -> Engine:
+    """A schema at head holding only what the migrations themselves put there.
+
+    The three tests below exercise a *downgrade*, and a downgrade unwinds data
+    as well as DDL: revision 0002 deletes the reference rows it seeded, which
+    it cannot do while another test's server references the seeded cloud
+    account (``ON DELETE RESTRICT``, deliberately — docs/DATABASE.md §4.2).
+    That is correct behaviour for the migration and the wrong precondition for
+    the test, so the schema is rebuilt first rather than the restriction being
+    loosened.
+
+    Before M1.5 nothing created inventory rows, so these tests passed on a
+    shared schema by luck rather than by design.
+    """
+    _drop_everything(migrated)
+    command.upgrade(alembic_config, "head")
+    return migrated
+
+
+def test_full_downgrade_to_base_leaves_no_tables(rebuilt: Engine, alembic_config: Config) -> None:
+    migrated = rebuilt
     command.downgrade(alembic_config, "base")
     remaining = set(inspect(migrated).get_table_names()) - {"alembic_version"}
     assert remaining == set(), f"downgrade left {remaining} behind"
     command.upgrade(alembic_config, "head")
 
 
-def test_the_migrations_seed_no_user(migrated: Engine, alembic_config: Config) -> None:
+def test_the_migrations_seed_no_user(rebuilt: Engine, alembic_config: Config) -> None:
     """No bootstrap administrator and no default credential ship.
 
     Asserted here rather than in ``test_constraints.py`` because it is a
@@ -121,22 +144,22 @@ def test_the_migrations_seed_no_user(migrated: Engine, alembic_config: Config) -
     """
     command.downgrade(alembic_config, "base")
     command.upgrade(alembic_config, "head")
-    with migrated.connect() as connection:
+    with rebuilt.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM users")).scalar() == 0
         # The reference data the application does need is there, so this is not
         # passing merely because the seed did nothing.
         assert connection.execute(text("SELECT count(*) FROM roles")).scalar() == 5
 
 
-def test_seed_revision_is_idempotent(migrated: Engine, alembic_config: Config) -> None:
+def test_seed_revision_is_idempotent(rebuilt: Engine, alembic_config: Config) -> None:
     """Re-applying the seed must not duplicate reference data."""
-    with migrated.connect() as connection:
+    with rebuilt.connect() as connection:
         before = connection.execute(text("SELECT count(*) FROM permissions")).scalar()
 
     command.downgrade(alembic_config, "0001")
     command.upgrade(alembic_config, "head")
 
-    with migrated.connect() as connection:
+    with rebuilt.connect() as connection:
         after = connection.execute(text("SELECT count(*) FROM permissions")).scalar()
     assert before == after
 

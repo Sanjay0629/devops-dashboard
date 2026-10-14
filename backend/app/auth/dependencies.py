@@ -9,6 +9,11 @@ Fail closed, in the strong sense (mandatory rule 6): *any* failure resolving
 the session — absent cookie, unknown id, expired deadline, unreadable record,
 Redis unreachable, the user row vanished or was disabled since login — produces
 ``401``. There is no permissive branch to find, and no ``if DEBUG`` bypass.
+
+:func:`require_read_budget` is the read-endpoint rate limit (docs/SECURITY.md
+§13). It lives here rather than in ``app/core/ratelimit.py`` because it is
+keyed on the caller's identity and so has to depend on ``require_session`` —
+and ``app/core`` deliberately does not import from the layers above it.
 """
 
 from __future__ import annotations
@@ -24,6 +29,8 @@ from app.auth import session as session_store
 from app.auth.cookies import SESSION_COOKIE_NAME
 from app.auth.models import User
 from app.auth.session import SessionRecord
+from app.core import ratelimit
+from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.logging import get_logger
 from app.db.session import get_session
@@ -99,4 +106,32 @@ async def _best_effort_delete(session_id: str) -> None:
         logger.warning("session_delete_failed", error=str(error))
 
 
+async def require_read_budget(
+    current: Annotated[AuthenticatedUser, Depends(require_session)],
+) -> None:
+    """Spend one unit of the read budget (docs/SECURITY.md §13).
+
+    600/min per identity by default: dashboard polling headroom, not a meter.
+    **Fails open** when Redis is unreachable, which is the documented
+    asymmetry in §13 — a read endpoint that starts refusing traffic because
+    the counter store blinked turns a Redis hiccup into an outage of the
+    monitoring portal, while the privileged classes (``/auth/*``, and the
+    operation and deployment classes from M4) keep failing closed.
+
+    Keyed on the user id, never on the client address: the address is
+    spoofable where a proxy is in front (see :func:`client_ip`), and the
+    budget is per identity by specification.
+    """
+    settings = get_settings()
+    await ratelimit.enforce(
+        "read",
+        str(current.user.id),
+        limit=settings.read_rate_limit_max,
+        window_seconds=settings.read_rate_limit_window_seconds,
+        fail_closed=False,
+    )
+
+
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_session)]
+#: Declared by every read endpoint, as a route-level dependency.
+ReadBudget = Depends(require_read_budget)

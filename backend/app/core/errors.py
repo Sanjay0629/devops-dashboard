@@ -93,6 +93,35 @@ class NotConfiguredError(AppError):
     message = "This integration is not configured."
 
 
+class FieldValidationError(AppError):
+    """A ``422`` carrying the per-field list of docs/API_CONTRACTS.md §8.
+
+    For the validation failures a Pydantic model cannot express because they
+    need the database or the request — an unknown query parameter, a tampered
+    cursor, a ``metrics_instance`` already claimed by another server. The
+    handler above renders it in the same envelope as a model failure, so a
+    client maps both to fields the same way.
+
+    Callers pass the field entries, never the offending value: §8 forbids
+    echoing a rejected value back, and these paths see hostnames, URLs and
+    references that may not belong in a response.
+    """
+
+    # The number, not the constant: its name churned upstream and the
+    # handler below already hard-codes 422 for the same reason.
+    status_code = 422
+    code = "validation_failed"
+    message = "The request contains invalid fields."
+
+    def __init__(self, fields: list[dict[str, Any]]) -> None:
+        super().__init__(details={"fields": fields})
+
+
+def field_error(loc: list[str], code: str, message: str, **extra: Any) -> FieldValidationError:
+    """One-field shorthand for the common case."""
+    return FieldValidationError([{"loc": loc, "code": code, "message": message, **extra}])
+
+
 def error_body(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "error": {
