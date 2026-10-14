@@ -563,7 +563,7 @@ Errors: `403 forbidden` (permission or action not allowlisted — audited `AUTHZ
 
 `current_version` is `null` when no deployment has been recorded — never a guess. Checks run against **registered** endpoints only; an unconfigured application returns `data_state: "not_configured"`.
 
-**Note (OPEN-02):** this response shape assumes applications are environment-agnostic (AD-12). If product confirms applications are per-environment, `applications` gains an `environment` column and this endpoint collapses to a single object.
+**Note (~~OPEN-02~~, resolved 2026-10-14):** applications are environment-agnostic (`AD-12`, confirmed by the product owner), so this response shape is settled rather than provisional. The per-environment alternative — which would have given `applications` an `environment` column and collapsed this endpoint to a single object — was rejected.
 
 ---
 
@@ -911,7 +911,7 @@ Performance figures are PRD §10 design budgets, explicitly **not** measured res
 
 | ID | Question | Working default |
 |---|---|---|
-| OPEN-02 | Are applications per-environment? Changes 18.x response shapes | Environment-agnostic (AD-12) |
+| ~~OPEN-02~~ | Are applications per-environment? Changes 18.x response shapes | **RESOLVED 2026-10-14: environment-agnostic** (AD-12 confirmed). The §18 shapes below stand as written |
 | OPEN-09 | Windows service control endpoints | Not provided; `UNSUPPORTED` reported |
 | OPEN-18 | Multiple deployment targets per application+environment | One per pair |
 | OPEN-19 | Live progress via WebSocket/SSE instead of polling | Polling with `poll_after_seconds` |
