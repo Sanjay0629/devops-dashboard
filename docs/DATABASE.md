@@ -253,7 +253,7 @@ Logical applications, independent of servers (PRD §4.9).
 | `created_at` / `updated_at` | `timestamptz` | NOT NULL | |
 
 - `UNIQUE (slug) WHERE deleted_at IS NULL`, `UNIQUE (name) WHERE deleted_at IS NULL`.
-- **No `environment` column (AD-12).** PRD §4.9 lists environment as an application attribute, but PRD §6 omits it while putting `environment` on `deployments`, and PRD §4.9 also requires one application to span many servers. An application is therefore environment-agnostic here: environment lives on `servers`, `deployment_targets` and `deployments`, and "application health in production" is a query over its production servers. **This resolves a real PRD contradiction and needs product confirmation — OPEN-02.**
+- **No `environment` column (AD-12).** PRD §4.9 lists environment as an application attribute, but PRD §6 omits it while putting `environment` on `deployments`, and PRD §4.9 also requires one application to span many servers. An application is therefore environment-agnostic here: environment lives on `servers`, `deployment_targets` and `deployments`, and "application health in production" is a query over its production servers. **This resolves a real PRD contradiction, and the product owner confirmed it on 2026-10-14 (~~OPEN-02~~ closed).** The column stays absent.
 - PRD §4.9's "associated systemd services", "CI/CD pipeline reference" and "deployment configuration reference" are modelled as relationships (`services` via `application_servers`, and `deployment_targets`) rather than columns, because each is one-to-many across environments.
 
 ### 4.4 `application_servers`
@@ -704,7 +704,7 @@ Where a true FK is affordable, it is used — `operations.target_server_id`, `de
 | `alert_events.dedup_key`, `environment`, `assigned_to`, `occurrence_count`, `details`, `acknowledged_at` | Absent | **Added** | PRD §4.8 dedup/grouping, assignment, scope filtering |
 | `deployments.idempotency_key`, `health_check_result`, `requested_ref`, `kind`, `deadline_at`, … | Absent | **Added** | PRD §4.10 idempotency, health-check-gated success, ref validation, rollback |
 | `operations.environment`, `observed_state_after`, `deadline_at`, `failure_reason`, `provider` | Absent | **Added** | PRD §4.6 verification, timeouts, diagnostics |
-| `applications.environment` | Listed in §4.9, absent from §6 | **Omitted** (AD-12) | A genuine PRD contradiction — **OPEN-02**, needs product confirmation |
+| `applications.environment` | Listed in §4.9, absent from §6 | **Omitted** (AD-12) | A genuine PRD contradiction — **~~OPEN-02~~ resolved 2026-10-14: environment-agnostic confirmed** |
 | Raw metrics / log tables | Prohibited | None | PRD §6 |
 
 Every addition traces to a PRD requirement that the listed columns cannot satisfy. No entity was added for convenience.
@@ -715,7 +715,7 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 
 | ID | Question | Working default |
 |---|---|---|
-| OPEN-02 | Is an application per-environment (PRD §4.9) or environment-agnostic (PRD §6 implication)? | Environment-agnostic (AD-12) — **needs confirmation; changes `applications`, `deployment_targets` and the API** |
+| ~~OPEN-02~~ | Is an application per-environment (PRD §4.9) or environment-agnostic (PRD §6 implication)? | **RESOLVED 2026-10-14: environment-agnostic**, confirming `AD-12` — which is what M1.2 already built, so no migration and no API change. Closed before M1.5, as required |
 | ~~OPEN-04~~ | Durable `user_sessions` table, or Redis-only? | **RESOLVED 2026-10-13 (M1.3): Redis-only.** No `user_sessions` table. Login, logout and denial are still audited in PostgreSQL, so the authentication record survives a flushed Redis even though live sessions do not. Accepted cost: a Redis restart logs everyone out. |
 | OPEN-08 | Retention durations for audit, alerts, metrics, logs | 400 d / 180 d / 30 d / 14 d placeholders |
 | OPEN-10 | `required_approvals > 1`, and self-approval policy | 1 approval; self-approval denied |
@@ -744,4 +744,4 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 
 **Not yet created** — each arrives with the milestone that writes to it: `deployment_targets`, `deployments`, `operations`, `approvals` (M4–M5), `alert_events`, `notification_channels`, `notification_deliveries` (M3).
 
-`OPEN-02` is still unresolved: `applications` was created **without** an `environment` column, per `AD-12`. Changing that decision after M1.5 means a data migration, so confirm it first.
+`OPEN-02` is **resolved** (2026-10-14): applications are environment-agnostic, confirming `AD-12`. `applications` was created without an `environment` column and stays that way, so the decision cost nothing to settle.

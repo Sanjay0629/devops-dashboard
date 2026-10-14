@@ -34,7 +34,7 @@
 
 **Objective.** A running, authenticated, authorised application with a migrated schema, a working server inventory and a dashboard shell — the vertical slice everything else attaches to (PRD §13 Phase 1).
 
-**Prerequisites.** Docker and Docker Compose available; the documentation set in `docs/` reviewed; OPEN-01 (IdP) at least provisionally answered, or the mock IdP accepted for development; OPEN-02 (application↔environment) confirmed before M1.5.
+**Prerequisites.** Docker and Docker Compose available; the documentation set in `docs/` reviewed; OPEN-01 (IdP) at least provisionally answered, or the mock IdP accepted for development; ~~OPEN-02 (application↔environment) confirmed before M1.5~~ — **done 2026-10-14: environment-agnostic**.
 
 **Dependencies.** None.
 
@@ -257,7 +257,7 @@ frontend/src/auth/permissions.ts
 
 ## M1.5 — Server and application inventory
 
-**Confirm OPEN-02 before starting this milestone** — it determines whether `applications` carries an `environment` column.
+**~~Confirm OPEN-02 before starting this milestone~~ — done 2026-10-14: environment-agnostic**, confirming `AD-12`. `applications` carries no `environment` column, which is what M1.2 built, so this milestone starts with no migration owed to the decision.
 
 **Tasks**
 
@@ -307,7 +307,7 @@ backend/tests/inventory/{test_servers_api.py,test_duplicate_detection.py,test_sc
 
 **Definition of done.** Inventory usable end to end in Compose; test suite passing; `PROGRESS.md` updated.
 
-**Risks / rollback.** Risk: a late OPEN-02 reversal forces a schema and API change. Mitigation: confirm first; keep environment handling in one place. Rollback: additive migration, revertible.
+**Risks / rollback.** Risk: a late OPEN-02 reversal forces a schema and API change. **Retired 2026-10-14** — OPEN-02 was confirmed environment-agnostic before this milestone started, which was the whole point of confirming first; environment handling stays in one place (`servers`, `deployment_targets`, `deployments`). Rollback: additive migration, revertible.
 
 ---
 
@@ -770,7 +770,7 @@ backend/tests/dashboard/test_summary.py
 | Cardinality blowup in Prometheus/Loki | 2, 3 | Medium | Label allowlists; unit allowlist; query guards |
 | Provider semantics assumed identical | 4 | Medium | Capability matrix as a contract, with tests asserting the differences |
 | Single-host production SPOF | 6 | Medium | Documented and accepted (OPEN-12); revisit when availability targets exist |
-| OPEN-02 reversal after Phase 1 | 1 | Medium | Confirm before M1.5 |
+| ~~OPEN-02 reversal after Phase 1~~ | 1 | Medium | **Closed 2026-10-14** — confirmed environment-agnostic before M1.5, so there is nothing to reverse |
 | Scope creep into PRD §14 non-goals (terminal, custom CI, Kubernetes) | all | Medium | §14 is a hard boundary; new scope needs an explicit requirement and risk assessment |
 
 ## Open decisions gating specific milestones
@@ -778,7 +778,7 @@ backend/tests/dashboard/test_summary.py
 | Decision | Gates |
 |---|---|
 | OPEN-01 IdP | M1.3 hardening |
-| OPEN-02 application↔environment | **M1.5 — confirm first** |
+| ~~OPEN-02 application↔environment~~ | **Resolved 2026-10-14 — environment-agnostic** |
 | OPEN-03 alert rule authoring | M3.3 |
 | OPEN-04 session durability | M1.3 |
 | OPEN-05 restricted agent | M4.1, M6.1 |

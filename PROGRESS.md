@@ -2,7 +2,9 @@
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
 **Last updated:** 2026-10-14
-**Updated by:** M1.4 implementation session (RBAC and authorisation enforcement).
+**Updated by:** M1.4 implementation session (RBAC and authorisation enforcement),
+then amended the same day with the four decisions taken for M1.5 — including
+`OPEN-02`, now closed (see [§3](#3-in-progress-milestone)).
 Previously: M1.3 implementation session, amended with the three decisions taken for
 M1.4, all three of which are now implemented as agreed (see [§3](#3-in-progress-milestone))
 
@@ -166,13 +168,74 @@ In the order they bite:
       `groups: ["ADMINISTRATOR"]` grants nothing. What is unresolved is *which* real
       provider, and therefore whether its claim shapes and registration rules match
       what the mock taught us.
-- [ ] **`OPEN-02` — before M1.5.** `applications` was created **without** an
-      `environment` column (`AD-12`). Reversing that after M1.5 means a data
-      migration, so confirm it before then.
+- [x] **`OPEN-02` — RESOLVED 2026-10-14 as environment-agnostic**, confirming
+      `AD-12`, which is what M1.2 already built: `applications` has no `environment`
+      column and keeps none. Environment lives on `servers`, `deployment_targets` and
+      `deployments`, and "application health in production" is a query over its
+      production servers. Settled **before** M1.5 began, which is the only reason it
+      cost nothing — the per-environment alternative would have meant a data
+      migration plus new §18 response shapes, and would have split one deployable
+      into two application rows across staging and production, taking
+      `application_id` scope grants and alert routing with it. Closed in all four
+      contract documents.
 - [ ] `TS-02` (systemd metrics source) and `TS-01` (charting library) — before M2.
 - [ ] `OPEN-15` — the audit-immutability hardening M1.2 could not finish: a
       non-superuser application role separate from the migration owner. Scheduled
       M6.2; see issue 28.
+
+### Decided for M1.5 — agreed 2026-10-14, **not yet implemented**
+
+Four questions put to the product owner before M1.5 started. `OPEN-02` was the only
+blocker; the other three have schema or dependency consequences that should not be
+decided unilaterally. Recorded here rather than only in a conversation, because the
+session that implements them may be a different one.
+
+- [x] **`OPEN-02`: applications are environment-agnostic.** See the closed entry
+      above. No migration owed, §18 response shapes stand as written.
+
+- [x] **Inventory idempotency lives on the row, not in a side table.**
+      [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §7 requires an
+      `Idempotency-Key` on `POST /servers` and `POST /applications`, with a replay
+      returning the original resource and `idempotent_replay: true` — but
+      [`docs/DATABASE.md`](docs/DATABASE.md) §14 only provides key storage for
+      `operations` and `deployments`, and `servers` has `registered_at` but **no
+      requester column**. Decided: **migration `0004` adds `idempotency_key` and
+      `created_by` to `servers` and `applications`, unique per requester**, which is
+      exactly the pattern §14 already uses. Retention is the row's lifetime, which
+      satisfies §7's "at least 24 hours", and a replay reads the original row.
+      Rejected: a shared `idempotency_keys` table (a second place idempotency lives,
+      plus a retention sweep); and relying on the duplicate-detection unique index to
+      answer `409`, which would diverge from §7's `200`.
+      **Documentation debt this creates, to be paid in the same commit:**
+      [`docs/DATABASE.md`](docs/DATABASE.md) §4.2, §4.3 and §14 must describe the two
+      new columns and say that inventory creates are deduplicated this way.
+
+- [x] **React Router is added, and M1.5 builds its five pages.** No milestone owned
+      routing: M1.5's expected files list `ServerList`, `ServerDetail`, `ServerForm`,
+      `ApplicationList` and `ApplicationDetail`, which need navigation between them,
+      while M1.6's task list is the dashboard and `StatusBadge` only. Nothing is
+      installed and [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §84 says only "React
+      Router or equivalent". Decided: add it, and justify it against
+      [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §10 in the PR — rung 5 fails because
+      nothing installed does this, and rung 4 (the History API) stops being enough at
+      five deep-linkable routes with list→detail drill-through, params and nested
+      layouts. Rejected: a hand-rolled router, which grows into a router anyway as
+      M1.6–M3 add pages; and deferring the pages to M1.6, which leaves M1.5's
+      definition of done unmet and makes M1.6 large.
+      **This is the first new frontend dependency since M1.1**, so
+      [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §6 gets an entry in the same change.
+
+- [x] **`integration:manage` is renamed to `admin:integrations` in M1.5's
+      migration.** Issue 39. §18.2 is the first endpoint to require it, the contracts
+      name it `admin:integrations` in four places
+      ([`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §18, §24, §26 and
+      [`docs/SECURITY.md`](docs/SECURITY.md) §4), and no user holds a grant through
+      it today — so the rename is free now and gets more expensive with every
+      endpoint that references it. Rejected: amending the four documents to the
+      seeded name, which moves the documents to match the code rather than the
+      reverse. The log permissions (`logs:read`/`logs:query` vs
+      `logs:read:application`/`logs:read:system`) stay as they are until M3.2, which
+      is the milestone that first enforces the distinction.
 
 ### Decided for M1.4 — agreed 2026-10-13, **implemented 2026-10-14**
 
@@ -489,7 +552,7 @@ Once a decision is reviewed, record the date and the outcome here.
 
 | # | Issue | Severity | Handling |
 |---|---|---|---|
-| 39 | **The seeded permission catalogue does not use the names the contracts do, and M1.4 only reconciled the two it needed.** [`docs/SECURITY.md`](docs/SECURITY.md) §4 and [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §18/§24/§26 name `admin:integrations`, `logs:read:application` and `logs:read:system`; the M1.2 seed created `integration:manage`, `logs:read` and `logs:query`. Migration `0003` added the contract-named `admin:users` and `admin:roles` (needed by §25) and narrowed `admin:manage` to system settings, but left the integration and log permissions alone — renaming permissions nothing enforces yet would be churn, and the log split carries a real security distinction that the milestone enforcing it should design. | Naming drift; no behavioural effect today, because only ADMINISTRATOR holds any of them | Reconcile `integration:manage` → `admin:integrations` in M1.5 (the first endpoint to require it, §18.2) and `logs:read`/`logs:query` → `logs:read:application`/`logs:read:system` in M3.2. [`docs/SECURITY.md`](docs/SECURITY.md) §4 now names both forms so the divergence is visible rather than latent. |
+| 39 | **PARTLY DECIDED 2026-10-14** — the integration half is settled: `integration:manage` is renamed to `admin:integrations` in M1.5's migration (see [§3](#3-in-progress-milestone)). The log half stays open until M3.2. **The seeded permission catalogue does not use the names the contracts do, and M1.4 only reconciled the two it needed.** [`docs/SECURITY.md`](docs/SECURITY.md) §4 and [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §18/§24/§26 name `admin:integrations`, `logs:read:application` and `logs:read:system`; the M1.2 seed created `integration:manage`, `logs:read` and `logs:query`. Migration `0003` added the contract-named `admin:users` and `admin:roles` (needed by §25) and narrowed `admin:manage` to system settings, but left the integration and log permissions alone — renaming permissions nothing enforces yet would be churn, and the log split carries a real security distinction that the milestone enforcing it should design. | Naming drift; no behavioural effect today, because only ADMINISTRATOR holds any of them | Reconcile `integration:manage` → `admin:integrations` in M1.5 (the first endpoint to require it, §18.2) and `logs:read`/`logs:query` → `logs:read:application`/`logs:read:system` in M3.2. [`docs/SECURITY.md`](docs/SECURITY.md) §4 now names both forms so the divergence is visible rather than latent. |
 | 40 | **A CSRF rejection answers `code: "forbidden"`, not `code: "csrf_failed"`.** [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §3 defines `403 csrf_failed` as a distinct code; `app/core/csrf.py` emits `forbidden` with the message "CSRF validation failed." Found while exercising the admin endpoints over HTTP without the header. | Contract divergence; a client switching on `code` cannot tell CSRF failure from permission failure | One-word fix in `app/core/csrf.py` plus the M1.3 CSRF tests that assert the current code. **Not done here**: `app/core/csrf.py` is M1.3's module and outside this milestone's scope (CLAUDE.md §3). |
 | 41 | **A privilege change affecting *another* user does not rotate their session identifier,** which [`docs/SECURITY.md`](docs/SECURITY.md) §5 lists among the rotation triggers ("role change affecting the user"). Rotation requires issuing a new cookie, which can only happen on a request from that user's own browser, so a third party's grant change cannot rotate it. Nothing is cached in the session, so there is no stale authority to invalidate — the change takes effect on their next request regardless — and terminating their sessions instead would contradict [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §25.5's "without a re-login". `session_store.rotate()` therefore still has no caller. | Documented gap, no known exploit: the session record holds a `user_id` and nothing about authority | Either mark the session for rotation on its next use (a flag the session store would honour in `require_session`), or amend §5 to say rotation applies to the caller's own privilege change. Needs a decision; not invented here. |
 
@@ -750,9 +813,11 @@ as expected (see issue 23).
 **M1.5 — Server and application inventory**
 ([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m15--server-and-application-inventory))
 
-**Confirm `OPEN-02` before starting it.** It decides whether `applications` carries an
-`environment` column; `AD-12` says no and that is what M1.2 built, but reversing it
-after M1.5 means a data migration. This is the one blocking question.
+**`OPEN-02` is confirmed** (2026-10-14, environment-agnostic), so M1.5 is unblocked.
+Three further decisions were taken with it — row-level idempotency columns, React
+Router plus the five pages, and the `admin:integrations` rename. All four are in
+[§3](#3-in-progress-milestone) with their reasoning and the documentation debt each
+one creates; implement them as written rather than re-opening them.
 
 **What M1.5 can build on:**
 
@@ -780,7 +845,8 @@ after M1.5 means a data migration. This is the one blocking question.
    endpoint. The admin endpoints answer `403` because administration is not scoped;
    inventory is the opposite case.
 3. **Reconcile `integration:manage` → `admin:integrations`** (issue 39) in the same
-   migration as the first endpoint that requires it (§18.2).
+   migration as the first endpoint that requires it (§18.2) — **decided 2026-10-14**,
+   see [§3](#3-in-progress-milestone).
 4. **A read-class rate limit** ([`docs/SECURITY.md`](docs/SECURITY.md) §13), which no
    read endpoint has yet.
 
