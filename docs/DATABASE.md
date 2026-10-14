@@ -218,6 +218,8 @@ Central inventory (PRD §4.3). Columns marked **†** are additions that PRD §4
 | `last_seen_at` | `timestamptz` | NULL | `NULL` means *never seen*, which is not the same as stale |
 | `registered_at` **†** | `timestamptz` | NOT NULL DEFAULT `now()` | PRD §4.3 "registration timestamp" |
 | `provider_metadata` | `jsonb` | NOT NULL DEFAULT `'{}'` | Tags, instance type, zone |
+| `idempotency_key` **†** | `text` | NULL | Migration 0004. The `Idempotency-Key` of the request that created the row ([API_CONTRACTS.md §7](API_CONTRACTS.md#7-idempotency)); see [§14](#14-idempotency-at-the-data-layer) |
+| `created_by` **†** | `uuid` | NULL, FK → `users(id)` ON DELETE RESTRICT | Migration 0004. The requester the key is scoped to. NULL for seeded or system-created rows |
 | `deleted_at` | `timestamptz` | NULL | Soft delete |
 | `created_at` / `updated_at` | `timestamptz` | NOT NULL | |
 
@@ -230,6 +232,17 @@ CREATE UNIQUE INDEX uq_servers_account_resource
 ```
 
 `cloud_account_id` is **NOT NULL** specifically so this index works. In PostgreSQL, `NULL`s compare as distinct in a unique index, so a nullable account column would silently permit duplicate registrations of the same on-prem host — the exact bug the acceptance criterion forbids. Non-cloud servers therefore reference a seeded `ON_PREM` account. *(Alternative considered: `NULLS NOT DISTINCT`. Rejected as less explicit and version-dependent.)*
+
+```sql
+CREATE UNIQUE INDEX uq_servers_created_by_idempotency_key
+  ON servers (created_by, idempotency_key)
+  WHERE created_by IS NOT NULL AND idempotency_key IS NOT NULL;
+```
+
+The predicate is not optional. Both columns are nullable, and PostgreSQL
+compares `NULL`s as distinct in a unique index — so without it the index would
+constrain nothing for the rows that have neither value, which is every row
+predating migration 0004 and every seeded one.
 
 Other indexes: `(environment, status)` for dashboard counts; `(status) WHERE deleted_at IS NULL`; `(last_seen_at)` for the stale sweep; `(cloud_account_id)`; `UNIQUE (metrics_instance) WHERE metrics_instance IS NOT NULL AND deleted_at IS NULL` (two servers claiming one Prometheus instance would cross-attribute metrics); trigram or `lower(hostname)` index for search.
 
@@ -249,10 +262,12 @@ Logical applications, independent of servers (PRD §4.9).
 | `repository_reference` | `text` | NULL | A URL or `org/repo`, validated against the host allowlist if fetched |
 | `health_check_config` | `jsonb` | NOT NULL DEFAULT `'{}'` | Registered health-check endpoints per environment. **SSRF-controlled** ([SECURITY.md §19](SECURITY.md#19-ssrf)) |
 | `status` | `text` | NOT NULL, CHECK in (`ACTIVE`,`ARCHIVED`) | |
+| `idempotency_key` | `text` | NULL | Migration 0004, exactly as on `servers` — see [§4.2](#42-servers) and [§14](#14-idempotency-at-the-data-layer) |
+| `created_by` | `uuid` | NULL, FK → `users(id)` ON DELETE RESTRICT | Migration 0004 |
 | `deleted_at` | `timestamptz` | NULL | |
 | `created_at` / `updated_at` | `timestamptz` | NOT NULL | |
 
-- `UNIQUE (slug) WHERE deleted_at IS NULL`, `UNIQUE (name) WHERE deleted_at IS NULL`.
+- `UNIQUE (slug) WHERE deleted_at IS NULL`, `UNIQUE (name) WHERE deleted_at IS NULL`, and `UNIQUE (created_by, idempotency_key) WHERE created_by IS NOT NULL AND idempotency_key IS NOT NULL`.
 - **No `environment` column (AD-12).** PRD §4.9 lists environment as an application attribute, but PRD §6 omits it while putting `environment` on `deployments`, and PRD §4.9 also requires one application to span many servers. An application is therefore environment-agnostic here: environment lives on `servers`, `deployment_targets` and `deployments`, and "application health in production" is a query over its production servers. **This resolves a real PRD contradiction, and the product owner confirmed it on 2026-10-14 (~~OPEN-02~~ closed).** The column stays absent.
 - PRD §4.9's "associated systemd services", "CI/CD pipeline reference" and "deployment configuration reference" are modelled as relationships (`services` via `application_servers`, and `deployment_targets`) rather than columns, because each is one-to-many across environments.
 
@@ -653,6 +668,7 @@ Pessimistic row locks are deliberately rare; unique constraints and guarded upda
 ## 14. Idempotency at the data layer
 
 1. `operations.idempotency_key` and `deployments.idempotency_key`, unique per requester. A replay is detected by lookup and the original row is returned — the request is never re-executed (PRD §4.6, §4.10).
+1a. **`servers` and `applications` carry the same pair** — `idempotency_key` plus `created_by`, unique per requester — added by migration 0004 (2026-10-14). [API_CONTRACTS.md §7](API_CONTRACTS.md#7-idempotency) requires an `Idempotency-Key` on `POST /servers` and `POST /applications` with a replay returning the original resource, and this is how inventory creates are deduplicated. Retention is the row's lifetime, which satisfies §7's "at least 24 hours" for inventory creates. *Rejected:* a shared `idempotency_keys` table — a second place idempotency lives, plus a retention sweep — and answering the replay from the duplicate-detection unique index, which would return `409` where §7 specifies `200`. **Known limit:** the request body is not stored, so "replay with an identical body" is decided by comparing the request against the stored row's current columns. A key replayed after the resource was edited therefore reads as a different body and is refused with `409`, which is the safe direction but is stricter than §7 describes.
 2. `external_execution_id` is written **before** polling starts, so a worker restart resumes polling instead of re-invoking a provider (AD-08). If it was never written, the row becomes `FAILED` with `failure_reason='RECONCILIATION_REQUIRED'` rather than being retried blind.
 3. Terminal states are never re-entered; a retry is a new row with `parent_operation_id` set.
 4. Alert ingestion is idempotent on `dedup_key`.

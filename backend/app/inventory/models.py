@@ -6,7 +6,16 @@ attributes with PRD §6's shorter table definition (docs/DATABASE.md §4.2, §17
 ``applications`` has no ``environment`` column (AD-12): PRD §4.9 lists it as an
 application attribute, but PRD §6 omits it while putting ``environment`` on
 ``deployments``, and §4.9 also requires one application to span many servers.
-**OPEN-02 — needs product confirmation before M1.5.**
+**OPEN-02 was confirmed environment-agnostic on 2026-10-14**, so the column
+stays absent and this is settled rather than provisional.
+
+``servers`` and ``applications`` each carry ``idempotency_key`` and
+``created_by`` (migration 0004). docs/API_CONTRACTS.md §7 requires an
+``Idempotency-Key`` on both creates with a replay returning the original
+resource, and docs/DATABASE.md §14 provides key storage only for ``operations``
+and ``deployments`` — so the same "unique per requester" pattern is applied to
+the row itself rather than to a shared side table that would need its own
+retention sweep (docs/DATABASE.md §4.2, §4.3, §14).
 """
 
 from __future__ import annotations
@@ -158,6 +167,15 @@ class Server(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
 
+    # Idempotency, unique per requester (docs/API_CONTRACTS.md §7). Nullable
+    # because rows can predate the column and because a seeded or
+    # system-created row has no requesting user — the partial unique index
+    # below only constrains rows that have both.
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+
     __table_args__ = (
         enum_check("operating_system", OPERATING_SYSTEMS, "operating_system"),
         enum_check("environment", ENVIRONMENTS, "environment"),
@@ -193,6 +211,16 @@ class Server(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         Index("ix_servers_last_seen_at", "last_seen_at"),
         Index("ix_servers_cloud_account_id", "cloud_account_id"),
         Index("ix_servers_hostname_lower", text("lower(hostname)")),
+        # Scope is (requesting user, endpoint, key) per §7; the endpoint is the
+        # table, so the pair is enough. Partial, so the many rows with neither
+        # value do not collide with each other.
+        Index(
+            "uq_servers_created_by_idempotency_key",
+            "created_by",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("created_by IS NOT NULL AND idempotency_key IS NOT NULL"),
+        ),
     )
 
 
@@ -213,6 +241,12 @@ class Application(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     )
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'ACTIVE'"))
 
+    #: Same idempotency pattern as ``servers`` — see the module docstring.
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+
     __table_args__ = (
         enum_check("status", APPLICATION_STATUSES, "status"),
         CheckConstraint(r"slug ~ '^[a-z0-9][a-z0-9-]{1,62}$'", name="ck_applications_slug"),
@@ -227,6 +261,13 @@ class Application(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
             "name",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_applications_created_by_idempotency_key",
+            "created_by",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("created_by IS NOT NULL AND idempotency_key IS NOT NULL"),
         ),
     )
 

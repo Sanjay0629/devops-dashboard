@@ -259,17 +259,17 @@ frontend/src/auth/permissions.ts
 
 **~~Confirm OPEN-02 before starting this milestone~~ — done 2026-10-14: environment-agnostic**, confirming `AD-12`. `applications` carries no `environment` column, which is what M1.2 built, so this milestone starts with no migration owed to the decision.
 
-**Tasks**
+**Tasks** — implemented 2026-10-14 except where noted.
 
-- [ ] Endpoints 14.1–14.7 and 18.1–18.5 ([API_CONTRACTS.md §14](API_CONTRACTS.md#14-server-inventory), [§18](API_CONTRACTS.md#18-applications)).
-- [ ] Pagination (cursor + offset), filtering/sorting allowlists, free-text search.
-- [ ] Duplicate detection surfaced as `409 duplicate_resource`.
-- [ ] Scope-filtered queries (filter inside the query, not after it).
-- [ ] Optimistic concurrency via `If-Unmodified-Since`.
-- [ ] `metrics_instance` uniqueness and format validation.
-- [ ] Audit writing for every inventory mutation; `SERVER_ENVIRONMENT_CHANGED` treated as privilege-relevant.
-- [ ] Frontend: server list with filters, server detail (Overview tab), registration and edit forms, application list/detail, association management.
-- [ ] Seed script with synthetic inventory for local development, clearly marked as demonstration data.
+- [x] Endpoints 14.1–14.7 and 18.1–18.5 ([API_CONTRACTS.md §14](API_CONTRACTS.md#14-server-inventory), [§18](API_CONTRACTS.md#18-applications)). 14.8 is **not** in this milestone: it is a synchronous probe through a provider adapter, and the first adapter is M4.1.
+- [x] Pagination (cursor), filtering/sorting allowlists, free-text search. **Cursor only** — §14.1 specifies cursor pagination and §18.1 reuses it so one client paginator serves both; offset pagination already exists for the administrative collections (§25).
+- [x] Duplicate detection surfaced as `409 duplicate_resource`.
+- [x] Scope-filtered queries (filter inside the query, not after it) — `app/authz/queries.py`, cross-checked against the matcher row by row.
+- [x] Optimistic concurrency via `If-Unmodified-Since`.
+- [x] `metrics_instance` uniqueness and format validation.
+- [x] Audit writing for every inventory mutation; `SERVER_ENVIRONMENT_CHANGED` treated as privilege-relevant and requiring Administrator.
+- [x] Frontend: server list with filters, server detail (Overview tab), registration form, application list/detail. **Not built:** a server *edit* form and association management in the UI — `PATCH`, `POST`/`DELETE .../applications` are implemented and tested on the backend, but have no UI control yet. See PROGRESS.md.
+- [x] Seed script with synthetic inventory for local development, clearly marked as demonstration data (`python -m app.inventory.seed`).
 
 **Expected files**
 
@@ -300,10 +300,10 @@ backend/tests/inventory/{test_servers_api.py,test_duplicate_detection.py,test_sc
 
 **Security checks**
 
-- [ ] Scope filtering verified by querying as a narrowly scoped user and confirming `total` excludes hidden rows.
-- [ ] Immutable fields rejected on `PATCH`.
-- [ ] Free-text search is parameterised (injection suite).
-- [ ] Seeded demonstration data is visibly marked.
+- [x] Scope filtering verified by querying as a narrowly scoped user and confirming the hidden rows are gone. Verified on the **items and `has_more`**, not on `total`: §5 keeps `total` `null` on a cursor page precisely because a total over scope-filtered data invites inference about the rows the caller cannot see.
+- [x] Immutable fields rejected on `PATCH`.
+- [x] Free-text search is parameterised, with its own wildcards escaped.
+- [x] Seeded demonstration data is visibly marked (`[DEMO]` prefix, `.invalid` hostnames, `provider_metadata.synthetic`, and the seed refuses to run outside `local`).
 
 **Definition of done.** Inventory usable end to end in Compose; test suite passing; `PROGRESS.md` updated.
 
@@ -792,6 +792,7 @@ backend/tests/dashboard/test_summary.py
 | OPEN-13 notification config | M3.4 |
 | OPEN-14 target discovery | M2.3 |
 | OPEN-15 audit export | M6.2 |
+| **OPEN-27 scoping a dimension-less resource** (new in M1.5) | M1.6 — the dashboard counts applications, so it meets the question immediately. Working default in place: applications are not scope-filtered ([API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions)) |
 | TS-01 charting library | M2.2 |
 | TS-02 systemd exporter | M2.4 |
 

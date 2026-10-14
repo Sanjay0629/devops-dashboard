@@ -94,15 +94,37 @@ class Settings(BaseSettings):
     # --- rate limiting (AD-19, docs/SECURITY.md §13) ------------------------
     auth_rate_limit_max: int = Field(default=10, ge=1, le=10_000)
     auth_rate_limit_window_seconds: int = Field(default=300, ge=1, le=86_400)
+    #: The read class: 600/min per identity (docs/SECURITY.md §13), which is
+    #: polling headroom rather than a meter. Fails *open*, unlike the auth
+    #: class — see ``app/auth/dependencies.require_read_budget``.
+    read_rate_limit_max: int = Field(default=600, ge=1, le=100_000)
+    read_rate_limit_window_seconds: int = Field(default=60, ge=1, le=86_400)
+
+    # --- SSRF (docs/SECURITY.md §19) ----------------------------------------
+    #: Hosts a registered URL may name. **Empty means none**, so an
+    #: unconfigured deployment registers no outbound destination at all rather
+    #: than defaulting to "anywhere" (mandatory rule 6, mandatory rule 9).
+    #: Exact hostnames only; no wildcards and no patterns, because a pattern
+    #: here is how ``evil-example.com.attacker.net`` gets allowed by accident.
+    ssrf_host_allowlist: Annotated[tuple[str, ...], NoDecode] = ()
+    #: Hosts for which plain ``http`` is accepted, a subset of the allowlist
+    #: (§19 rule 3). Normally empty.
+    ssrf_insecure_hosts: Annotated[tuple[str, ...], NoDecode] = ()
 
     # --- tunables ------------------------------------------------------------
     database_statement_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
+    #: How long after ``servers.last_seen_at`` a host counts as stale, for the
+    #: computed ``stale`` flag on server detail (docs/API_CONTRACTS.md §14.3).
+    #: One global value: AD-14 gives the per-environment thresholds and the
+    #: sweep that recomputes ``status`` to M2.5, and inventing them here would
+    #: pre-empt that milestone.
+    server_stale_after_seconds: int = Field(default=300, ge=30, le=86_400)
     readiness_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
     # NoDecode: without it pydantic-settings tries to JSON-parse the env value
     # and fails before the validator below ever runs.
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "ssrf_host_allowlist", "ssrf_insecure_hosts", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
         """Accept a comma-separated string, because that is what env vars carry."""
@@ -145,6 +167,12 @@ class Settings(BaseSettings):
         if "*" in self.cors_origins:
             # docs/SECURITY.md §12 — never a wildcard, in any environment.
             raise ValueError("cors_origins must not contain '*'")
+        if "*" in self.ssrf_host_allowlist:
+            # Same rule for the same reason: an allowlist with a wildcard is
+            # not an allowlist (docs/SECURITY.md §19).
+            raise ValueError("ssrf_host_allowlist must not contain '*'")
+        if not set(self.ssrf_insecure_hosts) <= set(self.ssrf_host_allowlist):
+            raise ValueError("ssrf_insecure_hosts must be a subset of ssrf_host_allowlist")
         if "openid" not in self.oidc_scopes:
             # Without it the provider need not issue an ID token at all, and
             # ID-token verification is the whole authentication decision.

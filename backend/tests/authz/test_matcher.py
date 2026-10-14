@@ -209,6 +209,56 @@ CASES: list[Any] = [
         False,
         "target_has_no_application",
     ),
+    # --- the A-09 amendment taken in M1.5; see matcher.py's docstring -------
+    case(
+        "a wildcard on a dimension the target does not have constrains nothing",
+        [allow({"application": ["*"], "environment": ["staging"]})],
+        Target(environment="staging", server=SERVER_A),
+        True,
+        "granted",
+    ),
+    case(
+        "the bootstrap administrator's full scope reaches a staging server",
+        [
+            allow(
+                {
+                    "environment": ["development", "staging", "production", "other"],
+                    "cloud_account": ["*"],
+                    "server": ["*"],
+                    "application": ["*"],
+                }
+            )
+        ],
+        STAGING_SERVER,
+        True,
+        "granted",
+    ),
+    case(
+        "the same full scope reaches a server that does not exist yet",
+        [
+            allow(
+                {
+                    "environment": ["staging"],
+                    "cloud_account": ["*"],
+                    "server": ["*"],
+                    "application": ["*"],
+                }
+            )
+        ],
+        # A registration target: environment and account are known, the id is
+        # minted, and there is no application. Before the amendment every one
+        # of the three wildcards refused this.
+        Target(environment="staging", cloud_account=ACCOUNT_A, server=SERVER_B),
+        True,
+        "granted",
+    ),
+    case(
+        "a wildcard still does not make production implicit",
+        [allow({"environment": ["*"], "server": ["*"], "application": ["*"]})],
+        PRODUCTION_SERVER,
+        False,
+        "production_not_explicit",
+    ),
     case(
         "targetless check: the capability question only",
         [allow({"environment": ["staging"]}, resource_type="admin", action="users")],

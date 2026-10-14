@@ -1,23 +1,67 @@
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+
 import { BackendStatus } from '@/components/BackendStatus';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { SessionProvider } from '@/auth/SessionProvider';
 import { useIsReadOnly, useSession } from '@/auth/useSession';
 import { Login } from '@/pages/Login';
+import { ApplicationDetail } from '@/pages/applications/ApplicationDetail';
+import { ApplicationList } from '@/pages/applications/ApplicationList';
+import { ServerDetail } from '@/pages/servers/ServerDetail';
+import { ServerForm } from '@/pages/servers/ServerForm';
+import { ServerList } from '@/pages/servers/ServerList';
 
 /**
- * Composition root and session gate.
+ * Composition root, session gate and routing shell.
  *
- * Three states, rendered as three different things, because conflating them is
- * the bug this file exists to avoid:
+ * Three session states, rendered as three different things, because
+ * conflating them is the bug this file exists to avoid:
  *
  * - `loading` — we have not asked yet. Not "signed out".
  * - `anonymous` — the server said `401`. Show the login page.
  * - `unreachable` — we could not ask. Show the login page *saying so*, rather
  *   than implying the user was logged out by a backend that is simply down.
  *
- * The real routing shell is M1.6; until then "signed in" lands on the backend
- * status panel.
+ * Routing arrived in M1.5 with the five inventory pages, which need
+ * list→detail drill-through and deep links. The gate stays *outside* the
+ * router: an unauthenticated visitor gets the login page whatever the URL
+ * says, and the path they asked for is handed to `/auth/login` as `next` so
+ * they land back on it. That is a convenience — the backend validates `next`
+ * again and refuses an absolute URL (§12).
  */
+
+function Navigation(): React.JSX.Element {
+  const { pathname } = useLocation();
+  const links = [
+    { to: '/servers', label: 'Servers' },
+    { to: '/applications', label: 'Applications' },
+  ];
+  return (
+    <nav
+      aria-label="Main"
+      className="mb-6 flex gap-4 border-b pb-2"
+      style={{ borderColor: 'var(--c-border)' }}
+    >
+      {links.map((link) => {
+        const active = pathname.startsWith(link.to);
+        return (
+          <Link
+            key={link.to}
+            to={link.to}
+            aria-current={active ? 'page' : undefined}
+            className="text-sm"
+            style={{
+              color: active ? 'var(--c-text)' : 'var(--c-text-muted)',
+              fontWeight: active ? 600 : 400,
+            }}
+          >
+            {link.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
 
 function Shell(): React.JSX.Element {
   const { state, signOut } = useSession();
@@ -41,7 +85,7 @@ function Shell(): React.JSX.Element {
   const { session } = state;
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-10">
+    <main className="mx-auto max-w-5xl px-4 py-10">
       {session.demo_mode && (
         // AD-15: demonstration mode is never silent. A persistent banner, not
         // a one-time toast, because the point is that nobody mistakes
@@ -69,26 +113,19 @@ function Shell(): React.JSX.Element {
         </div>
       )}
 
-      <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M1.4 — authentication and authorisation. No monitoring, inventory or
-            integrations are implemented yet.
+            Milestone M1.5 — server and application inventory. No monitoring, logs, operations or
+            deployments are implemented yet.
           </p>
         </div>
-        <ThemeToggle />
-      </header>
-
-      <section
-        className="mb-6 rounded-lg border"
-        style={{ background: 'var(--c-surface)', borderColor: 'var(--c-border)' }}
-        aria-labelledby="identity-heading"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <h2 id="identity-heading" className="font-medium">
-            Signed in
-          </h2>
+        <div className="flex items-center gap-3">
+          <span className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
+            {session.user.display_name}
+          </span>
+          <ThemeToggle />
           <button
             type="button"
             onClick={() => void signOut()}
@@ -98,11 +135,29 @@ function Shell(): React.JSX.Element {
             Sign out
           </button>
         </div>
-        <dl className="border-t px-4 py-3 text-sm" style={{ borderColor: 'var(--c-border)' }}>
-          <div className="flex justify-between gap-4 py-1">
-            <dt style={{ color: 'var(--c-text-muted)' }}>Name</dt>
-            <dd>{session.user.display_name}</dd>
-          </div>
+      </header>
+
+      {session.roles.length === 0 && (
+        // Not "none" dressed up as a neutral dash: a user with no role can see
+        // nothing, and saying so beats an empty list they cannot explain.
+        <p
+          role="status"
+          className="mb-6 rounded border px-4 py-2 text-sm"
+          style={{ borderColor: 'var(--c-warning)', color: 'var(--c-warning)' }}
+        >
+          No roles granted — ask an administrator. Inventory will appear empty until then.
+        </p>
+      )}
+
+      <section
+        className="mb-6 rounded-lg border text-sm"
+        style={{ background: 'var(--c-surface)', borderColor: 'var(--c-border)' }}
+        aria-labelledby="identity-heading"
+      >
+        <h2 id="identity-heading" className="px-4 py-2 font-medium">
+          Signed in
+        </h2>
+        <dl className="border-t px-4 py-2" style={{ borderColor: 'var(--c-border)' }}>
           <div className="flex justify-between gap-4 py-1">
             <dt style={{ color: 'var(--c-text-muted)' }}>Email</dt>
             <dd>{session.user.email}</dd>
@@ -110,15 +165,9 @@ function Shell(): React.JSX.Element {
           <div className="flex justify-between gap-4 py-1">
             <dt style={{ color: 'var(--c-text-muted)' }}>Roles</dt>
             <dd>
-              {session.roles.length === 0 ? (
-                // Not "none" dressed up as a neutral dash: a user with no role
-                // can see nothing, and saying so is more useful than hiding it.
-                <span style={{ color: 'var(--c-warning)' }}>
-                  No roles granted — ask an administrator
-                </span>
-              ) : (
-                session.roles.map((role) => role.name).join(', ')
-              )}
+              {session.roles.length === 0
+                ? 'None'
+                : session.roles.map((role) => role.name).join(', ')}
             </dd>
           </div>
           <div className="flex justify-between gap-4 py-1">
@@ -128,15 +177,39 @@ function Shell(): React.JSX.Element {
         </dl>
       </section>
 
-      <BackendStatus />
+      <Navigation />
+
+      <Routes>
+        <Route path="/" element={<Navigate to="/servers" replace />} />
+        <Route path="/servers" element={<ServerList />} />
+        {/* Before the :serverId route, or "new" matches as an id. */}
+        <Route path="/servers/new" element={<ServerForm />} />
+        <Route path="/servers/:serverId" element={<ServerDetail />} />
+        <Route path="/applications" element={<ApplicationList />} />
+        <Route path="/applications/:applicationId" element={<ApplicationDetail />} />
+        <Route
+          path="*"
+          element={
+            <p role="alert" style={{ color: 'var(--c-text-muted)' }}>
+              No such page.
+            </p>
+          }
+        />
+      </Routes>
+
+      <div className="mt-10">
+        <BackendStatus />
+      </div>
     </main>
   );
 }
 
 export function App(): React.JSX.Element {
   return (
-    <SessionProvider>
-      <Shell />
-    </SessionProvider>
+    <BrowserRouter>
+      <SessionProvider>
+        <Shell />
+      </SessionProvider>
+    </BrowserRouter>
   );
 }

@@ -97,7 +97,7 @@ Evaluation rules:
 
 - A dimension the grant does **not** mention is **unconstrained**. Without this, `{"environment": ["staging"]}` would grant nothing, since the example scope in [DATABASE.md §3.5](DATABASE.md#35-user_roles) omits `cloud_account` entirely. Rule 4 is the exception: a production target needs `environment` to name `production` literally, so an absent dimension never *implies* production.
 - An **empty scope `{}` grants nothing at all**, including permissions evaluated without a target. That is [DATABASE.md §3.5](DATABASE.md#35-user_roles) read literally — a grant must say something about reach before it carries authority.
-- A grant that constrains a dimension the **target does not have** (an `application` constraint against a server) is a denial, not a pass.
+- A grant that constrains a dimension the **target does not have** (an `application` constraint against a server) is a denial, not a pass — **unless that dimension is scoped `["*"]`, which constrains nothing and is therefore satisfied (amended in M1.5, 2026-10-14).** The amendment was forced by the first scoped resource: a server has no `application` dimension and an unregistered server has no id yet, so under the unamended rule the bootstrap administrator's deliberately full scope (`{"environment": [...], "cloud_account": ["*"], "server": ["*"], "application": ["*"]}`) reached no server at all — it could not list, read, register or edit one. A grant naming a *specific* `application` still reaches no server, which is this bullet's own example and the case carrying the security meaning; only `["*"]` changed. Rule 4 is evaluated first and is untouched, so `environment: ["*"]` still does not reach production. Pinned by cases in `backend/tests/authz/test_matcher.py` and recorded in [`../PROGRESS.md`](../PROGRESS.md).
 - A permission with **no target** — the administrative endpoints — is a capability check only: the grant must be non-empty, and its dimensions are not evaluated, because there is nothing to evaluate them against. Scope on a *resource* endpoint is checked after the row is loaded ([§20](#20-api-authorization-requirements)).
 
 Representative matrix (full list in [API_CONTRACTS.md](API_CONTRACTS.md), per endpoint):
@@ -121,9 +121,11 @@ Representative matrix (full list in [API_CONTRACTS.md](API_CONTRACTS.md), per en
 | `audit:read` | — | — | — | ✅ | ✅ |
 | `admin:users` / `admin:roles` | — | — | — | — | ✅ |
 | `admin:manage` (system settings, e.g. read-only mode) | — | — | — | — | ✅ |
-| `admin:integrations` — **seeded as `integration:manage`**, see [PROGRESS.md](../PROGRESS.md) issue 39 | — | — | — | — | ✅ |
+| `admin:integrations` — **renamed from the seeded `integration:manage` by migration 0004** (2026-10-14), closing [PROGRESS.md](../PROGRESS.md) issue 39's integration half | — | — | — | — | ✅ |
 
 `deployment:approve` and `operation:approve` are intentionally **not** granted to Administrator, to keep separation of duties meaningful (OPEN-10).
+
+**Scoping a resource that has no dimensions is unresolved (`OPEN-27`, raised in M1.5).** An application carries no environment, no cloud account and no server (AD-12), so the rules above have nothing to evaluate against it, and the `["*"]` amendment does not help a grant that names specific environments. The working default is that applications are **not** scope-filtered: `server:read` is the whole check for [API_CONTRACTS.md §18.1 and §18.3](API_CONTRACTS.md#18-applications), writes need Administrator-only `admin:integrations`, and every privileged action targets a server or a deployment target, each scope-filtered on its own dimensions. See [API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions) for the alternatives.
 
 ---
 

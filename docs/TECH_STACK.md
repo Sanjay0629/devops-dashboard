@@ -81,10 +81,54 @@ Recharts and uPlot (with a thin React wrapper) both plausibly qualify; `visx` if
 | Need | Approach |
 |---|---|
 | Server-state fetching, caching, polling | A query library (TanStack Query or equivalent) — polling operations/deployments is pervasive; hand-rolled effects would duplicate it badly |
-| Routing | React Router or equivalent |
+| Routing | **React Router** — selected in M1.5, see below |
 | Forms + validation | A schema-validated form library whose schema can be derived from generated API types |
 | Dates and ranges | The platform `Intl` API plus a small date utility; timestamps are rendered in the operator's locale with an explicit UTC tooltip |
 | State beyond server state | React context/`useState` first. A global store only if a measured need appears |
+
+**Routing: `react-router-dom`, selected 2026-10-14 (M1.5).** The first new
+frontend dependency since M1.1.
+
+*Need (§10 rung 1).* Real now, not speculative: M1.5 ships five pages
+(`ServerList`, `ServerDetail`, `ServerForm`, `ApplicationList`,
+`ApplicationDetail`) with list→detail drill-through, and each has to be
+deep-linkable — an operator sharing a link to a server is the ordinary case,
+not a nicety.
+
+*Rung 2 (stdlib / already installed).* Nothing installed does this. React
+itself has no router, and the project has no other navigation library.
+
+*Rung 4 (native platform feature).* The History API genuinely covers one or
+two pages, which is why M1.1–M1.4 needed nothing. It stops being enough at
+five routes with URL parameters, a nested layout and a redirect: what starts
+as `switch (pathname)` ends as a path matcher, a parameter parser and a link
+component — a router, written here, with its own bugs.
+
+*Rung 3 (is it a few lines?).* No. See above.
+
+*Evaluation (§10 rung 4).* MIT licensed; the de facto React router with a long
+release history and many maintainers. Transitive tree, measured rather than
+assumed (`npm ls`): `react-router-dom` → `react-router` → `cookie` and
+`set-cookie-parser` — **three packages behind the one we name**, both leaves
+small and widely used, and both reachable only through the framework-router
+paths this SPA does not use. Bundle impact is modest (the production build
+grew from 234 kB to 294 kB raw, 73 kB to 91 kB gzipped). Easy to remove: route
+definitions are confined to `App.tsx` and the pages use two hooks.
+
+*Version.* Pinned exactly at `7.18.4`, and the exactness matters here. Every
+release up to and including 7.17.0 carries open-redirect, XSS and SSR
+advisories, and `npm audit --audit-level=high` — which is a gate in
+`scripts/check-all.sh` and in CI — fails on them. It reports 0 vulnerabilities
+at 7.18.4. Any upgrade or downgrade should be checked against that gate rather
+than against the changelog alone.
+
+*§10 rung 7 (frontend specifically).* It brings no component system, no CSS
+paradigm and no state-management philosophy — the three things that rung
+forbids.
+
+*Rejected:* a hand-rolled router, which grows into a router anyway as M1.6–M3
+add pages; and deferring the pages to M1.6, which leaves M1.5's definition of
+done unmet and makes M1.6 large.
 
 ---
 

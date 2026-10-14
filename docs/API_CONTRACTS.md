@@ -365,7 +365,7 @@ Validation: `cloud_account_id` must reference an `ACTIVE`, non-deleted account (
 
 **14.5** Soft delete; `status → RETIRED`, `deleted_at` set. Blocked with `409 invalid_state_transition` while any non-terminal operation targets the server. History is retained. Audit `SERVER_RETIRED`.
 
-**14.8** Synchronous probe through the provider adapter; 10 s timeout. Returns `{reachable, checked_at, provider_status, data_state, message}`. `503 not_configured` in demonstration mode or when the account lacks credentials. Rate limit 10 / min per server. Audit `SERVER_CONNECTIVITY_CHECKED`.
+**14.8** *Not implemented at M1.5* — it is a synchronous probe through a provider adapter, and the first adapter arrives with M4.1. Synchronous probe through the provider adapter; 10 s timeout. Returns `{reachable, checked_at, provider_status, data_state, message}`. `503 not_configured` in demonstration mode or when the account lacks credentials. Rate limit 10 / min per server. Audit `SERVER_CONNECTIVITY_CHECKED`.
 
 ---
 
@@ -539,7 +539,7 @@ Errors: `403 forbidden` (permission or action not allowlisted — audited `AUTHZ
 | 18.6 | GET | `/api/v1/applications/{application_id}/health` | Health per environment | `server:read` |
 | 18.7 | GET | `/api/v1/applications/{application_id}/deployments` | Deployment history | `deployment:read` |
 
-**18.2** Body `{"name","slug","description","owner_team","repository_reference","health_check_config"}`, `Idempotency-Key` required. Validation: `slug` matches `^[a-z0-9][a-z0-9-]{1,62}$`, unique; `repository_reference` must be an `https` URL on the allowlist or an `org/repo` form; **`health_check_config` URLs are validated against the SSRF host allowlist at write time and again at request time** ([SECURITY.md §19](SECURITY.md#19-ssrf)). Errors `409 duplicate_resource`, `422`. Audit `APPLICATION_REGISTERED`.
+**18.2** Body `{"name","slug","description","owner_team","repository_reference","health_check_config"}`, `Idempotency-Key` required. `health_check_config` is stored as `{"checks": [{"name", "url", "environment", "expected_status"}]}` — a shape §18 did not pin, chosen in M1.5 and recorded as assumption `A-10` in [`../PROGRESS.md`](../PROGRESS.md). Validation: `slug` matches `^[a-z0-9][a-z0-9-]{1,62}$`, unique; `repository_reference` must be an `https` URL on the allowlist or an `org/repo` form; **`health_check_config` URLs are validated against the SSRF host allowlist at write time and again at request time** ([SECURITY.md §19](SECURITY.md#19-ssrf)). Errors `409 duplicate_resource`, `422`. Audit `APPLICATION_REGISTERED`.
 
 **18.6** Query: `environment` (optional). **Application health is reported separately from host health** (PRD §4.9 acceptance criterion):
 
@@ -917,6 +917,7 @@ Performance figures are PRD §10 design budgets, explicitly **not** measured res
 | OPEN-19 | Live progress via WebSocket/SSE instead of polling | Polling with `poll_after_seconds` |
 | OPEN-20 | Should `GET /logs/query` exist as a shareable-link variant? | No — `POST` only, to keep filters out of access logs and history |
 | OPEN-21 | Bulk service operations | Out of scope for v1 |
+| **OPEN-27** | **How is a resource with no scope dimensions scoped?** Raised in M1.5. An application has no environment, no cloud account and no server (AD-12), so there is nothing for [SECURITY.md §4](SECURITY.md#4-permissions-scope-and-resourceenvironment-restrictions)'s dimension rules to evaluate against it | **Applications are not scope-filtered**: `server:read` is the whole check for §18.1 and §18.3. An application row is metadata (name, slug, owner, repository reference, health-check config) and every privileged action targets a *server* or a deployment target, each scope-filtered on its own dimensions; writes need `admin:integrations`, which is Administrator-only. *Alternatives, both needing a product decision:* filter by the `application` dimension alone, ignoring the other three; or treat an application as reachable when the grant reaches any server hosting it |
 
 ---
 
@@ -925,7 +926,11 @@ Performance figures are PRD §10 design budgets, explicitly **not** measured res
 1. The SPA and API share an origin, so cookie auth needs no cross-origin exceptions.
 2. Operation and deployment progress is polled; no socket infrastructure is required for v1.
 3. Clients tolerate `data_state` on every data-bearing payload and render gaps, staleness and unavailability distinctly — a client that coerces `null` to `0` violates PRD §4.2 and is a defect.
-4. All list endpoints are scope-filtered, so a client never needs to filter for authorisation.
+4. All list endpoints are scope-filtered, so a client never needs to filter for authorisation. **Amended 2026-10-14 (M1.5):** `GET /servers` is; `GET /applications` is not, because an application carries no scope dimension — see `OPEN-27` in [§30](#30-open-decisions). The assumption's *purpose* holds either way: a client still never filters for authorisation.
 5. The OpenAPI schema generated by the implementation is the authoritative machine-readable form of this document; where they diverge, the schema is fixed to match this contract, or this contract is amended by review.
 
-**No endpoint in this document exists yet.** Every example payload is placeholder data.
+**Implementation status (2026-10-14).** §11 (health), §12 (authentication), §25
+(user and role administration), §14.1–§14.7 (server inventory) and §18.1–§18.5
+(applications) are implemented. Everything else in this document is
+unimplemented, and every example payload in those sections is placeholder
+data.
