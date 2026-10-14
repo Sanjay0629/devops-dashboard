@@ -1059,8 +1059,14 @@ and `/dashboard/health` over PostgreSQL only, with metric sections returning
 **Decisions M1.6 should not have to take, but will inherit:**
 
 1. **`OPEN-27`** (see [§3](#3-in-progress-milestone)) — whether applications are
-   scope-filtered, and how. The dashboard will count applications, so it meets this
-   immediately. Worth settling first; it is a product question.
+   scope-filtered, and how. **Corrected 2026-10-14:** an earlier draft of this entry
+   said the dashboard counts applications and so meets the question immediately.
+   It does not. [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §13.1 counts
+   servers, failed services, alerts and recent activity — `application_id` appears
+   only as a *filter*, and that filter resolves through `application_servers` to
+   servers, which **are** scope-filtered. So M1.6 is not blocked by `OPEN-27`; the
+   first milestone that genuinely is will be one that lists or counts applications
+   in their own right. It remains a product question, just not an urgent one.
 2. **Issue 42** — the idempotency replay comparison. Not M1.6's problem, but it is
    the oldest unresolved contract divergence from this milestone.
 
