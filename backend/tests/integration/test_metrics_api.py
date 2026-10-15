@@ -179,6 +179,7 @@ async def test_an_unconfigured_prometheus_reports_not_configured(
     assert set(rows) == {
         "Identity provider",
         "Prometheus",
+        "Cloud accounts",
         "Loki",
         "Alertmanager",
         "Jenkins",

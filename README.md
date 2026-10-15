@@ -100,8 +100,11 @@ privileged, that a Celery task round-trips, that a login completes through the m
 seeded inventory is readable, that a database outage degrades to `503` without substituting
 zeros, and that `down -v` followed by `up` returns to the same state from empty volumes. Then it
 tears the stack down (`KEEP_STACK=1` leaves it running). Its steps are numbered to match
-[`docs/TESTING.md`](docs/TESTING.md) §11; step 8 (the observability profile) belongs to M2.1/M3.1
-and is not asserted.
+[`docs/TESTING.md`](docs/TESTING.md) §11. **Step 18 starts the `observability` profile** and asserts
+§11 step 8's Prometheus half: the bundled `node-exporter` target is `up` and all ten metric
+templates execute, read through the backend's own client inside the container. Step 8's Loki half
+needs M3.1, and `loki`/`grafana` are still placeholders, which is why the script starts
+`prometheus` and `node-exporter` by name rather than the whole profile.
 
 **End-to-end tests** need the stack running, and run against it rather than starting their own:
 
@@ -210,7 +213,8 @@ frontend/           React + TypeScript + Vite + Tailwind SPA
   src/pages/        Login
 infra/compose/      Docker Compose stack, profiled
   mock-idp/         mock OIDC provider — development aid only
-infra/{prometheus,loki,alloy}/   observability config (placeholders until M2/M3)
+infra/prometheus/    real scrape config (M2.1); targets static until M2.3
+infra/{loki,alloy}/  log pipeline config (placeholders until M3.1)
 scripts/            check-all, smoke test, doc link check, digest pinning
 docs/               architecture, security, database, API, plan, testing
 ```
@@ -224,7 +228,7 @@ Each lands in a named milestone, so nothing here is an accidental gap:
 | **Any domain API at all** — the biggest gap right now: authorisation is enforced, but the only endpoints behind it are administrative | M1.5+ |
 | Server and application inventory, and therefore any *scoped* resource for the matcher to evaluate a target against | M1.5 |
 | ~~Dashboard~~ — shipped in M1.6, but with only database-backed sections populated; metrics, alerts and recent activity report `not_configured` | ~~M1.6~~ · real data in M2–M5 |
-| Prometheus metrics, systemd service state, staleness | M2 |
+| Prometheus metrics, systemd service state, staleness | M2 · **M2.1 done**: the backend renders allowlisted PromQL and reads a real Prometheus (`GET /api/v1/metrics/templates`, `GET /api/v1/integrations/status`). **No metric *values* are served yet** — §15.1–§15.3 and charts are M2.2, so the dashboard's utilisation section still reports `not_configured` |
 | Loki log search, alert rules, notifications | M3 |
 | Cloud adapters, service operations, approvals, audit | M4 |
 | Jenkins deployments | M5 |

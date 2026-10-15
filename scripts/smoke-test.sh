@@ -272,13 +272,43 @@ async def main():
     # templates.NODE_JOB still agree.
     await await_value(client, "agent_up", lambda value: value == 1.0, "agent_up")
 
-    # §11.8, second half: "a metric query returns data". Four templates, so a
-    # single series existing does not pass for the catalogue working: a gauge,
-    # a ratio, a counter-derived rate and a clock expression.
+    # §11.8, second half: "a metric query returns data". Four more templates, so
+    # that one series existing does not pass for the catalogue working: a ratio,
+    # a clock expression, a plain gauge and a counter-derived rate.
     await await_value(client, "memory_utilisation", lambda v: 0.0 < v <= 100.0, "memory_utilisation")
     await await_value(client, "uptime_seconds", lambda v: v > 0.0, "uptime_seconds")
     await await_value(client, "load_average", lambda v: v >= 0.0, "load_average")
     await await_value(client, "cpu_utilisation", lambda v: 0.0 <= v <= 100.0, "cpu_utilisation")
+
+    # The remaining five are asserted to be VALID PromQL but not to return a
+    # value, and the split is deliberate. node-exporter runs in a container with
+    # no host mounts, so which filesystems, disks and interfaces it sees is an
+    # environment detail: on the development machine all five answer (disk from
+    # three ext4 bind mounts, network from eth0 once `lo` is filtered out), but
+    # a runner with a different storage driver could legitimately expose none of
+    # them, and a smoke test that failed there would be wrong about the code.
+    #
+    # Prometheus answers a syntactically invalid query with 400, which the client
+    # maps to provider_error — so "no exception" IS the syntax assertion, and it
+    # is the real risk for these five: they are the templates with label filters
+    # and `without` clauses in them. The value is printed either way, so the run
+    # records what this environment actually produced.
+    for template_id in (
+        "memory_available_bytes",
+        "disk_utilisation",
+        "disk_available_bytes",
+        "disk_io",
+        "network_throughput",
+    ):
+        query = templates.render(template_id, "LINUX", [INSTANCE])
+        try:
+            samples = await client.query(query)
+        except PrometheusUnavailableError as error:
+            raise SystemExit(f"FAIL: {template_id} is not a valid query ({error.reason})")
+        if samples:
+            print(f"  {template_id}: {samples[0].value}")
+        else:
+            print(f"  {template_id}: valid, no series in this environment")
 
     # An instance nobody scrapes returns NOTHING, which is what makes the
     # unavailable path honest: no series, so no number, so no zero.

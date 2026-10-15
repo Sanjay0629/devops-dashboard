@@ -1,8 +1,37 @@
 # PROGRESS — DevOps Control Plane
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
-**Last updated:** 2026-10-15
-**Updated by:** the **M1.7 implementation session (Phase 1 consolidation)**. The
+**Last updated:** 2026-10-16
+**Updated by:** the **M2.1 implementation session (Prometheus client and metric
+templates)** — the first milestone of Phase 2, and the first time this product reads
+a system it did not also write. Read [§3](#3-in-progress-milestone) first. The two
+things most worth knowing before touching anything:
+
+1. **The changed-line coverage gate was reporting a pass it had not earned.** M2.1
+   is the first backend diff it ever judged, and its first run printed
+   `17/21 changed lines covered (81.0%)` while skipping the **entire new
+   `app/metrics/` package** — `git diff` cannot see untracked files. The M1.7
+   handover predicted the Cobertura path matching would be the risk; that part was
+   fine, and the real defect was worse, because a new module is the most likely
+   shape of an untested addition. Fixed, floor untouched, same diff then measured
+   **388 lines at 100 %**. Issue **56**.
+2. **`DCP_PROMETHEUS_URL` deliberately does not go through
+   `app/core/ssrf.validate_registered_url`,** and the reasoning is written out in
+   `app/metrics/client.py` rather than left implicit — chiefly that §19.4's
+   denied-range check would reject the only addresses an internal Prometheus can
+   have, and that gating it would force `DCP_SSRF_HOST_ALLOWLIST=prometheus` as a
+   shipped default, widening the *user-supplied* surface to admit an
+   *operator-supplied* destination. The allowlist is unchanged and still empty, so
+   issue **45** is unaffected.
+
+Also: **`OPEN-09` now has an implemented working default** (Windows is
+`UNSUPPORTED`, expressed structurally so "supported but empty" cannot be spelled),
+**docs/TESTING.md §11 step 8's Prometheus half is asserted** for the first time, and
+issues **57** and **58** are new while **54**'s count was corrected from five to
+eleven. The dashboard's `utilisation` section was **not** flipped: M2.1 ships no
+metric endpoint, so it has no source until M2.2.
+
+Before it, the **M1.7 implementation session (Phase 1 consolidation)**. The
 milestone's own deliverables — a Compose smoke test and a first E2E suite — found
 **four faults that had been latent for five milestones**, which is the argument for
 consolidation milestones existing. Read [§3](#3-in-progress-milestone) first; the
@@ -43,8 +72,22 @@ enforcement) and M1.3
 
 ## 1. Current project stage
 
-**Stage: Phase 1 — Foundation. Milestones M1.1 – M1.7 complete. Phase 1 is done;
-M2.1 is next.**
+**Stage: Phase 2 — Monitoring. M1.1 – M1.7 and M2.1 complete. M2.2 is next, and it
+is blocked on `TS-01` (the charting library) being selected.**
+
+**As of M2.1 (2026-10-16) the product reads something other than its own
+database.** Prometheus and `node-exporter` are configured, running and scraped, and
+the backend queries them through an allowlisted template catalogue it renders
+itself — no endpoint accepts PromQL (AD-04). That makes Prometheus the first entry
+in [§8](#8-external-integrations) that is not "declared, never started", and it is
+the first time this codebase has been shown to work against a real external system
+rather than against a mock it also wrote.
+
+What it is **not**: there is still no metric *endpoint*. §15.1–§15.3 and every chart
+are M2.2, so the dashboard's `utilisation` section still reports `not_configured`
+with nulls and was deliberately left that way — flipping it would mean claiming a
+source the API cannot yet serve. Of the dashboard's nine sections, still exactly two
+have one.
 
 The application has a running skeleton, a migrated PostgreSQL schema, working OIDC
 authentication with server-side sessions, authorisation (one matcher, one
@@ -147,6 +190,10 @@ writing.
 
 | **M1.6** — dashboard shell: endpoints 13.1 and 13.2, scope-keyed Redis cache, shared `StatusBadge`/`DataStateBanner`/`EmptyState`/`ErrorState`, paging controls, generated TypeScript API types | **Complete** | 2026-10-15 | 360 unit + 231 integration + 76 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; both endpoints driven over HTTP against the running Compose stack and the counts cross-checked by hand against `SELECT count(*)`; `scripts/check-all.sh` passes all 15 checks ([§7](#7-tests-executed-and-their-actual-results)). Both security checks were confirmed to **fail** against a deliberately broken implementation before being relied on |
 
+| **M1.7** — Phase 1 consolidation: Compose smoke test, first Playwright suite, changed-line coverage gate, `.env.example` check | **Complete** | 2026-10-15 | `scripts/smoke-test.sh` passed twice including once from empty volumes; 11 E2E tests, five consecutive clean runs; all 18 checks in `scripts/check-all.sh` pass. Its own deliverables found **four faults latent for five milestones**, chiefly that *nothing applied the migrations* ([§3](#3-in-progress-milestone)) |
+
+| **M2.1** — Prometheus client, metric template catalogue, query guards, `GET /metrics/templates`, §26.1 integration status | **Complete** | 2026-10-16 | 496 unit + 237 integration + 115 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks with nothing skipped; `scripts/smoke-test.sh` passes with **§11 step 8's Prometheus half now asserted** — the exporter target `up` and **all ten templates executed**, read **through the backend's own client against a real Prometheus and a real `node_exporter`** ([§7](#7-tests-executed-and-their-actual-results)). Changed-line coverage **388/388 (100 %)** after the gate's own blind spot was fixed (issue 56) |
+
 **M1.3 caveat — the honest limit of what was verified.** Everything was tested
 against the **mock** OIDC provider in `infra/compose/mock-idp/`, which checks no
 password. That proves the OIDC client is self-consistent and that the session, CSRF,
@@ -173,7 +220,170 @@ development aid and is labelled as one in its own README, in the Compose file an
 
 ## 3. In-progress milestone
 
-**None.** M1.7 is finished, and with it Phase 1. M2.1 has not begun.
+**None.** M2.1 is finished. M2.2 has not begun, and it should not begin before
+`TS-01` is selected — see [§9](#9-next-recommended-task).
+
+### What M2.1 implemented (2026-10-16)
+
+Phase 2's first milestone, and the first time this product reads a system it did not
+write. Six new backend files, two real Compose services, two new settings, no
+migration — `metrics:read` and `admin:integrations` were already seeded by migrations
+`0002` and `0004`, so the schema stays at `0004`.
+
+#### The two decisions taken before any code, both recorded rather than assumed
+
+**1. `OPEN-09` — Windows is `UNSUPPORTED`, and that is expressed structurally.**
+A `MetricTemplate` holds a mapping of OS family to PromQL, and there is no way to
+spell "supported but has no query". Windows families are therefore simply **absent**,
+and `render()` raises `UnsupportedOsFamilyError` for them. The reasoning is that
+`windows_exporter` cannot run in a Linux container, so any Windows PromQL shipped
+now would be a string that has never been executed against anything — which is worse
+than an honest refusal, because it reads as coverage. A WINDOWS server will show the
+`unsupported` data state, not an empty chart and not a Linux query pointed at a
+Windows host. **The decision stays open**; this is its working default, now
+implemented and tested rather than merely written down.
+
+**2. `DCP_PROMETHEUS_URL` does not pass through `app/core/ssrf.validate_registered_url`.**
+This was the question most worth getting wrong, because mandatory rule 9 says
+outbound destinations are checked against the host allowlist and a literal reading
+covers this. The answer, argued in full in `app/metrics/client.py`'s module
+docstring, is no, for three reasons that point the same way:
+
+- `validate_registered_url` is **write-time validation of a URL that arrived in an
+  API request** — its own docstring says so, and its callers are §18.2's
+  `health_check_config` and `repository_reference`. `DCP_PROMETHEUS_URL` arrives in
+  the process environment from the deployment platform, exactly like
+  `DCP_DATABASE_URL`, `DCP_REDIS_URL` and `DCP_OIDC_ISSUER`, none of which is
+  allowlisted either. An allowlist cannot constrain whoever also sets the allowlist.
+- [SECURITY.md §19](docs/SECURITY.md#19-ssrf)'s rule 4 — the denied-range check over
+  loopback, link-local and RFC1918 — would **reject the only addresses an internal
+  Prometheus can have.** The local stack reaches it at `prometheus:9090` on a private
+  Docker network. That rule exists so a *user*-supplied destination cannot be steered
+  at the cloud metadata endpoint; pointed at an operator-configured monitoring host
+  it protects nothing and breaks everything.
+- Gating it would force `DCP_SSRF_HOST_ALLOWLIST=prometheus` as the shipped default
+  (the compose default and `.env.example` must agree, which
+  `scripts/check_env_example.py` rule 5 enforces). That list governs the
+  **user-supplied** surface, so admitting an operator-supplied destination to it
+  would make `http://prometheus:9090` a registrable application health-check target
+  as a side effect. **That is issue 45 in reverse** — there an empty allowlist made a
+  legitimate write impossible; here a populated one would make an illegitimate write
+  possible — and it is a net loss of control.
+
+So the allowlist is **unchanged and still empty by default**, issue 45 is unaffected,
+and what §19 asks of a fetch is enforced where it belongs: scheme, no embedded
+credentials, no fragment and no whitespace at **load time** (a shared field validator
+in `app/core/config.py`, which now also covers the two OIDC URLs — both previously
+accepted a credential and a fragment); `https` required outside the `local`
+environment; redirects not followed; the response size bounded at 16 MB; and a
+deadline on every call. One test asserts the destination comes from settings and
+nowhere else, by recording the URL the transport was actually handed.
+
+#### What the code does
+
+**`app/metrics/templates.py` — the catalogue.** The ten templates AD-04 names, LINUX
+only. Two details worth knowing before editing it:
+
+- **Escaping is two layers in one specific order.** A value bound for
+  `instance=~"…"` is regex-escaped *first* and PromQL-string-escaped *second*,
+  because the regex escape introduces backslashes the string literal must then
+  carry. The other order emits `"node\-exporter"`, which is not a valid PromQL
+  escape sequence; doing only one of the two lets a `.` in a hostname match any
+  character, which silently attributes another host's metrics to this server.
+- **An empty instance list is refused, not rendered.** `agent_up` carries
+  `job="node"`, so an empty selector would produce `up{job="node",}` — which parses
+  and returns *every host in the estate*. That is the cardinality abuse AD-04 exists
+  to prevent, reached by passing an empty list, so it fails closed.
+
+The instance label is re-validated against `METRICS_INSTANCE_PATTERN` at render time
+even though §14.2 validated it on the way in, because a row can also arrive from a
+seed, a migration or a direct `UPDATE`. Doing that turned up a defect in the pattern
+itself: it was `$`-anchored, and in Python `$` also matches immediately before a
+trailing newline, so `"host:9100\n"` satisfied it. Now `\Z`. The six sibling
+patterns in the same module have the same slip and were **left alone** (issue 57):
+they are stored rather than interpolated, they belong to M1.5's write boundary, and
+a tightening of stored-value validation deserves its own diff.
+
+**`app/metrics/client.py` — the read path.** Instant and range reads only. Three
+choices that are not the obvious ones:
+
+- **`PrometheusUnavailableError` is a plain exception, not an `AppError`.** If it
+  were an `AppError`, a Prometheus 503 escaping a caller would be rendered as a DCP
+  503 for a page that is otherwise fine. PRD §4.4 wants the section marked
+  unavailable instead, and that only holds if the exception *cannot* be rendered. A
+  test asserts both the reason and the non-`AppError`-ness across six upstream
+  statuses.
+- **The retry is one attempt, for `ConnectError`/`ConnectTimeout` only.** Every call
+  here is a read and there is no state-changing provider call in the module to
+  blind-retry, so retrying is safe in principle. A *read* timeout is still not
+  retried, because the deadline §15.2 publishes is 10 s and retrying past one would
+  quietly make it 20. One call also counts as one breaker failure regardless of the
+  retry, or the retry would halve the effective threshold.
+- **`NaN` and the infinities parse to `None`.** Prometheus returns `"NaN"` from a
+  rate window with one sample and `"+Inf"` from a division by zero. Both are ordinary
+  answers rather than corruption, `float("nan")` serialises to invalid JSON, and `0`
+  would read as "this host is idle" — the substitution PRD §4.2 forbids.
+
+The circuit breaker is five consecutive failures to open, a 30 s cooldown, exactly
+one half-open probe, and a failed probe re-opening for a full cooldown rather than
+leaving the circuit half-open and probing on every request. Thresholds are module
+constants, not settings, deliberately: two more settings would each need a
+`.env.example` entry *and* a Compose passthrough to have any effect (issue 54), and
+nothing has asked to tune them. It is per-process and marked as such — issue 58.
+
+**`app/metrics/service.py` — guards and status.** Every bound transcribed from
+§15.2/§15.3. One error class, `QueryLimitExceededError`, with the crossed maximum in
+`details`; `from >= to` is the exception, because ordering is a field relationship
+and §8's per-field shape is the useful answer for it. M2.1 ships **no endpoint that
+takes a range** — §15.1–§15.3 are M2.2 — so these are written and tested ahead of
+their caller on purpose: the milestone that adds the endpoints should not also be the
+one deciding the bounds under deadline.
+
+**`app/metrics/router.py` — two routes.** `GET /metrics/templates` (§15.4,
+`metrics:read`) and `GET /integrations/status` (§26.1, `admin:integrations`). Both
+reject *every* query parameter, since both take none; answering §15.4 with the full
+catalogue while `?metrics=cpu_utilisation` was ignored is precisely the §6 failure, a
+typo that looks like a working filter. §26.1 was built here rather than deferred
+because the plan lists "an integration-status entry for Prometheus" as an M2.1 task,
+and an entry with no endpoint to reach it is dead code. It diverges from the
+contract in **one** place, recorded in docs/API_CONTRACTS.md §26.1 rather than taken
+silently: there is a single `Cloud accounts` row instead of one row per account,
+because there is no provider adapter to probe until M4.1 and N rows would carry one
+fact N times.
+
+#### What was deliberately not done
+
+- **The dashboard's `utilisation` section was not flipped.** It still reports
+  `not_configured` with nulls. M2.1 gives it no source — there is no §15.1 — and
+  marking it configured would be claiming one.
+- **`degraded` is not emitted on the §26.1 Prometheus row.** It was written, and then
+  removed when its own test proved it unreachable: a successful probe resets the
+  breaker's consecutive-failure count, so any flap verdict built on that count is
+  always false. Saying it honestly needs failure-rate history over a window nobody
+  has specified. The row carries both timestamps and the previous failure's reason
+  instead, so an operator can see that an `ok` Prometheus failed a minute ago.
+- **No target discovery, no `agent_status`, no registration-time `metrics_instance`
+  verification** (M2.3, `OPEN-14`); **no systemd** (M2.4, `TS-02`); **no charts**
+  (M2.2, `TS-01`). The Prometheus target list is static and the config file says so.
+
+#### The two faults the verification found
+
+**1. The changed-line coverage gate had a blind spot, and M2.1 is the first backend
+diff it ever judged.** Its first run reported **`17/21 changed lines covered
+(81.0%)` — a pass — while skipping the entire new `app/metrics/` package.**
+`scripts/check_coverage_diff.py` finds changed lines with `git diff`, which cannot
+report a file git has never been told about, so every untracked file was invisible;
+the 21 lines were from `app/core/config.py`, an existing file the branch happened to
+touch. The M1.7 handover predicted the Cobertura *path matching* would be the thing
+to watch on `app/` paths — it was fine, the existing suffix rule matched
+`backend/app/core/config.py` to the report's `app/core/config.py` correctly. The
+defect was elsewhere and worse, because a new module is the most likely shape of an
+untested addition. Fixed by folding `git ls-files --others --exclude-standard` into
+the diff; **the floor was not lowered.** The same diff then measured 388 lines, and
+the tests the gate asked for were written: final result `388/388 (100.0%)`. Issue 56.
+
+**2. `METRICS_INSTANCE_PATTERN` accepted a trailing newline**, described above.
+Issue 57 records the six siblings that still do.
 
 ### What M1.7 implemented (2026-10-15)
 
@@ -903,8 +1113,8 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 
 | Phase | Milestones | Status |
 |---|---|---|
-| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · ~~M1.7 consolidation~~ **done** | **Phase 1 COMPLETE** 2026-10-15; M2.1 next ([§9](#9-next-recommended-task)) |
-| 2 — Monitoring | M2.1 Prometheus client · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | Pending |
+| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · ~~M1.7 consolidation~~ **done** | **Phase 1 COMPLETE** 2026-10-15 |
+| 2 — Monitoring | ~~M2.1 Prometheus client~~ **done** · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | **In progress.** M2.1 complete 2026-10-16; M2.2 next ([§9](#9-next-recommended-task)), and it is blocked on `TS-01` being selected |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
 | 5 — Deployments | M5.1 targets + Jenkins client · M5.2 lifecycle · M5.3 build logs · M5.4 production approvals · M5.5 health checks + rollback | Pending |
@@ -923,7 +1133,7 @@ The decisions with the widest blast radius, listed so review can prioritise them
 | AD-01 | Modular monolith + separate Celery workers | Shapes the whole repository layout |
 | AD-02 | OIDC auth-code + PKCE, backend-for-frontend, opaque session cookie | Shapes auth, CSRF and the frontend's relationship to the API |
 | AD-03 | RBAC resolved per request from PostgreSQL, fail-closed | Required for `PRD.md` §4.1's immediate-revocation criterion |
-| AD-04 / AD-05 | Backend renders PromQL and LogQL from allowlisted templates; clients never send query strings | Closes injection and scope-bypass; limits ad-hoc querying |
+| AD-04 / AD-05 | Backend renders PromQL and LogQL from allowlisted templates; clients never send query strings | Closes injection and scope-bypass; limits ad-hoc querying. **AD-04's PromQL half is now implemented and in use** (M2.1): `app/metrics/templates.py` is the closed catalogue, no route accepts a query, and a 20-case injection suite covers the one reachable vector — a `metrics_instance` escaping its string literal. Its other half, the `metrics_instance` identity join, is implemented as a *rendering* rule but **nothing verifies the label resolves to a series yet** (M2.3). AD-05's LogQL half is untouched (M3.2) |
 | AD-07 | Provider writes only through pre-registered, parameter-constrained artifacts; no shell | The core security boundary of the product |
 | AD-08 | Three-layer idempotency | Required for "duplicate requests do not execute twice" |
 | AD-10 | Deployment success = pipeline success **and** health checks pass | Required by `PRD.md` §4.10 |
@@ -1079,7 +1289,11 @@ Once a decision is reviewed, record the date and the outcome here.
 | 52 | **There is no production Compose overlay**, so docs/TESTING.md §11.12's "resource limits present in the production overlay" has nothing to assert. `infra/compose/` holds one compose file (the local development stack) and the mock IdP. The development file does declare limits — eight services carry a CPU limit — and the smoke test asserts those, plus non-root, no privileged flag, no added capabilities and `no-new-privileges`, so the half of §11.12 that is checkable is checked. | Verification gap in a step that reads as fully covered | Write the overlay when there is a deployment target to write it for (Phase 6, alongside `OPEN-07`'s recovery objectives). Until then the smoke test prints `NOTE: no production overlay exists` rather than passing silently |
 | 53 | **Vite's file watcher does not see edits through the Windows bind mount, so the E2E suite can validate code that is not in the working tree.** The `frontend` container mounts `frontend/src:ro` and runs the dev server; a changed module is not picked up, and the container keeps serving the previously built graph. Measured while fixing the response race (issue 54's cousin, see [§3](#3-in-progress-milestone)): with the fix on disk the probe still showed the unfiltered list 3 times in 8, and 0 times in 8 after `docker compose restart frontend`. This is worse than a flake — a green E2E run can be evidence about stale code. | **Trust in the E2E suite.** No production impact | `docker compose restart frontend` after changing `frontend/src`, which the README's E2E section now says. A real fix is either polling (`usePolling` in the Vite server config, which costs CPU) or running the dev server on the host rather than in the container. Not chosen here: both are workflow changes that deserve their own decision, and CI is unaffected because it builds from a fresh checkout |
 | 55 | **The E2E suite exhausts the `/auth/*` rate limit after about three consecutive runs at the default setting.** The suite signs in three times per run (two in global setup, one in the §12.1 test that is *about* signing in), and the auth class allows 10 per 300s and **fails closed**. The fourth or fifth consecutive run therefore gets `429` from `/auth/login`, which surfaces as "the mock identity provider heading was not found" — a message that looks like the IdP is down. Verified: a five-run series on a default stack went pass, pass, pass, pass, fail with the limiter key at `11`. Global setup already reuses saved sessions when they still authenticate, which makes the steady-state cost zero; the problem is only after a stack recreate, when every saved session is stale. | Local iteration only. CI runs once against a fresh stack (three logins) and is unaffected | Start the stack with `DCP_AUTH_RATE_LIMIT_MAX=100` for E2E work, which the compose file passes through and docs/TESTING.md §16 documents. Deliberately **not** raised by default: the limit is a real control (AD-19) and a test environment that disables it stops exercising the thing. If the suite grows more logins, give it an identity per spec rather than raising the ceiling |
-| 54 | **`x-backend-env` in the compose file enumerates the settings it passes through, so a setting absent from that list keeps its application default whatever `.env` says.** Five settings are in that position today — `DCP_READ_RATE_LIMIT_MAX`, `DCP_READ_RATE_LIMIT_WINDOW_SECONDS`, `DCP_SERVER_STALE_AFTER_SECONDS`, `DCP_SSRF_HOST_ALLOWLIST`, `DCP_SSRF_INSECURE_HOSTS` — all now documented in `.env.example` (M1.7) and all with correct defaults, so nothing is broken; but a developer who sets one in `.env` sees no effect and no warning. Found by `scripts/check_env_example.py`, which checks that the *names* exist, not that they are plumbed. | Configuration surprise; no behavioural fault today | Either add the five to `x-backend-env`, or switch the backend services to `env_file` and stop enumerating. The second is smaller but makes the container's configuration surface implicit, which is a real trade-off and not this milestone's call. The checker could be extended to compare the two lists once the decision is made |
+| 54 | **`x-backend-env` in the compose file enumerates the settings it passes through, so a setting absent from that list keeps its application default whatever `.env` says.** **The count was understated: it is eleven, not five.** Measured on 2026-10-16 by importing `Settings` and regexing the compose file: `DCP_OIDC_SCOPES`, `DCP_OIDC_CLOCK_SKEW_SECONDS`, `DCP_OIDC_HTTP_TIMEOUT_SECONDS`, `DCP_OIDC_METADATA_TTL_SECONDS`, `DCP_OIDC_JWKS_MIN_REFRESH_SECONDS`, `DCP_OIDC_LOGIN_STATE_TTL_SECONDS`, `DCP_READ_RATE_LIMIT_MAX`, `DCP_READ_RATE_LIMIT_WINDOW_SECONDS`, `DCP_SERVER_STALE_AFTER_SECONDS`, `DCP_SSRF_HOST_ALLOWLIST`, `DCP_SSRF_INSECURE_HOSTS`. The original five were the non-OIDC ones; the six OIDC tunables were missed. All are documented in `.env.example` and all have correct defaults, so nothing is broken; a developer who sets one in `.env` sees no effect and no warning. Found by `scripts/check_env_example.py`, which checks that the *names* exist, not that they are plumbed — and structurally cannot check the second half. | Configuration surprise; no behavioural fault today | **M2.1 did not add to the list**: `DCP_PROMETHEUS_URL` and `DCP_PROMETHEUS_TIMEOUT_SECONDS` were given both halves, and smoke-test step 18 asserts the passthrough end to end by reading `client.settings.prometheus_url` inside the backend container — which is the only check that catches a missing passthrough. The eleven remain. Either add them to `x-backend-env`, or switch the backend services to `env_file` and stop enumerating. The second is smaller but makes the container's configuration surface implicit, which is a real trade-off and not a milestone's call to make in passing. The checker could compare the two lists once the decision is made |
+| 56 | **RESOLVED 2026-10-16 (found and fixed by M2.1). `scripts/check_coverage_diff.py` could not see untracked files, so a brand-new module was not judged at all.** The gate's docstring promises it measures "the change you are about to push" against the working tree, and it does — through `git diff`, which cannot report a file git has never been told about. M2.1 is the first backend change the gate ever judged, and on the first run it printed **`17/21 changed lines covered (81.0%)` — a pass — while silently skipping the entire new six-file `app/metrics/` package.** The 21 lines were from `app/core/config.py`, an *existing* file the same branch happened to touch. A new module is the most likely shape of an untested addition, so this was the one case the gate most needed to work. **The Cobertura path matching itself was fine** (`backend/app/core/config.py` matched the report's `app/core/config.py` by the existing suffix rule), which is what the M1.7 handover flagged as the thing to watch; the real defect was elsewhere. | **The gate reported a pass it had not earned** — the same failure class as a skipped suite reading as a passing one, which is what `scripts/check-all.sh` exists to prevent | `untracked_lines()` lists `git ls-files --others --exclude-standard`, filters it through the existing `is_measured()` and counts every line of each file as changed. **The floor was not lowered.** After the fix the same diff measured **388 lines**, and the tests the gate then asked for were written: the final run is `388/388 (100.0%)`. Staged additions already appeared in `git diff`, so this closes exactly the pre-`git add` window and nothing else. The script has no test suite of its own — `scripts/` is not covered by any report — so its evidence is the before/after line counts recorded here |
+| 57 | **The sibling input-validation patterns in `app/inventory/schemas.py` are `$`-anchored, which in Python also matches immediately before a trailing newline.** So `"web1.example.com\n"` satisfies `_HOSTNAME_PATTERN`, `"org/repo\n"` satisfies `_ORG_REPO_PATTERN`, and the same holds for all four `PROVIDER_RESOURCE_ID` patterns — six patterns in total. M2.1 fixed **only** `METRICS_INSTANCE_PATTERN`, moving it to `\Z`, because that value is interpolated into a PromQL string literal and the renderer relies on the pattern as its first layer of defence. The other six are stored, not interpolated, so the consequence today is that a value with a trailing newline can be *stored* — a typo, not an injection. | Low. No current sink interpolates any of the six into a query, a command or a header. It is a latent hazard rather than a live one, and it is the kind that becomes live the moment one of these values is used to build something | Change the six to `\Z` in one small, strictly-tightening change. Left out of M2.1 on purpose (CLAUDE.md §3: note it and move on) because they belong to M1.5's write boundary, not to this milestone, and a tightening of stored-value validation deserves its own diff and its own tests rather than riding along in a metrics change. Worth doing before anything starts building strings out of a hostname |
+| 58 | **The circuit-breaker state that §26.1 reports is per-process, so with more than one backend replica the page reports whichever replica answered.** `app/metrics/client._BREAKER` is a module-level instance. `last_success_at`, `last_error_at` and `circuit_state` are therefore that worker's view, and two polls of `/api/v1/integrations/status` can legitimately disagree. In the local stack there is exactly one backend container, so it is currently invisible. | Accepted for now, and marked in code with a `ponytail:` comment naming the ceiling. It is also not concurrency-exact *within* a process: two coroutines can both pass `allow()` in the half-open state, which costs one extra probe against a monitoring server | A Redis-backed breaker, which the project already has the client for, shared per integration. Worth doing when there is more than one replica or when §26.1 gets a UI — a status page that flickers between `ok` and `open` depending on which worker answered is worse than one that is occasionally stale. Related: §26.1's `degraded` state is **not emitted at all** today, because deciding it honestly needs failure-rate history over a window that nobody has specified (see [§3](#3-in-progress-milestone)) |
+| 59 | **One frontend vitest test failed once, under load, and was not identified.** Observed during M2.1's verification: a `scripts/check-all.sh` run reported `Test Files 1 failed | 12 passed (13)` / `Tests 1 failed | 114 passed (115)`, which also failed the frontend changed-line coverage gate as a **consequence** (a failed vitest run leaves no usable Cobertura report, so the gate exits 2). **The test's name was not captured** — the run's output was filtered to the per-check summary lines, and by the time that was noticed the output was gone. It did not reproduce: five subsequent runs were clean (one plain `vitest run`, three `vitest run --coverage`, and one more full `check-all.sh`, all 115 passed). The run that failed was the most loaded of the set — it followed a two-minute backend integration suite with the whole Compose stack running, on a Windows machine — and the frontend suite sets no `testTimeout`, so vitest's 5 s default and Testing Library's 1 s `waitFor` default both apply to nine test files that use `waitFor`. A contention-induced timeout is the plausible mechanism, which is a hypothesis and not a diagnosis. | **Unknown, and deliberately recorded as unknown.** M2.1 changed no frontend source — the only frontend file in its diff is the regenerated `src/api/schema.ts` — so a new defect introduced by this milestone is the least likely explanation; but "probably a flake" is exactly the conclusion that let issue 51 live for five milestones | **Capture the output next time rather than hunting for it now.** Concretely: run `check-all.sh` with its full output kept (it is already one stream; the mistake was filtering it at the call site), and if it recurs, the file and assertion will be in it. If it recurs more than once, the candidates are the nine `waitFor` files, and the fix is an explicit `testTimeout` in `frontend/vite.config.ts` rather than a retry — a retried flake is a flake that still fails in CI. Worth noting for M2.2, which adds chart tests to the same suite |
 
 ---
 
@@ -1087,6 +1301,157 @@ Once a decision is reviewed, record the date and the outcome here.
 
 All results below were produced by running the commands and reading the output.
 Nothing here is inferred.
+
+### Executed — M2.1 (2026-10-16)
+
+Three commands, in this order, on Windows 11 against the Compose stack
+(PostgreSQL 17.2 on `127.0.0.1:5433`, Redis 7.4.1 on `127.0.0.1:6380`).
+
+#### 1. `uv run pytest -m integration` — **237 passed**, 496 deselected, 57.80 s
+
+```
+cd backend && TEST_DATABASE_URL=postgresql+psycopg://dcp:...@127.0.0.1:5433/dcp_test \
+  TEST_REDIS_URL=redis://127.0.0.1:6380/1 uv run pytest -m integration
+237 passed, 496 deselected, 1 warning in 57.80s
+```
+
+Run with `-m integration` and never as a module subset, per the trap M1.7 recorded:
+two pytest sessions against `dcp_test` at once have the session-scoped `migrated`
+fixture drop the schema under each other. **Six of the 237 are new**
+(`tests/integration/test_metrics_api.py`): a Viewer reading §15.4, a caller with no
+grant refused with `forbidden` **and asserted not to be a CSRF refusal**, an unknown
+query parameter answered `422`, the Viewer/Administrator split across the two
+adjacent routes, §26.1 reporting `not_configured` for an unconfigured Prometheus, and
+the catalogue asserted not to leak any PromQL fragment.
+
+#### 2. `./scripts/check-all.sh` — **18/18 passed, nothing skipped**
+
+| Check | Result |
+|---|---|
+| backend: ruff lint | ok |
+| backend: ruff format | ok (117 files) |
+| backend: mypy | ok — `no issues found in 72 source files`, strict |
+| backend: bandit | ok |
+| backend: unit tests | **496 passed**, 237 deselected, 27.38 s |
+| backend: integration | **237 passed**, 496 deselected, 104.32 s |
+| backend: pip-audit | No known vulnerabilities found |
+| frontend: eslint | ok |
+| frontend: prettier | ok |
+| frontend: tsc | ok |
+| frontend: vitest | **115 passed**, 13 files |
+| frontend: build | ok |
+| frontend: npm audit | 0 vulnerabilities |
+| contracts: api types | ok — regenerated, no drift |
+| config: .env.example | `.env.example is complete` — 42 keys, 31 settings, 28 compose vars |
+| coverage: backend diff | **388/388 changed lines covered (100.0 %)**, floor 80 % |
+| coverage: frontend diff | `no coverable line changed against origin/main` |
+| docs: link check | ok — 410 relative links in 13 files, 0 problems |
+
+`ALL CHECKS PASSED`, exit 0. Figures from the **final** run, which is the one that
+includes every change in the diff.
+
+**It was run three times, and the middle run failed — recorded rather than
+discarded.** That run reported `Tests 1 failed | 114 passed (115)` from the frontend
+suite, which also failed the frontend coverage gate as a consequence (a failed vitest
+run leaves no usable Cobertura report). **The failing test's name was not captured**,
+because the invocation was filtered down to the per-check summary lines. It did not
+reproduce in five subsequent runs — one plain `vitest run`, three
+`vitest run --coverage`, and the final `check-all.sh` above — all 115 passing. The
+failing run was the most loaded of the set, following a two-minute backend integration
+suite with the whole Compose stack up; the frontend suite sets no `testTimeout`, so
+vitest's 5 s default and Testing Library's 1 s `waitFor` default apply to the nine
+test files that use `waitFor`. That is a plausible mechanism, not a diagnosis, and
+M2.1 changed no frontend source. Issue **59**, with what to capture if it recurs.
+
+**Unit tests went 360 → 496, integration 231 → 237.** The new unit tests are **121 in
+`tests/metrics/`** — 63 in `test_templates.py` (the ten pinned queries and a 20-case
+injection suite, both parametrized), 38 in `test_client.py`, 13 in `test_guards.py`
+and 7 in `test_status.py` — plus 15 config cases for the two new settings and the
+tightened URL validator. Frontend stays at 115: M2.1 changed no frontend source, and
+the only frontend file in the diff is the regenerated `src/api/schema.ts`, which the
+coverage gate correctly reports as *not in its report* rather than as uncovered.
+
+**The backend coverage gate's first real verdict was wrong, and that is the finding,
+not the number.** Its first run printed `17/21 changed lines covered (81.0%)` — a
+pass — having skipped the whole new package, because `git diff` cannot see untracked
+files. After the fix the same diff measured 388 lines; the tests the gate then asked
+for were written, and the floor was left at 80 %. Full account in issue 56.
+
+#### 3. `./scripts/smoke-test.sh` — **PASSED**, exit 0, §11 steps 1–12 with step 8 partial
+
+The step that matters for this milestone is the new **step 18**, which is §11.8's
+Prometheus half — the one smoke-test step M1.7 deliberately left uncovered. It starts
+`prometheus` and `node-exporter`, waits for both healthchecks, and then runs its
+assertions **inside the backend container through `app/metrics/client.py` and
+`app/metrics/templates.py`**, so what passed is the code path the API will use rather
+than a `curl` that happens to produce the same JSON. Verbatim from the run:
+
+```
+=== 18. Prometheus scrapes the host exporter and the templates query it (§11.8)
+Container dcp-node-exporter-1 Healthy
+Container dcp-prometheus-1 Healthy
+  querying http://prometheus:9090
+  agent_up: 1.0 at 2026-10-15T20:19:06.076000+00:00
+  memory_utilisation: 22.388924416681533 at 2026-10-15T20:19:06.101000+00:00
+  uptime_seconds: 3745.12299990654 at 2026-10-15T20:19:06.123000+00:00
+  load_average: 1.11 at 2026-10-15T20:19:06.146000+00:00
+  cpu_utilisation: 45.08246242549748 at 2026-10-15T20:19:06.195000+00:00
+  memory_available_bytes: 6342983680.0
+  disk_utilisation: 7.688657601093052
+  disk_available_bytes: 997979009024.0
+  disk_io: 215238.36449438668
+  network_throughput: 512.4316634233936
+  an unscraped instance returns no series, not a zero
+  WINDOWS resolves to unsupported, not to a Linux query
+  prometheus: exporter up and templated queries return data
+```
+
+**Run twice.** The first full run passed with step 18 asserting five templates; step
+18 was then widened to cover all ten (see below) and the whole script re-run, which
+is the run quoted above. The intermediate check of the widened step alone is not
+what is being claimed here.
+
+Four things in that output are worth more than the fact that it passed.
+
+- **The poll budget is there for a reason that was observed, not assumed.** In the
+  run quoted above all five timestamps fall within 120 ms, because Prometheus had
+  already been scraping when step 18 started. In the **first** run, against a
+  Prometheus that had just been created, `cpu_utilisation` arrived 15 seconds after
+  the other four (`20:14:10` against `20:13:55`) — its `rate()` window waiting for a
+  second sample. That is exactly the case the 150-second deadline covers, and it is
+  why the step polls rather than querying once.
+- **All ten templates were executed against live data**, and the two with label
+  filters are the interesting ones: `network_throughput` saw two interfaces
+  (`eth0`, `lo`) and one after the virtual-interface filter, so the filter is
+  demonstrably doing its job rather than merely parsing. `disk_utilisation` resolved
+  through three `ext4` filesystems — the container's bind mounts, which report the
+  Docker host's disk.
+- **`an unscraped instance returns no series`** is the honest-absence path:
+  `cpu_utilisation` rendered for `nowhere.invalid:9100` came back empty, not zero.
+- The queries ran against `http://prometheus:9090` read out of
+  `client.settings.prometheus_url` **inside the container**, which is the only check
+  that a new setting's Compose passthrough actually works — the half
+  `scripts/check_env_example.py` structurally cannot see (issue 54).
+
+**What step 18 asserts, and the one place it deliberately does not.** Five templates
+(`agent_up`, `memory_utilisation`, `uptime_seconds`, `load_average`,
+`cpu_utilisation`) are asserted to return a value in range; the other five are
+asserted only to be **valid PromQL**, with whatever value they produce printed. The
+split is not laziness. `node-exporter` runs in a container with no host mounts, so
+which filesystems, disks and interfaces exist is an environment detail: all five
+answer on the development machine, but a runner with a different storage driver could
+legitimately expose none of them, and a smoke test that failed there would be wrong
+about the code. Prometheus answers a syntactically invalid query with `400`, which
+the client maps to `provider_error`, so "no exception raised" *is* the syntax
+assertion — and syntax is the real risk for exactly those five, since they are the
+templates carrying label filters and `without` clauses.
+
+**One filter is rendered and valid but not shown to exclude anything here.** The
+pseudo-filesystem exclusion (`tmpfs|overlay|squashfs|…`) matched three filesystems
+before filtering and three after, because this exporter's container exposes no
+`tmpfs` mount to drop. The expression is correct and executed; that it *removes* the
+right things is untested, and will be first exercised against a real registered
+server.
 
 ### Executed — `./scripts/check-all.sh`, 18/18 passed (M1.7, 2026-10-15)
 
@@ -1678,21 +2043,26 @@ administrator (left in place — it is the point of the command) and two test gr
 
 ## 8. External integrations
 
-**None is configured. None has been connected. None is operational.**
+**One is now configured, connected and read: Prometheus (M2.1, 2026-10-16).** It is
+a Compose service on a developer machine, not a production monitoring server, and
+the exporter it scrapes measures a container rather than a host — so what is proven
+is that the client, the template catalogue and the join label work against a *real*
+Prometheus, not that any production estate is being monitored. Everything else in
+this table is unchanged: **not configured, not connected, not operational.**
 
 | Integration | Status | Notes |
 |---|---|---|
 | OIDC identity provider | **Mock only — no real provider configured** | A **mock** OIDC provider (`infra/compose/mock-idp/`, `mocks` profile) is running and in use: discovery, JWKS/RS256, PKCE S256, single-use codes. It **checks no password** and is a development aid, so this is not an operational integration (CLAUDE.md §7). No real provider chosen (`OPEN-01`), no real client registered, no real credential created |
 | PostgreSQL | **Running and migrated** | postgres 17.2-alpine via Compose on host port 5433. Schema still at revision `0002` — M1.3 added no migration. Holds two JIT-provisioned users and the auth audit trail. A separate `dcp_test` database serves the integration suite |
 | Redis | **Running and in use** | redis 7.4.1-alpine via Compose on host port 6380. Now carries the session store, the single-use OIDC login state and the rate-limit counters (database `0`; the integration suite uses `1`). Verified by the live login flow |
-| Prometheus | **Declared, never started** | Compose service + placeholder `infra/prometheus/prometheus.yml`. No rules, no real targets (M2.1) |
-| Node Exporter | **Declared, never started** | In the `observability` profile as a sample scrape target (M2.1) |
+| Prometheus | **Running, scraped and read by the backend — the first real integration in this table** | prom/prometheus 3.0.1 via Compose (`observability` profile) on host port 9090, loopback only. `infra/prometheus/prometheus.yml` is a real config: 15 s scrape interval, two jobs (`prometheus` self-scrape, `node`), 30-day retention. The backend reads it through `app/metrics/client.py` at `DCP_PROMETHEUS_URL` (default `http://prometheus:9090`). Verified by smoke-test step 18, which asserts the exporter target `up` and executes **all ten templates** **through that client** — five with their values asserted in range, five asserted to be valid PromQL (see [§7](#7-tests-executed-and-their-actual-results) for why the split, and for what each returned). Still: **targets are static** — generating them from inventory is `OPEN-14`/M2.3 — and **no alert rules exist** (M3.3). This is a local stack, not a production Prometheus; nothing has been deployed anywhere |
+| Node Exporter | **Running and scraped** | prom/node-exporter 1.8.2 in the `observability` profile, host port 9100, loopback only. **Deliberately no host mounts**, so it reports the *container's* CPU, memory and filesystems rather than the Docker host's — mounting the host root into a container is a posture change a development convenience does not justify. It is a real exporter producing real `node_*` series, which is what the templates are verified against; host-level collection on registered servers is the agent's job (M6.1) |
 | systemd exporter | **Not configured** | Source not selected (`TS-02`); M2.4 |
-| windows_exporter | **Not configured** | Scope undecided (`OPEN-09`) |
+| windows_exporter | **Not configured, and deliberately out of scope** | `OPEN-09` now has an implemented working default: **there are no Windows templates at all**, and a WINDOWS server resolves to the `UNSUPPORTED` data state. `windows_exporter` cannot run in a Linux container, so Windows PromQL would be strings never executed against anything — which looks like coverage and is not. The decision stays open |
 | Grafana Alloy | **Declared, never started** | Compose `logs` profile + placeholder `infra/alloy/config.alloy` that collects nothing (M3.1) |
-| Grafana Loki | **Declared, never started** | Compose service + minimal `infra/loki/loki-config.yaml`. No ingestion (M3.1) |
+| Grafana Loki | **Declared, never started** | Compose service + minimal `infra/loki/loki-config.yaml`. No ingestion (M3.1). Still a placeholder *inside the same `observability` profile* as the now-real Prometheus, which is why `scripts/smoke-test.sh` starts `prometheus` and `node-exporter` by name rather than the whole profile |
 | Alertmanager | **Not configured** | M3.3 |
-| Grafana | **Declared, never started** | In the `observability` profile; no dashboards |
+| Grafana | **Declared, never started** | In the `observability` profile; no dashboards and no provisioned data source. DCP renders its own charts (M2.2), so this is for ad-hoc exploration only |
 | AWS Systems Manager | **Not configured** | No account, no role, no SSM document, no credential. M4.3 |
 | Azure management APIs | **Not configured** | No subscription, no managed identity, no Run Command script. M4.4 |
 | Jenkins | **Not configured** | No instance, no token, no registered target. Mock planned M5.1 |
@@ -1712,29 +2082,61 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-**Open the pull request and watch CI, before anything else.** Two jobs this
-milestone added — `e2e` and `env-example` — have never run on GitHub Actions, and the
-acceptance criterion is that the E2E suite passes *in CI*. Locally it passes against
-the same stack CI builds, which is strong but is not the claim. Expect to find
-runner-specific problems: the E2E job builds the stack with `--wait --wait-timeout
-300` on a two-core runner, and the suite's own timeouts (45s per test) were tuned on
-a faster machine.
+**Open the pull request and watch CI, before anything else.** M2.1 changed the
+`compose` job — it now validates every profile, runs `promtool check config` against
+the pinned Prometheus image, and the smoke test it calls starts the `observability`
+profile and asserts step 8. None of that has run on GitHub Actions. Two specific
+things to expect on a two-core runner: step 18 polls for up to 150 s for the first
+usable `rate()` reading and that budget was tuned on a faster machine, and the
+`observability` services add an image pull the job did not previously make. M1.7's
+`e2e` and `env-example` jobs have now run, so those are no longer unknowns.
 
-**Then M2.1 — Prometheus client and metric templates**
-([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m21--prometheus-client-and-metric-templates)),
-the first milestone of Phase 2. Its prerequisites are **not all met**, and two are
-decisions rather than work:
+**Then M2.2 — host metrics endpoints and charts**
+([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m22--host-metrics-endpoints-and-charts)).
+**It is blocked on a decision, and the decision should be made first and with a test
+in hand:**
 
-- **`TS-01` (charting library) is still unselected.** It gates M2.2, not M2.1, but
-  it has a functional gate attached — the library must render a data gap as a gap,
-  never as a zero — so it wants deciding with a test in hand rather than under
-  deadline.
-- **`TS-02` (systemd metrics source)** and **`OPEN-14` (target discovery)** are
-  likewise open. `OPEN-09` (Windows scope) has a working default.
-- Prometheus and `node-exporter` exist in the `observability` Compose profile as
-  **placeholders**. M2.1 is the milestone that makes them real, which also makes
-  docs/TESTING.md §11 step 8 assertable for the first time — the one smoke-test step
-  deliberately left uncovered.
+- **`TS-01` (charting library) is still unselected, and it is now the critical
+  path.** Its gate is functional, not aesthetic: the library must render a data gap
+  **as a gap** and never as a zero ([TECH_STACK.md §2.5](docs/TECH_STACK.md#25-charting-library)).
+  M2.1 made that testable for the first time — the client already returns
+  `None` for `NaN` and `+Inf`, and an unscraped instance already returns no series
+  at all, so a candidate library can be handed a real gap rather than a hypothetical
+  one. Decide it by writing the one test (a series containing `null` renders a gap)
+  against two candidates, not by reading feature lists.
+- **`OPEN-14` (target discovery) gates M2.3**, not M2.2. The target list in
+  `infra/prometheus/prometheus.yml` is static and says so.
+- **`TS-02` (systemd metrics source) gates M2.4.**
+
+**What M2.2 inherits from M2.1, and what it must not re-litigate:**
+
+- **The guards are already written and tested** (`app/metrics/service.py`:
+  `check_time_range` and `check_selection`). §15.2 and §15.3 should *call* them, not
+  re-derive the bounds in the handler. The point-count arithmetic has an off-by-one
+  in it that is already covered — Prometheus returns a point at `start`, so a span
+  that divides exactly yields one more point than the division suggests.
+- **`PrometheusUnavailableError` is deliberately not an `AppError`.** Do not "fix"
+  that. It exists so a dead Prometheus becomes a section-level
+  `data_state: "unavailable"` with a reason rather than a 5xx for a page that is
+  otherwise fine (PRD §4.4). M2.2's job is to catch it and map `reason` onto
+  `unavailable_reason`; the reason strings are a closed `Literal` in
+  `app/metrics/client.py`.
+- **The rate window is a parameter for a reason.** `render(..., window_seconds=...)`
+  defaults to 300 s; a range query whose `step` exceeds the window samples disjoint
+  windows and under-reports, so §15.2 should widen it with the step rather than
+  taking the default.
+- **A WINDOWS server is `unsupported`, not empty** (`OPEN-09`'s recorded default).
+  §15.1's response has to carry that state distinctly; `UnsupportedOsFamilyError` is
+  what the renderer raises.
+- **`servers.metrics_instance` is the join key and nothing verifies it yet.** A
+  server whose label does not match any scraped target returns no series, which
+  M2.2 must render as `unavailable` rather than as a flat zero line. The
+  *registration-time* verification and the `agent_status` indicator that would
+  explain *why* are M2.3 — so until then "no data" and "wrong label" look the same
+  to a user, and that is a known, recorded limitation rather than an oversight.
+- **The dashboard's `utilisation` section is still `not_configured` with nulls.**
+  M2.1 deliberately did not flip it. M2.2 is the milestone that gives it a source,
+  and it is also the first time any dashboard section can reach `stale`.
 
 **What Phase 2 can build on, and what it should read first:**
 
@@ -1807,6 +2209,71 @@ decisions rather than work:
    dashboard total.
 
 ## 10. Scope confirmation
+
+**M2.1 implementation session (2026-10-16).** Scope was milestone M2.1 exactly, plus
+two fixes its own verification forced (issues 56 and 57, both argued below).
+
+**Added:** `backend/app/metrics/` (`__init__`, `templates`, `client`, `service`,
+`router`, `schemas`), `backend/tests/metrics/` (`__init__`, `test_templates`,
+`test_guards`, `test_client`, `test_status`),
+`backend/tests/integration/test_metrics_api.py`.
+
+**Rewritten:** `infra/prometheus/prometheus.yml` — a real scrape config where it was
+a placeholder. 15 s interval (down from 30 s, so a `rate()` window has two samples
+inside half a minute), an explicit `scrape_timeout`, and the `dcp-backend` job
+**removed**: the backend exposes no `/metrics` endpoint yet, so that job could only
+ever report a permanently failing target, which makes "is every target up?" useless
+as an assertion and presents a scrape that does not exist as one that does
+(CLAUDE.md §7). It returns with the endpoint.
+
+**Modified:** `backend/app/core/config.py` (two settings, one shared field validator
+tightened, one production rule), `backend/app/main.py` (one router mounted),
+`backend/app/inventory/schemas.py` (one pattern made public and re-anchored),
+`backend/tests/test_config.py`, `infra/compose/docker-compose.yml`, `.env.example`,
+`scripts/smoke-test.sh`, `scripts/check_coverage_diff.py`,
+`.github/workflows/ci.yml`, `docs/TESTING.md`, `docs/API_CONTRACTS.md`,
+`docs/IMPLEMENTATION_PLAN.md`, `frontend/src/api/schema.ts` (regenerated, not
+hand-edited).
+
+**No migration.** `metrics:read` and `admin:integrations` were already seeded by
+migrations `0002` and `0004`, so the schema stays at `0004` and M2.1 adds no DDL.
+
+**No new dependency.** `httpx` was already runtime (M1.3, the OIDC client) and
+`httpx.MockTransport` is part of it, so the circuit-breaker and timeout tests needed
+nothing added. TECH_STACK §10 was not consulted because no rung was reached.
+
+Changes touching code outside the milestone's own files, each forced by it rather
+than opportunistic:
+
+- **`scripts/check_coverage_diff.py`** — the gate could not see untracked files and
+  therefore judged **none** of this milestone's new code while printing a pass
+  (issue 56). Fixing it was not optional: the milestone cannot claim a coverage
+  result from a gate that was not looking at it, and the alternative — `git add`
+  before running, so the files become visible — would have left the defect in place
+  for the next person to be misled by. The floor was not touched.
+- **`backend/app/inventory/schemas.py`** — `METRICS_INSTANCE_PATTERN` made public,
+  because the renderer re-validates the instance label at the point of
+  interpolation rather than trusting that §14.2 validated it on the way in; and
+  re-anchored from `$` to `\Z`, because `$` in Python also matches before a
+  trailing newline and this is now the guard a PromQL string literal depends on.
+  **The six sibling patterns in the same module have the same slip and were left
+  alone** (issue 57): they are stored rather than interpolated, they belong to
+  M1.5's write boundary, and a tightening of stored-value validation deserves its
+  own diff and its own tests.
+- **`backend/app/core/config.py`'s URL validator** — extended to reject embedded
+  credentials, fragments and whitespace, which also tightens `DCP_OIDC_ISSUER` and
+  `DCP_OIDC_REDIRECT_URL`. One validator serves all three fields and all three are
+  fetched or redirected to; adding the checks only for the new field would have left
+  two known-weaker copies of the same rule a few lines away.
+
+**Deliberately not done, and recorded instead:** endpoints §15.1–§15.3 and charts
+(M2.2, and `TS-01` is still unselected); target discovery from inventory
+(`OPEN-14`, M2.3); `agent_status` and registration-time `metrics_instance`
+verification (M2.3 — not widened into §14.2); systemd and `TS-02` (M2.4). **The
+dashboard's `utilisation` section was left `not_configured` with nulls**, because
+M2.1 gives it no source and marking it configured would be claiming one.
+
+---
 
 **M1.7 implementation session (2026-10-15).** Scope was milestone M1.7 plus
 **issue 49**, which was explicitly in scope because the smoke test cannot assert a
@@ -2115,7 +2582,7 @@ Performed 2026-10-13 across `PRD.md` and the eight documents.
 | Security controls appear in the implementation and testing plans | Yes — each mandatory rule has a milestone security checklist and a test in [`docs/TESTING.md`](docs/TESTING.md) §8 |
 | Service and deployment state transitions consistent | Yes, after one fix — `OperationStatus` and `DeploymentStatus` in [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §9 are exactly `PRD.md` §4.6 and §4.10; `CHECK` constraints in [`docs/DATABASE.md`](docs/DATABASE.md) use the same values; the state diagrams in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §6.2 and §8.1 use the same values. Internal `VERIFYING` is documented as internal-only (`AD-09`). **Fixed during review:** three timeout tables stated that a deployment deadline breach yields `TIMED_OUT`, which is not a member of `DeploymentStatus` (`PRD.md` §4.10 lists no such state). Now recorded as `FAILED` with `failure_reason = DEPLOYMENT_TIMED_OUT` |
 | Every privileged operation has authorisation and audit | Yes — [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) names a permission and an audit `action_type` per endpoint; §10 and §28 define the audit obligation and catalogue |
-| Provider capabilities not assumed identical | Yes — capability matrix in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §7.2, per-account capabilities endpoint, per-OS-family metric templates, and a test that pins the differences |
+| Provider capabilities not assumed identical | Yes — capability matrix in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §7.2, per-account capabilities endpoint, per-OS-family metric templates, and a test that pins the differences. **Annotated after M2.1 (2026-10-16):** the per-OS-family structure is implemented and the test exists, but there is currently only *one* family with queries — what the test pins is that every template covers `LINUX` and that WINDOWS and OTHER raise `UnsupportedOsFamilyError`, which is the honest form of "not assumed identical" while `windows_exporter` is out of scope (`OPEN-09`). The differences between two populated families remain unpinned because there is no second populated family |
 | Implementation plan has no forward dependencies | Yes — each milestone's dependencies point only backwards; the gating table lists which open decision blocks which milestone |
 | Duplication avoided | Yes — each topic has one owner (security rules in SECURITY, schema in DATABASE, endpoints in API_CONTRACTS, decisions in ARCHITECTURE §18–19), referenced by relative link elsewhere |
 | Relative links | All inter-document links verified as existing files with matching heading anchors |

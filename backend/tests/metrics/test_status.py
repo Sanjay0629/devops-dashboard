@@ -169,6 +169,7 @@ async def test_the_full_page_lists_every_integration_the_contract_names() -> Non
     assert names == [
         "Identity provider",
         "Prometheus",
+        "Cloud accounts",
         "Loki",
         "Alertmanager",
         "Jenkins",

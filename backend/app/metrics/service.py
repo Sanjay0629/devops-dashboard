@@ -147,6 +147,13 @@ def catalogue(settings: Settings | None = None) -> MetricTemplateList:
 #: integration from a healthy one. Each says which milestone brings it, the
 #: same convention ``app/dashboard/schemas.py`` uses for a sourceless section.
 _PENDING: Final[tuple[tuple[str, str, str], ...]] = (
+    # §26.1 asks for a row per *cloud account*, and migration 0002 seeds one, so
+    # this is a deliberate single row rather than an enumeration. There is no
+    # provider adapter to probe until M4.1, so N rows would carry one fact N
+    # times — and reading the accounts would mean a database session on a
+    # status endpoint that otherwise needs none. It becomes per-account when
+    # there is a per-account answer. Recorded in PROGRESS.md.
+    ("Cloud accounts", "cloud", "No cloud provider adapter exists yet (M4.1)."),
     ("Loki", "logs", "Log ingestion is not implemented yet (M3.1)."),
     ("Alertmanager", "alerts", "Alerting is not implemented yet (M3.3)."),
     ("Jenkins", "ci", "Deployment integration is not implemented yet (M5.1)."),

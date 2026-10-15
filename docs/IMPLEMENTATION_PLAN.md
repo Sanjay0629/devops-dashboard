@@ -317,7 +317,7 @@ backend/tests/inventory/{test_servers_api.py,test_duplicate_detection.py,test_sc
 
 - [x] `GET /dashboard/summary` and `/dashboard/health` using **PostgreSQL only**; metric sections return `data_state: "not_configured"` until Phase 2.
 - [x] Short-TTL Redis caching with explicit `collected_at`. `DCP_DASHBOARD_CACHE_TTL_SECONDS`, default 15 s, `0` disables.
-- [x] Frontend dashboard: health summary cards, server status table, filters, drill-through links, and loading / empty / error states. **`stale` is rendered by `DataStateBanner` but no section can reach that state yet** — nothing collects, so nothing can go stale. First reachable in M2.1.
+- [x] Frontend dashboard: health summary cards, server status table, filters, drill-through links, and loading / empty / error states. **`stale` is rendered by `DataStateBanner` but no section can reach that state yet** — nothing collects, so nothing can go stale. *Corrected 2026-10-16: this said "first reachable in M2.1", and it is not.* M2.1 gives the dashboard no source — the `utilisation` section stays `not_configured` with nulls until M2.2 wires §15.1 to it — so the first section that can go `stale` arrives with M2.2, and `stale` as a *computed* state over `last_seen_at` is M2.5.
 - [x] `StatusBadge` as the single owner of status visuals (glyph + text + colour), replacing `pages/inventory/states.tsx`.
 - [x] Configurable auto-refresh (`VITE_DASHBOARD_REFRESH_SECONDS`, default 30 s, `0` disables).
 
@@ -382,25 +382,51 @@ backend/tests/dashboard/test_summary.py
 
 **Prerequisites.** Phase 1 complete. Prometheus in Compose. At least one exporter target (the bundled `node-exporter` suffices). OPEN-14 (target discovery) and OPEN-09 (Windows scope) decided; TS-01 (charting library) and TS-02 (systemd exporter) selected.
 
+**Prerequisite state as of M2.1 (2026-10-16): three of the five are still open, and the milestone that needs each is named rather than the whole phase being blocked on all of them.** Phase 1 is complete; Prometheus and `node-exporter` are now configured and scraped rather than declared, which satisfies the second and third. `OPEN-09` has a working default *recorded and implemented* (Windows is `UNSUPPORTED`, see M2.1 below) rather than being decided. **`OPEN-14` still gates M2.3**, not M2.1 — the target list in `infra/prometheus/prometheus.yml` is static on purpose. **`TS-01` gates M2.2** and is still unselected; its functional gate (a data gap must render as a gap, never as a zero) wants deciding with a test in hand. **`TS-02` gates M2.4.** M2.1 needed none of the three.
+
 **Dependencies.** M1.2 (schema), M1.4 (authz), M1.5 (inventory + `metrics_instance`), M1.6 (dashboard shell).
 
 ---
 
 ## M2.1 — Prometheus client and metric templates
 
-**Tasks:** read-only Prometheus client with timeouts, retries and a circuit breaker; the allowlisted template catalogue with **per-OS-family** queries; query-bound guards (max range, point count, server count); `GET /metrics/templates`; an integration-status entry for Prometheus.
+**Status: complete (2026-10-16).** Evidence beside each item.
 
-**Files:** `backend/app/metrics/{client,templates,service,router,schemas}.py`, `infra/prometheus/prometheus.yml`, `backend/tests/metrics/{test_templates.py,test_guards.py}`.
+**Tasks**
 
-**Acceptance:** rendered PromQL matches expected strings for each template and OS family; a query exceeding a guard returns `422 query_limit_exceeded`; Prometheus down ⇒ `data_state: "unavailable"`, never a 500 and never a zero.
+- [x] Read-only Prometheus client with timeouts, retries and a circuit breaker. `backend/app/metrics/client.py`. Instant and range reads; `follow_redirects=False` (§19.5); a 16 MB response cap; a deadline at **both** ends (an `httpx.Timeout` and Prometheus's own `timeout` parameter, asserted by `test_every_call_carries_a_deadline_at_both_ends`). **Retry narrowed to one attempt for `ConnectError`/`ConnectTimeout` only** — every call here is a read, so retrying is safe in principle, but a *read* timeout is not retried because that would silently double the 10 s deadline §15.2 publishes. Breaker: five consecutive failures to open, 30 s cooldown, exactly one half-open probe, a failed probe re-opening for a full cooldown. 12 breaker and retry cases in `tests/metrics/test_client.py`, all against `httpx.MockTransport` with an injected clock, so no test sleeps and the hang case is deterministic.
+- [x] Allowlisted template catalogue with per-OS-family queries. `backend/app/metrics/templates.py`: the ten templates [AD-04](ARCHITECTURE.md#4-metrics-collection-architecture) names, **LINUX only**. `test_linux_renders_the_expected_query` pins all ten rendered strings literally rather than re-deriving them. **`OPEN-09` stays open with Windows-unsupported as its recorded default** — see the note below.
+- [x] Query-bound guards (max range, point count, server count). `backend/app/metrics/service.py`, every bound transcribed from §15.2/§15.3 rather than invented: 30 days, 11 000 points, step ≥ 15 s, 1–5 templates, ≤ 20 servers, ≤ 4 environments. 14 cases in `tests/metrics/test_guards.py`, each at `max` and `max + 1`, including the off-by-one that matters (`(MAX_POINTS - 1) * step` yields exactly `MAX_POINTS` because Prometheus returns a point at `start`, so a floored division would admit a query one point over).
+- [x] `GET /metrics/templates`. §15.4, `metrics:read`, no parameters — and every query parameter rejected, so `?metrics=cpu_utilisation` is a `422` rather than the full catalogue pretending a filter applied. `backend/app/metrics/router.py`.
+- [x] An integration-status entry for Prometheus. §26.1 at `GET /api/v1/integrations/status`, `admin:integrations`, with a **live probe** (`vector(1)`, which touches no series) for Prometheus and honest `not_configured` rows for the six integrations the contract names that have no configuration surface yet. Three states, not four: **`degraded` is deliberately not emitted** — see the note below.
+- [x] **Closed the Prometheus half of [TESTING.md §11](TESTING.md#11-docker-compose-smoke-tests) step 8**, the one smoke-test step M1.7 left uncovered. `prometheus` and `node-exporter` stop being Compose placeholders; `scripts/smoke-test.sh` step 18 starts the `observability` profile and queries **all ten templates** against it: the exporter target `up` and four more values asserted in range, and the remaining five — the ones carrying label filters — asserted to be valid PromQL with whatever value they produce printed, because which filesystems, disks and interfaces a containerised exporter sees is an environment detail and a smoke test that failed on it would be wrong about the code. All ten returned real values on the development machine — **run inside the backend container through `app/metrics/client.py`**, so what passes is the code the API uses rather than a `curl` that happens to produce the same JSON. Its Loki half still needs M3.1.
 
-**Tests:** *Unit* — template rendering, including label escaping; guard arithmetic; error-class mapping. *Integration* — against a Prometheus container with seeded series; timeout and circuit-breaker behaviour with a stub that hangs.
+**Files:** `backend/app/metrics/{client,templates,service,router,schemas}.py`, `infra/prometheus/prometheus.yml`, `backend/tests/metrics/{test_templates,test_guards,test_client,test_status}.py`. Two test files beyond the plan's list: the plan's own test line asks for "error-class mapping" and "circuit-breaker behaviour with a stub that hangs", and neither belongs in a file about templates or guards. Also `backend/tests/integration/test_metrics_api.py` for the authorisation paths, which need a real session and a real grant.
 
-**Security:** no client-supplied PromQL accepted (injection suite including label-escape attempts); Prometheus not reachable from the browser; metric endpoints require `metrics:read`.
+**Acceptance: met.**
 
-**DoD:** templates documented in code and matching [API_CONTRACTS.md §15](API_CONTRACTS.md#15-server-metrics).
+- *Rendered PromQL matches expected strings for each template and OS family* — `test_linux_renders_the_expected_query`, ten pinned strings; `test_windows_has_no_queries_so_it_resolves_to_unsupported` asserts the other family raises `UnsupportedOsFamilyError`.
+- *A query exceeding a guard returns `422 query_limit_exceeded`* — `QueryLimitExceededError`, one code for every bound with the crossed maximum in `details`, asserted per bound.
+- *Prometheus down ⇒ `data_state: "unavailable"`, never a 500 and never a zero* — `PrometheusUnavailableError` is **not** an `AppError`, deliberately, so it cannot be rendered as a 5xx if it escapes a caller (`test_an_http_error_is_never_rendered_as_a_5xx` asserts both the reason and the non-`AppError`-ness across six upstream statuses). `NaN`, `+Inf` and `-Inf` parse to `None`, never `0`.
 
-**Risks:** label mismatch between inventory and Prometheus silently yields no data. Mitigation: a verification step at registration and a `metrics_instance` health indicator rather than an empty chart.
+**Tests:** 121 unit in `tests/metrics/` across 4 files (63 template, 38 client, 13 guard, 7 status — the template and injection cases are parametrized), 15 new config cases, and 6 integration in `tests/integration/test_metrics_api.py` for the authorisation paths. Actual results and the commands run are in [`PROGRESS.md`](../PROGRESS.md) §7.
+
+**Security: met.**
+
+- *No client-supplied PromQL accepted* — nothing in the module takes a query from a request; §15.4 takes no parameter at all. The 20-case injection suite in `test_templates.py` covers label-escape attempts (closing the string literal, a trailing backslash, a pre-escaped quote, CR/LF/tab, regex wildcards, an extra matcher, a PromQL modifier, `${selector}` itself) and each is **refused rather than escaped**, including when it appears beside a valid instance. Escaping is a second layer, tested on its own because it is what holds if the pattern is ever loosened.
+- *Prometheus not reachable from the browser* — published to loopback for `promtool` and the expression browser only; the SPA has no code path to it and no response carries rendered PromQL (`test_the_catalogue_never_exposes_promql`).
+- *Metric endpoints require `metrics:read`* — route-level dependency, asserted by the existing route-coverage gate and by `test_a_caller_with_no_grant_is_refused_for_the_right_reason`, which also asserts the refusal is not a CSRF refusal.
+
+**DoD: met.** Templates are documented in code and match [API_CONTRACTS.md §15](API_CONTRACTS.md#15-server-metrics); §15.4's payload is served; §26.1's row shape is served.
+
+**Risks.** Label mismatch between inventory and Prometheus silently yields no data. **Not yet mitigated, and deliberately so:** the registration-time verification and the `metrics_instance` health indicator this line proposes are M2.3's `agent_status` work (§14.2 is explicitly out of M2.1's scope). What M2.1 contributes is that the mismatch is *observable* — an unscraped instance returns no series rather than a zero, asserted by smoke-test step 18 — and that `agent_up` is in the catalogue for the indicator to read.
+
+**Two decisions recorded rather than quietly taken.**
+
+1. **`OPEN-09` (Windows scope): templates are LINUX-only, and a WINDOWS server gets the `UNSUPPORTED` data state.** `windows_exporter` cannot run in a Linux container, so Windows PromQL would be strings that have never been executed against anything — which is worse than an honest refusal, because it looks like coverage. Expressed structurally: a template holds a mapping of OS family to query and there is no way to say "supported but empty", so an absent family *is* `unsupported`. The decision stays open; this is its working default.
+2. **`DCP_PROMETHEUS_URL` does not pass through `app/core/ssrf.validate_registered_url`.** Reasoning in full in `app/metrics/client.py`'s module docstring: that function validates a URL arriving in an *API request*, §19.4's denied-range check would reject the only addresses an internal Prometheus can have (RFC1918, or a Docker service name), and gating it would force `DCP_SSRF_HOST_ALLOWLIST=prometheus` as a shipped default — widening the **user-supplied** surface (§18.2 health-check URLs) in order to permit an operator-supplied destination, which is PROGRESS issue 45 in reverse. The rest of [SECURITY.md §19](SECURITY.md#19-ssrf) is enforced: scheme, no credentials, no fragment and no whitespace at load time; https required outside `local`; redirects not followed; response size and timeout bounded.
+
+**Also deliberately absent.** `degraded` on the §26.1 Prometheus row. It is the useful fourth state — "answering now, but not reliably" — and nothing this milestone keeps can decide it honestly, because a successful probe resets the breaker's consecutive-failure count and any flap verdict built on that count is therefore always false. Saying it properly needs failure-rate history over a window, which is a threshold nobody has asked for. The row carries both timestamps and the previous failure's reason instead, so an operator can see that an `ok` Prometheus failed a minute ago and judge for themselves.
 
 ---
 
