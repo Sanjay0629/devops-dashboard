@@ -273,8 +273,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate Compose configuration
-        run: docker compose -f infra/compose/docker-compose.yml --profile core config --quiet
-      - name: Smoke test the core stack
+        # Every profile, not just core: a typo in the observability services
+        # would otherwise only surface when the smoke test reached step 18.
+        run: |
+          docker compose -f infra/compose/docker-compose.yml \
+            --profile core --profile mocks --profile observability --profile logs \
+            config --quiet
+      - name: Validate the Prometheus configuration
+        # promtool from the pinned image, so the config is checked by the
+        # version that will load it. A bad scrape config makes Prometheus exit
+        # at startup, which reads as "the container is unhealthy" rather than
+        # as the YAML error it is.
+        run: |
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v3.0.1 check config /etc/prometheus/prometheus.yml
+      - name: Smoke test the stack
+        # Starts the core, mocks and (at step 18) observability profiles, and
+        # asserts docs/TESTING.md §11 steps 1-12 — step 8's Prometheus half
+        # included, which M2.1 made assertable for the first time.
         run: ./scripts/smoke-test.sh
 
   env-example:

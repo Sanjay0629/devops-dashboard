@@ -90,3 +90,101 @@ def test_api_base_path_validation(monkeypatch: pytest.MonkeyPatch, bad_path: str
 def test_marker_is_fixed_width_and_leaks_nothing() -> None:
     """Guards the redaction contract: the marker never varies with the input."""
     assert MARKER == "[REDACTED]"
+
+
+# --- Prometheus (M2.1) -------------------------------------------------------
+
+
+def test_prometheus_is_optional_and_unset_means_unconfigured(settings: Settings) -> None:
+    """PRD §11: the application starts without it and does not pretend.
+
+    ``prometheus_configured`` is what every metrics path branches on, so the
+    unset default has to be a real "no" rather than an empty string that
+    reads as configured.
+    """
+    assert settings.prometheus_url is None
+    assert settings.prometheus_configured is False
+    assert settings.prometheus_timeout_seconds == 10.0
+
+
+def test_prometheus_url_is_normalised_and_reported_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The trailing slash goes, so the client can join a path onto it."""
+    monkeypatch.setenv("DCP_PROMETHEUS_URL", "http://prometheus:9090/")
+    loaded = load_settings()
+    assert loaded.prometheus_url == "http://prometheus:9090"
+    assert loaded.prometheus_configured is True
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "prometheus:9090",
+        "ftp://prometheus:9090",
+        "file:///etc/passwd",
+        "http://user:password@prometheus:9090",
+        "http://prometheus:9090#fragment",
+        "http://prometheus:9090 ",
+        "http://prometheus:9090\nX-Injected: 1",
+        "http:// prometheus:9090",
+        "http://",
+        "http:///no-host",
+    ],
+)
+def test_a_url_that_would_be_fetched_is_validated_at_load_time(
+    monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    """The three checks ``app/core/ssrf.py`` applies, enforced here instead.
+
+    ``DCP_PROMETHEUS_URL`` deliberately does not go through the
+    registered-URL path (see ``app/metrics/client.py``), so the scheme,
+    credential, fragment and whitespace rules have to hold here or they hold
+    nowhere. Rejecting at load time keeps all of it out of the request path.
+    """
+    monkeypatch.setenv("DCP_PROMETHEUS_URL", bad)
+    with pytest.raises(ConfigurationError) as caught:
+        load_settings()
+    assert "DCP_PROMETHEUS_URL" in str(caught.value)
+    # The rejected value is never echoed: it can carry a credential.
+    assert "password" not in str(caught.value)
+
+
+def test_the_same_checks_now_cover_the_oidc_urls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One validator, three fields: the OIDC URLs are fetched or redirected to.
+
+    A credential in ``DCP_OIDC_ISSUER`` would reach every log line that
+    records the issuer, and a fragment there means the value was pasted out of
+    a browser. Both were accepted before M2.1.
+    """
+    monkeypatch.setenv("DCP_OIDC_ISSUER", "http://user:secret@idp.invalid")
+    with pytest.raises(ConfigurationError) as caught:
+        load_settings()
+    assert "DCP_OIDC_ISSUER" in str(caught.value)
+    assert "secret" not in str(caught.value)
+
+
+def test_prometheus_must_use_https_outside_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    """docs/SECURITY.md §19.3 permits plain http for allowlisted hosts only.
+
+    This URL is not allowlist-gated, so the remaining honest rule is https
+    everywhere but ``local``. An internal Prometheus without TLS has to be
+    fronted by something that has it.
+    """
+    monkeypatch.setenv("DCP_ENVIRONMENT", "production")
+    monkeypatch.setenv("DCP_DEMO_MODE", "false")
+    monkeypatch.setenv("DCP_PROMETHEUS_URL", "http://prometheus:9090")
+    with pytest.raises(ConfigurationError) as caught:
+        load_settings()
+    assert "prometheus_url must use https" in str(caught.value)
+
+    monkeypatch.setenv("DCP_PROMETHEUS_URL", "https://prometheus.example.invalid")
+    assert load_settings().prometheus_url == "https://prometheus.example.invalid"
+
+
+def test_the_prometheus_timeout_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unbounded deadline is not a deadline (CLAUDE.md §5)."""
+    for bad in ("0", "-1", "61"):
+        monkeypatch.setenv("DCP_PROMETHEUS_TIMEOUT_SECONDS", bad)
+        with pytest.raises(ConfigurationError):
+            load_settings()

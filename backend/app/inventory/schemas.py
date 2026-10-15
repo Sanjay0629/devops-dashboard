@@ -76,12 +76,26 @@ _HOSTNAME_PATTERN: Final = re.compile(rf"^{_HOSTNAME_LABEL}(\.{_HOSTNAME_LABEL})
 #: ``host:port`` — the Prometheus ``instance`` label's form (AD-04). Validated
 #: because a mismatch here does not fail loudly: metrics simply never attach to
 #: the server, which looks like a monitoring gap rather than a typo.
+#:
+#: Public because ``app/metrics/templates.py`` re-applies it before putting the
+#: value into a PromQL selector. Validating once at the write boundary is where
+#: a typo gets a useful error message; validating again at the point of
+#: interpolation is what makes the renderer safe regardless of how the row got
+#: there (a seed, a migration, a direct UPDATE).
 _METRICS_INSTANCE_HOST: Final = (
     rf"(?:{_HOSTNAME_LABEL}(\.{_HOSTNAME_LABEL})*"  # DNS name
     r"|\[[0-9A-Fa-f:]+\]"  # bracketed IPv6
     r"|(?:\d{1,3}\.){3}\d{1,3})"  # IPv4
 )
-_METRICS_INSTANCE_PATTERN: Final = re.compile(rf"^{_METRICS_INSTANCE_HOST}:\d{{1,5}}$")
+#: ``\Z``, not ``$``: in Python ``$`` also matches immediately before a
+#: trailing newline, so a value ending in one satisfied a ``$``-anchored
+#: pattern.
+#: Harmless at the write boundary (it is a typo that gets stored), but this
+#: value is interpolated into a PromQL string literal, and a validator that
+#: accepts a trailing control character is not the guard the renderer is
+#: relying on. The sibling patterns in this module have the same slip and are
+#: recorded in PROGRESS.md rather than changed here (CLAUDE.md §3).
+METRICS_INSTANCE_PATTERN: Final = re.compile(rf"^{_METRICS_INSTANCE_HOST}:\d{{1,5}}\Z")
 
 #: ``org/repo``, the non-URL form §18.2 permits.
 _ORG_REPO_PATTERN: Final = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
@@ -136,7 +150,7 @@ def _check_ip(value: str | None) -> str | None:
 def _check_metrics_instance(value: str | None) -> str | None:
     if value is None:
         return None
-    if not _METRICS_INSTANCE_PATTERN.match(value):
+    if not METRICS_INSTANCE_PATTERN.match(value):
         raise ValueError("must be host:port, matching the Prometheus instance label")
     return value
 
