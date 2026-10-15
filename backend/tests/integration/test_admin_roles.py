@@ -140,14 +140,27 @@ def _create_other_user(engine: Engine, label: str) -> uuid.UUID:
         ).scalar_one()
 
 
-def _denied_rows(engine: Engine) -> list[dict[str, Any]]:
+def _denied_rows(engine: Engine, actor_id: uuid.UUID) -> list[dict[str, Any]]:
+    """The ``AUTHZ_DENIED`` rows *this* caller produced, newest first.
+
+    Scoped to one actor deliberately. ``occurred_at`` defaults to ``now()``,
+    which is the *transaction* timestamp rather than the insert timestamp, so
+    ordering by it does not order rows by insertion: a row written late inside
+    a transaction that began early carries an earlier ``occurred_at`` than a
+    row inserted before it. This module produces dozens of denials, which left
+    ``rows[0]`` free to be another test's row (PROGRESS.md issue 51). Every
+    test here logs in as a fresh user, so the actor is what makes the
+    selection its own; ``id`` (uuid7) only breaks an exact tie.
+    """
     with engine.connect() as connection:
         rows = connection.execute(
             text(
                 "SELECT actor_id, actor_type, outcome, sanitized_metadata, target_type"
                 " FROM audit_events WHERE action_type = 'AUTHZ_DENIED'"
-                " ORDER BY occurred_at DESC"
-            )
+                " AND actor_id = :actor"
+                " ORDER BY occurred_at DESC, id DESC"
+            ),
+            {"actor": actor_id},
         ).mappings()
         return [dict(row) for row in rows]
 
@@ -469,7 +482,7 @@ async def test_granting_production_scope_requires_holding_it(
     # Administrator, but only in staging.
     _grant(migrated, caller, "ADMINISTRATOR", scope='{"environment":["staging"]}')
     target = _create_other_user(migrated, f"escalate-{uuid.uuid4().hex[:8]}")
-    denied_before = len(_denied_rows(migrated))
+    denied_before = len(_denied_rows(migrated, caller))
     try:
         attempt = await _call(
             client,
@@ -480,7 +493,7 @@ async def test_granting_production_scope_requires_holding_it(
         assert attempt.status_code == 422
         assert attempt.json()["error"]["code"] == "not_permitted"
         # And the attempt is in the trail, not just in the response.
-        rows = _denied_rows(migrated)
+        rows = _denied_rows(migrated, caller)
         assert len(rows) == denied_before + 1
         assert rows[0]["sanitized_metadata"]["reason"] == "delegation_escalation"
         assert rows[0]["actor_id"] == caller
@@ -741,8 +754,9 @@ async def test_terminating_another_users_sessions(
                 text(
                     "SELECT sanitized_metadata FROM audit_events"
                     " WHERE action_type = 'SESSION_TERMINATED'"
-                    " ORDER BY occurred_at DESC LIMIT 1"
-                )
+                    " AND actor_id = :caller"
+                ),
+                {"caller": caller},
             ).scalar_one()
         assert metadata == {"sessions_terminated": 2}
     finally:
@@ -775,7 +789,7 @@ async def test_scope_references_must_exist(
     caller = _user_id(migrated, provider.subject)
     _grant(migrated, caller, "ADMINISTRATOR")
     target = _create_other_user(migrated, f"scope-ref-{uuid.uuid4().hex[:8]}")
-    denied_before = len(_denied_rows(migrated))
+    denied_before = len(_denied_rows(migrated, caller))
     try:
         response = await _call(
             client,
@@ -791,7 +805,7 @@ async def test_scope_references_must_exist(
         # And it is *not* audited as an escalation attempt: an unknown id is a
         # typo, and an audit row calling it an escalation would be a false
         # record of what happened.
-        assert len(_denied_rows(migrated)) == denied_before
+        assert len(_denied_rows(migrated, caller)) == denied_before
     finally:
         _revoke_all(migrated, target)
         _revoke_all(migrated, caller)
@@ -843,11 +857,11 @@ async def test_a_denial_is_audited_and_attributed(
     client, provider = auth_app
     await _login(client, provider)
     caller = _user_id(migrated, provider.subject)
-    before = len(_denied_rows(migrated))
+    before = len(_denied_rows(migrated, caller))
 
     assert (await client.get(ADMIN_USERS)).status_code == 403
 
-    rows = _denied_rows(migrated)
+    rows = _denied_rows(migrated, caller)
     assert len(rows) == before + 1
     row = rows[0]
     assert row["actor_type"] == "USER"
@@ -1014,8 +1028,9 @@ async def test_bootstrap_grants_the_first_administrator_once(
                     text(
                         "SELECT actor_type, actor_id, actor_label, sanitized_metadata"
                         " FROM audit_events WHERE action_type = 'ROLE_GRANTED'"
-                        " ORDER BY occurred_at DESC LIMIT 1"
-                    )
+                        " AND target_id = :grant"
+                    ),
+                    {"grant": grant_id},
                 )
                 .mappings()
                 .one()
