@@ -2,8 +2,18 @@
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
 **Last updated:** 2026-10-15
-**Updated by:** the issue 51 fix session (order-dependent audit-row assertions),
-which changed only that issue's rows here. Before it, M1.6 implementation session
+**Updated by:** the issue 44 session — the **server edit form and association
+management UI**, taken deliberately before M1.7 so that milestone's first E2E suite
+is not written around a missing page. §14.4, §14.6 and §14.7 now have controls.
+**No backend file changed**, and the evidence is that `npm run generate:api`
+regenerated `frontend/src/api/schema.ts` with no diff. Read the **issue 44 row in
+[§6](#6-known-issues)** first: it records the four decisions the contract leaves to a
+client — how a cleared optional field is expressed, why immutable fields are absent
+rather than disabled, how an environment change is confirmed, and why a `409` is
+shown and never retried — plus the one limitation the advisory permission list
+cannot avoid. Before it, the issue 51 fix session (order-dependent audit-row
+assertions), which changed only that issue's rows here. Before that, M1.6
+implementation session
 (dashboard shell, database-only): the three decisions taken before the milestone —
 add `openapi-typescript` first, build paging controls, leave the server edit form
 alone — are implemented as agreed. The thing to read first is the **two shape
@@ -37,6 +47,12 @@ inside the SQL, cursor pagination, row-level idempotency, and five routed fronte
 pages. As of M1.6 it also has a **dashboard shell over PostgreSQL**: endpoints §13.1
 and §13.2, a scope-keyed Redis cache, and a landing page whose every section states
 which source it came from or which milestone will give it one.
+
+As of the **issue 44** change (2026-10-15) the inventory UI is no longer
+read-and-register only. A server's mutable fields (§14.4) are editable at
+`/servers/:serverId/edit`, and its application associations (§14.6, §14.7) are
+managed from the server detail page — which is what M1.7's E2E suite will be written
+against, rather than around.
 
 It still monitors nothing — see [§4](#4-pending-milestones). That is the point of
 M1.6 rather than a gap in it: of the dashboard's nine sections exactly two have a
@@ -680,7 +696,7 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 
 | Phase | Milestones | Status |
 |---|---|---|
-| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · M1.7 consolidation | **M1.7 next**, after issue 44 ([§9](#9-next-recommended-task)) |
+| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · M1.7 consolidation | **M1.7 next** ([§9](#9-next-recommended-task)); issue 44 done 2026-10-15 |
 | 2 — Monitoring | M2.1 Prometheus client · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | Pending |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
@@ -835,7 +851,7 @@ Once a decision is reviewed, record the date and the outcome here.
 |---|---|---|---|
 | 42 | **An idempotent replay is judged against the row's *current* columns, not the original request body.** Migration 0004 stores the key and the requester but not the payload, so `create_server` and `create_application` compare the incoming body against the stored row. A key replayed after the resource was edited therefore reads as "a different body" and is refused with `409`, where [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §7 describes `409` only for a genuinely different request. | Contract divergence in one direction only — it never silently returns something the caller did not ask for | Either store a hash of the canonical body in a third column, or accept and document the narrower rule. Needs a decision; the safe behaviour is in place meanwhile. Documented in [`docs/DATABASE.md`](docs/DATABASE.md) §14. |
 | 43 | **RESOLVED 2026-10-15 (M1.6).** `openapi-typescript` is wired up as a dev dependency, `frontend/src/api/schema.ts` is generated and committed, `npm run generate:api` regenerates it, and the `contracts` CI job plus a `scripts/check-all.sh` step fail on drift. The hand-written interfaces are deleted. The generator immediately caught two nullability claims the hand-written types got wrong (see [§3](#3-in-progress-milestone)). Previously: **TypeScript API types are still hand-written.** [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §11 and CLAUDE.md §5 require them to be generated from the backend OpenAPI schema into a committed file, with CI failing on drift. `frontend/src/api/inventory.ts` is hand-written instead, because wiring `openapi-typescript` would be a **second** new frontend dependency in a milestone that agreed to exactly one (React Router), and that was not a decision to take unilaterally. The shapes are checked against the real responses by the backend suites rather than by the compiler. | Drift risk between frontend and backend; no behavioural fault today | Add `openapi-typescript` (or equivalent) plus the CI drift gate, and delete the hand-written interfaces. It is a small, self-contained change and it should be the next thing done to this file. |
-| 44 | **No UI for editing a server or managing associations.** §14.4, §14.6 and §14.7 are implemented, audited and tested on the backend, and the frontend has no control for them — only registration, read and retire. [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) M1.5 lists "edit forms" and "association management" among the frontend tasks. | Incomplete milestone task, stated rather than hidden | Add an edit form and an association control. Small, and natural to do alongside M1.6's shared `StatusBadge`/`EmptyState` components, which also replace `pages/inventory/states.tsx`. |
+| 44 | **RESOLVED 2026-10-15.** `ServerEditForm` (§14.4) at `/servers/:serverId/edit`, and an `AssociateApplication` control plus per-row **Remove** buttons (§14.6, §14.7) on the server detail page. Registration and edit share one file and two input components rather than being two forms. **No backend file changed** — `npm run generate:api` regenerated `schema.ts` with no diff, which is the check that proves it, and the two closed sets the edit form offers are now *typed from* the generated contract (`Exclude<ServerUpdate['environment'], null \| undefined>`), so a backend enum change breaks the build instead of leaving an option the API rejects. **Four decisions the contract leaves to a client, each taken deliberately and each with a test:** (a) **immutable fields are not rendered at all**, not rendered disabled — §14.4 answers `422 not_permitted`, so there is nothing to type into; the hostname is still *shown*, as text, because it identifies the host. (b) **An emptied optional box sends `null`, not an omission.** The backend dumps the body with `exclude_unset=True`, so absent means "leave it" and `null` means "unset it"; omitting a cleared field would make clearing impossible. `display_name` is excluded from that rule and marked `required` instead, because its column is `NOT NULL`. (c) **An environment change is confirmed explicitly** — Save stays disabled until a checkbox naming both environments is ticked — and carries the warning that it requires Administrator and audits `SERVER_ENVIRONMENT_CHANGED`. A `404` that follows one is annotated with both of its possible causes rather than one, because §2 answers `404` and not `403` for anything out of scope. (d) **A `409` from `If-Unmodified-Since` is shown with a "discard my changes and reload" button and never retried or overwritten.** The assertion that holds this is the `fetch` call count: a silent re-send without the precondition would look identical on screen. Association candidates are **not** filtered against the server's existing ones — §14.6 answers `409` with a message that says exactly that, and a client-side exclusion would be a second, divergent copy of a backend rule. Previously: **no UI for editing a server or managing associations**, only registration, read and retire, while [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) M1.5 listed "edit forms" and "association management" among the frontend tasks. | Was an incomplete M1.5 frontend task, stated rather than hidden | **One limitation, recorded rather than fixed:** the "your session does not list Administrator" note reads `admin:users` from the advisory `permissions` array, mirroring the backend's own stand-in for "is an Administrator" — and that array is **scope-blind** (§12.4). An Administrator scoped away from the *destination* environment therefore sees no warning and learns it from the `404`. Narrowing it would need a scope-aware pre-check in the UI, which is a second copy of the matcher and worse than the `404`. Tests: `ServerEditForm.test.tsx` (18) and `ServerDetail.test.tsx` (11), including the authorisation paths — hidden controls, and a test that calls `removeAssociation` directly *after* the UI has hidden the button to show the client places no gate of its own in front of the API |
 | 45 | **There is no UI for registering an application.** §18.2's body carries `health_check_config`, whose URLs are validated against the SSRF host allowlist at write time — and `DCP_SSRF_HOST_ALLOWLIST` is empty by default, so a form offering a URL box would only ever produce a rejection. Applications are registered through the API until the allowlist is configurable. | Deliberate omission | Revisit when the allowlist has a configuration surface (M4/M6). |
 | 46 | **RESOLVED 2026-10-15 (M1.6).** `useCursorPaging` + `Pager`, used by the dashboard status table, the server list and the application list. Previously: **`page.has_more` is reported but there is no "next page" control.** The backend mints a cursor and the list pages say more results exist; the UI asks the operator to narrow the filters instead. | Usability gap, no correctness fault | Paging controls belong with M1.6's list components. |
 | 47 | **The cursor signing key is derived from `DCP_DATABASE_URL`**, not from a key of its own, so rotating the database password invalidates in-flight cursors (the client sees `422 invalid_cursor` and re-fetches one page). Chosen over a new mandatory secret, which PRD §11 forbids, and over a per-process random key, which would break cursors across instances and restarts. | Accepted, documented in `app/core/pagination.py` | Add an optional `DCP_CURSOR_SIGNING_KEY` with this as the fallback, if it ever matters. |
@@ -855,6 +871,54 @@ Once a decision is reviewed, record the date and the outcome here.
 
 All results below were produced by running the commands and reading the output.
 Nothing here is inferred.
+
+### Executed — `./scripts/check-all.sh`, 15/15 passed (issue 44, 2026-10-15)
+
+Run from `D:/devops-dashboard` against the live Compose stack, both variables set so
+nothing skipped. The integration suite was also run on its own first, as
+`uv run pytest -m integration`, before the full script — **never concurrently**
+(issue 51's first trap: the session-scoped `migrated` fixture drops the schema under
+a second session).
+
+| Check | Result |
+|---|---|
+| backend: ruff lint | ok |
+| backend: ruff format | ok |
+| backend: mypy | ok |
+| backend: bandit | ok |
+| backend: unit tests | **360 passed**, 231 deselected, 1 warning, 18.76s |
+| backend: integration | **231 passed**, 360 deselected, 1 warning, 54.31s |
+| backend: pip-audit | ok |
+| frontend: eslint | ok |
+| frontend: prettier | ok |
+| frontend: tsc | ok |
+| frontend: vitest | **105 passed**, 11 files |
+| frontend: build | ok |
+| frontend: npm audit | 0 vulnerabilities |
+| contracts: api types | ok — regenerated, **no drift** |
+| docs: link check | ok — 397 relative links in 13 files, 0 problems |
+
+`ALL CHECKS PASSED`, exit 0.
+
+The backend numbers are **identical** to M1.6's (360 / 231), which is the point: this
+change touched no backend file. The frontend went from 76 to **105** — 29 new tests
+in two new modules, `ServerEditForm.test.tsx` (18) and `ServerDetail.test.tsx` (11),
+both including an `axe-core` pass.
+
+Standalone integration run, before the script:
+
+```
+231 passed, 360 deselected, 1 warning in 58.49s
+```
+
+**One flake found and fixed during this session, in the new tests rather than in the
+application.** Two association tests selected a candidate from the `<select>` after
+waiting only for the *server* payload, while the options come from §18.1 — a second
+request. They passed when the file ran alone and one failed inside the full
+`check-all.sh` run. Both now wait for the option itself; `npx vitest run` was then
+run **three consecutive times, 105 passed each**, before the full script. Worth
+knowing before M1.7's E2E suite: a page that fetches twice has two things to wait
+for, and waiting on the first reads as a passing test.
 
 ### Executed — `./scripts/check-all.sh`, 15/15 passed (M1.6, 2026-10-15)
 
@@ -1266,24 +1330,26 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-**Issue 44 — the server edit form and association management**, as a small change
-*before* M1.7.
-
-This was deliberately excluded from M1.6 and the reason still holds: §14.4, §14.6 and
-§14.7 are implemented, audited and tested on the backend with no UI at all, and
-M1.7's first E2E suite would otherwise be written around that gap and lock it into
-Phase 1. M1.6 built the components it needs — `StatusBadge`, `ErrorState` and the
-shared `Result` handling — so it is now a page, not a foundation.
-
-**Then M1.7 — Phase 1 consolidation**
+**M1.7 — Phase 1 consolidation**
 ([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m17--phase-1-consolidation)).
-Its dependency is satisfied: M1.6 is complete.
+Its dependencies are satisfied: M1.6 is complete, and **issue 44 is done**
+(2026-10-15) — the UI gap that would otherwise have shaped the first E2E suite around
+a missing page is closed, which was the whole reason for taking it first.
 
 **What M1.7 can build on:**
 
 - `frontend/src/api/schema.ts` and `npm run generate:api` — the E2E suite should use
   the generated types rather than hand-writing fixtures.
-- `useCursorPaging` / `Pager`, already used in three places.
+- `useCursorPaging` / `Pager`, now used in four places — the fourth is issue 44's
+  application picker, which pages its candidates rather than showing the first 50 as
+  though they were all of them.
+- **Issue 44's write controls**, so the E2E path can cover a write that is not a
+  registration: the `/servers/:serverId/edit` form, the `If-Unmodified-Since`
+  conflict, the environment-change confirmation, and associate/remove on the detail
+  page. Two of those are worth an E2E test specifically because jsdom cannot prove
+  them — the `409` needs two real sessions racing, and the environment change needs a
+  caller who genuinely lacks Administrator rather than one whose advisory array omits
+  it.
 - The dashboard as the landing route, which is the natural first step of the E2E
   path "login → dashboard → server list → register server → unauthorised action
   rejected".
@@ -1326,6 +1392,39 @@ Its dependency is satisfied: M1.6 is complete.
    dashboard total.
 
 ## 10. Scope confirmation
+
+**Issue 44 session (2026-10-15).** Scope was issue 44 and nothing else: the server
+edit form and association management UI, taken before M1.7 for the reason in
+[§9](#9-next-recommended-task). **Frontend only.**
+
+**Added:** `frontend/src/pages/servers/ServerEditForm.test.tsx` and
+`frontend/src/pages/servers/ServerDetail.test.tsx`.
+
+**Modified:**
+
+- **`frontend/src/pages/servers/ServerForm.tsx`** — extended rather than duplicated,
+  as the task required. The registration form's inline `field`/`choice` closures
+  became two module-level components, `TextField` and `ChoiceField`, and the new
+  `ServerEditForm` uses them. They are two components rather than one with a mode
+  flag: edit offers a different field set, loads before it renders, and carries the
+  environment warning and the `409` that registration has no equivalent of.
+- **`frontend/src/pages/servers/ServerDetail.tsx`** — an `Edit` link, a `Remove`
+  button per association, and an `AssociateApplication` control (search box, paged
+  candidate `<select>`, optional `role_on_server`).
+- **`frontend/src/api/inventory.ts`** — `updateServer` gained the
+  `If-Unmodified-Since` precondition, converting the row's `updated_at` to an
+  HTTP-date **inside the client** so the page never handles date formats, and sending
+  no header at all rather than a malformed one. `associateApplication` gained the
+  optional `role_on_server`. Two generated-type aliases added, `ServerUpdate` and
+  `AssociateApplication`.
+- **`frontend/src/App.tsx`** — the `/servers/:serverId/edit` route.
+
+**Not touched:** every backend file. §14.4, §14.6 and §14.7 were already implemented,
+audited and tested, and `npm run generate:api` regenerating `schema.ts` with no diff
+is the evidence that none of them moved. No migration; the schema is still at `0004`.
+No new dependency — `axe-core`, `Pager`/`useCursorPaging`, `StatusBadge`,
+`EmptyState` and `ErrorState` were all already here, which is what M1.6 left them
+for.
 
 **M1.6 implementation session (2026-10-15).** Scope was milestone M1.6. Added the
 dashboard module (`app/dashboard/router.py`, `service.py`, `schemas.py`),

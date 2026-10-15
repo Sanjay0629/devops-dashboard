@@ -32,6 +32,9 @@ export type AssociatedApplication = Schemas['AssociatedApplication'];
 export type ApplicationSummary = Schemas['ApplicationSummary'];
 export type ApplicationDetail = Schemas['ApplicationDetail'];
 export type AssociatedServer = Schemas['AssociatedServer'];
+/** §14.4's mutable fields. The immutable ones are not in it to be sent. */
+export type ServerUpdate = Schemas['ServerUpdateRequest'];
+export type AssociateApplication = Schemas['AssociateApplicationRequest'];
 
 export interface Page<T> {
   items: T[];
@@ -185,13 +188,30 @@ export async function registerServer(body: Record<string, unknown>): Promise<Res
   });
 }
 
+/**
+ * §14.4. `unmodifiedSince` is the `updated_at` the caller's copy carries.
+ *
+ * Sent as `If-Unmodified-Since`, so a row someone else edited in the meantime
+ * answers `409` instead of being silently overwritten. The conversion to an
+ * HTTP-date happens here rather than in the page: an HTTP-date has no
+ * sub-second part, and the backend compares at whole-second resolution to
+ * match (`router_servers._unmodified_since`).
+ *
+ * An unparseable timestamp sends **no** header rather than a malformed one —
+ * a malformed date is a `422`, which would read to the operator as a problem
+ * with the fields they just edited.
+ */
 export async function updateServer(
   id: string,
-  body: Record<string, unknown>,
+  body: ServerUpdate,
+  unmodifiedSince?: string,
 ): Promise<Result<ServerDetail>> {
+  const at = unmodifiedSince === undefined ? null : new Date(unmodifiedSince);
+  const precondition =
+    at !== null && !Number.isNaN(at.getTime()) ? { 'If-Unmodified-Since': at.toUTCString() } : {};
   return call(`/servers/${encodeURIComponent(id)}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...precondition },
     body: JSON.stringify(body),
   });
 }
@@ -203,11 +223,16 @@ export async function retireServer(id: string): Promise<Result<null>> {
 export async function associateApplication(
   serverId: string,
   applicationId: string,
+  roleOnServer?: string,
 ): Promise<Result<ServerDetail>> {
+  const body: AssociateApplication = { application_id: applicationId };
+  // Omitted rather than sent as `null`: `role_on_server` has a `min_length`,
+  // so an empty box is "not supplied", not "the empty string".
+  if (roleOnServer !== undefined && roleOnServer !== '') body.role_on_server = roleOnServer;
   return call(`/servers/${encodeURIComponent(serverId)}/applications`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ application_id: applicationId }),
+    body: JSON.stringify(body),
   });
 }
 

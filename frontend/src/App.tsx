@@ -9,7 +9,7 @@ import { Dashboard } from '@/pages/dashboard/Dashboard';
 import { ApplicationDetail } from '@/pages/applications/ApplicationDetail';
 import { ApplicationList } from '@/pages/applications/ApplicationList';
 import { ServerDetail } from '@/pages/servers/ServerDetail';
-import { ServerForm } from '@/pages/servers/ServerForm';
+import { ServerEditForm, ServerForm } from '@/pages/servers/ServerForm';
 import { ServerList } from '@/pages/servers/ServerList';
 
 /**
@@ -191,6 +191,7 @@ function Shell(): React.JSX.Element {
         {/* Before the :serverId route, or "new" matches as an id. */}
         <Route path="/servers/new" element={<ServerForm />} />
         <Route path="/servers/:serverId" element={<ServerDetail />} />
+        <Route path="/servers/:serverId/edit" element={<ServerEditForm />} />
         <Route path="/applications" element={<ApplicationList />} />
         <Route path="/applications/:applicationId" element={<ApplicationDetail />} />
         <Route
