@@ -11,30 +11,32 @@
  * through the API until the allowlist is configurable in the UI.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { listApplications, type ApplicationSummary, type Page, type Result } from '@/api/inventory';
+import { listApplications } from '@/api/inventory';
 import { EmptyState, LoadingState } from '@/components/EmptyState';
 import { Pager } from '@/components/Pager';
 import { useCursorPaging } from '@/components/useCursorPaging';
+import { useLatestResponse } from '@/components/useLatestResponse';
 import { ErrorState } from '@/components/ErrorState';
 import { StatusBadge } from '@/components/StatusBadge';
 
 export function ApplicationList(): React.JSX.Element {
   const [q, setQ] = useState('');
-  const [result, setResult] = useState<Result<Page<ApplicationSummary>> | null>(null);
   const paging = useCursorPaging();
   const { cursor, reset } = paging;
 
-  const load = useCallback(async () => {
-    setResult(null);
-    setResult(await listApplications({ q: q.trim() || undefined, cursor: cursor ?? undefined }));
-  }, [q, cursor]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // See `useLatestResponse`: the search box issues a request per change, and
+  // the answers do not necessarily arrive in the order they were asked for.
+  const {
+    value: result,
+    loading,
+    reload: load,
+  } = useLatestResponse(
+    () => listApplications({ q: q.trim() || undefined, cursor: cursor ?? undefined }),
+    [q, cursor],
+  );
 
   // A search change is a different collection, so page 1.
   useEffect(() => {
@@ -78,7 +80,7 @@ export function ApplicationList(): React.JSX.Element {
         </button>
       </form>
 
-      {result === null && <LoadingState what="applications" />}
+      {loading && <LoadingState what="applications" />}
       {result?.kind === 'ok' && result.value.items.length === 0 && (
         <EmptyState message="No applications are registered." />
       )}

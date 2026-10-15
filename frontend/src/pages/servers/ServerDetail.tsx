@@ -12,7 +12,7 @@
  * has none rather than that nothing collects them yet.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import {
@@ -21,10 +21,6 @@ import {
   readServer,
   removeAssociation,
   retireServer,
-  type ApplicationSummary,
-  type Page,
-  type Result,
-  type ServerDetail as ServerDetailShape,
 } from '@/api/inventory';
 import { PERMISSIONS } from '@/auth/permissions';
 import { useCanRender, useIsReadOnly } from '@/auth/useSession';
@@ -34,6 +30,7 @@ import { ErrorState, type Failed } from '@/components/ErrorState';
 import { Pager } from '@/components/Pager';
 import { StatusBadge } from '@/components/StatusBadge';
 import { useCursorPaging } from '@/components/useCursorPaging';
+import { useLatestResponse } from '@/components/useLatestResponse';
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -77,7 +74,6 @@ function AssociateApplication({
   onAssociated: () => void;
 }): React.JSX.Element {
   const [q, setQ] = useState('');
-  const [candidates, setCandidates] = useState<Result<Page<ApplicationSummary>> | null>(null);
   const [chosen, setChosen] = useState('');
   const [role, setRole] = useState('');
   const [failure, setFailure] = useState<Failed<unknown> | null>(null);
@@ -85,16 +81,10 @@ function AssociateApplication({
   const paging = useCursorPaging();
   const { cursor, reset } = paging;
 
-  const load = useCallback(async () => {
-    setCandidates(null);
-    setCandidates(
-      await listApplications({ q: q.trim() || undefined, cursor: cursor ?? undefined }),
-    );
-  }, [q, cursor]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { value: candidates, loading } = useLatestResponse(
+    () => listApplications({ q: q.trim() || undefined, cursor: cursor ?? undefined }),
+    [q, cursor],
+  );
 
   // A different search is a different collection, so page 1.
   useEffect(() => {
@@ -196,7 +186,7 @@ function AssociateApplication({
         </button>
       </div>
 
-      {candidates === null && <LoadingState what="applications" />}
+      {loading && <LoadingState what="applications" />}
       {candidates !== null && candidates.kind !== 'ok' && <ErrorState result={candidates} />}
       {candidates?.kind === 'ok' && items.length === 0 && (
         <EmptyState message="No applications match that search." />
@@ -216,19 +206,12 @@ function AssociateApplication({
 export function ServerDetail(): React.JSX.Element {
   const { serverId = '' } = useParams();
   const navigate = useNavigate();
-  const [result, setResult] = useState<Result<ServerDetailShape> | null>(null);
   const [retireError, setRetireError] = useState<Failed<null> | null>(null);
   const [associationError, setAssociationError] = useState<Failed<null> | null>(null);
   const mayWrite = useCanRender(PERMISSIONS.serverWrite);
   const readOnly = useIsReadOnly();
 
-  const load = useCallback(async () => {
-    setResult(await readServer(serverId));
-  }, [serverId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { value: result, reload: load } = useLatestResponse(() => readServer(serverId), [serverId]);
 
   if (result === null) return <LoadingState what="this server" />;
   if (result.kind !== 'ok') return <ErrorState result={result} />;

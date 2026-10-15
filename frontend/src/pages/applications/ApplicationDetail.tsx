@@ -8,18 +8,13 @@
  * and §18.6's per-environment health will slot into the same shape.
  */
 
-import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
-import {
-  readApplication,
-  type ApplicationDetail as ApplicationDetailShape,
-  type AssociatedServer,
-  type Result,
-} from '@/api/inventory';
+import { readApplication, type AssociatedServer } from '@/api/inventory';
 import { DataStateBanner } from '@/components/DataStateBanner';
 import { LoadingState } from '@/components/EmptyState';
 import { ErrorState } from '@/components/ErrorState';
+import { useLatestResponse } from '@/components/useLatestResponse';
 import { StatusBadge } from '@/components/StatusBadge';
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -44,15 +39,10 @@ function byEnvironment(servers: AssociatedServer[]): [string, AssociatedServer[]
 
 export function ApplicationDetail(): React.JSX.Element {
   const { applicationId = '' } = useParams();
-  const [result, setResult] = useState<Result<ApplicationDetailShape> | null>(null);
-
-  const load = useCallback(async () => {
-    setResult(await readApplication(applicationId));
-  }, [applicationId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { value: result } = useLatestResponse(
+    () => readApplication(applicationId),
+    [applicationId],
+  );
 
   if (result === null) return <LoadingState what="this application" />;
   if (result.kind !== 'ok') return <ErrorState result={result} />;

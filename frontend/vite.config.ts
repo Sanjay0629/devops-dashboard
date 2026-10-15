@@ -36,9 +36,17 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     css: true,
+    // Component tests only. Without this, vitest also collects `e2e/*.spec.ts`
+    // and Playwright's `test.describe` throws inside the vitest runner — two
+    // runners fighting over one glob, which reads as a broken suite rather
+    // than as a configuration problem (M1.7).
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'lcov'],
+      // `cobertura` as well as lcov, so scripts/check_coverage_diff.py reads
+      // one format at both ends of the stack rather than one parser per
+      // toolchain (OPEN-22's changed-line floor).
+      reporter: ['text', 'lcov', 'cobertura'],
       include: ['src/**/*.{ts,tsx}'],
       exclude: ['src/test/**', 'src/main.tsx', 'src/**/*.test.{ts,tsx}'],
     },

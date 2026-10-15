@@ -26,6 +26,16 @@ coverage/
 *.tsbuildinfo
 .vite/
 
+# Playwright (M1.7). `e2e/.auth` holds **live session cookies** for the
+# synthetic accounts — short-lived and against a local stack, but a session
+# token is a credential and credentials are never committed (docs/SECURITY.md
+# §9, mandatory rule 3). The rest is per-run output: traces, screenshots and
+# the HTML report.
+frontend/e2e/.auth/
+frontend/e2e/.artifacts/
+playwright-report/
+test-results/
+
 # Editors / OS
 .vscode/
 .idea/
