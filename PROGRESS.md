@@ -3,8 +3,16 @@
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
 **Last updated:** 2026-10-16
 **Updated by:** the **M2.1 implementation session (Prometheus client and metric
-templates)** — the first milestone of Phase 2, and the first time this product reads
-a system it did not also write. Read [§3](#3-in-progress-milestone) first. The two
+templates)**, which then also resolved **`TS-01`** — the charting library — because
+M2.2 was blocked on it and §9 said to decide it with a test in hand rather than
+under that milestone's deadline. The answer is **`d3-shape` + `d3-scale`, used
+directly with no React wrapper**; the reasoning, the measurements and the three
+rejected alternatives are in
+[`docs/TECH_STACK.md`](docs/TECH_STACK.md#25-charting-library) §2.5, and the gap test
+the decision rests on is kept as a standing regression test.
+
+**M2.1 itself** was the first milestone of Phase 2, and the first time this product
+reads a system it did not also write. Read [§3](#3-in-progress-milestone) first. The two
 things most worth knowing before touching anything:
 
 1. **The changed-line coverage gate was reporting a pass it had not earned.** M2.1
@@ -72,8 +80,8 @@ enforcement) and M1.3
 
 ## 1. Current project stage
 
-**Stage: Phase 2 — Monitoring. M1.1 – M1.7 and M2.1 complete. M2.2 is next, and it
-is blocked on `TS-01` (the charting library) being selected.**
+**Stage: Phase 2 — Monitoring. M1.1 – M1.7 and M2.1 complete. M2.2 is next and is
+no longer blocked: `TS-01` was resolved on 2026-10-16.**
 
 **As of M2.1 (2026-10-16) the product reads something other than its own
 database.** Prometheus and `node-exporter` are configured, running and scraped, and
@@ -220,8 +228,8 @@ development aid and is labelled as one in its own README, in the Compose file an
 
 ## 3. In-progress milestone
 
-**None.** M2.1 is finished. M2.2 has not begun, and it should not begin before
-`TS-01` is selected — see [§9](#9-next-recommended-task).
+**None.** M2.1 is finished, and `TS-01` — the decision M2.2 was blocked on — is
+resolved. M2.2 has not begun. See [§9](#9-next-recommended-task).
 
 ### What M2.1 implemented (2026-10-16)
 
@@ -1114,7 +1122,7 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 | Phase | Milestones | Status |
 |---|---|---|
 | 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · ~~M1.7 consolidation~~ **done** | **Phase 1 COMPLETE** 2026-10-15 |
-| 2 — Monitoring | ~~M2.1 Prometheus client~~ **done** · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | **In progress.** M2.1 complete 2026-10-16; M2.2 next ([§9](#9-next-recommended-task)), and it is blocked on `TS-01` being selected |
+| 2 — Monitoring | ~~M2.1 Prometheus client~~ **done** · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | **In progress.** M2.1 complete 2026-10-16 and `TS-01` resolved the same day, so M2.2 ([§9](#9-next-recommended-task)) is next and unblocked |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
 | 5 — Deployments | M5.1 targets + Jenkins client · M5.2 lifecycle · M5.3 build logs · M5.4 production approvals · M5.5 health checks + rollback | Pending |
@@ -1218,7 +1226,7 @@ Once a decision is reviewed, record the date and the outcome here.
 | # | Issue |
 |---|---|
 | 16 | 14 open decisions (`OPEN-01` … `OPEN-25`, see each document's open-decisions table) remain unresolved. Each has a working default, so Phase 1 is not blocked, but `OPEN-02` must be settled before M1.5. |
-| 17 | `TS-01` (charting library) and `TS-02` (systemd metrics source) are unselected. `TS-01` has a functional gate: the library must render data gaps as gaps, not zeros. |
+| 17 | ~~`TS-01` (charting library)~~ **RESOLVED 2026-10-16** — `d3-shape` + `d3-scale` used directly, and its functional gate (a data gap must render as a gap, not a zero) was **tested rather than assumed**, which is what it was waiting for. `TS-02` (systemd metrics source) is still unselected and gates M2.4. |
 | 18 | No exact dependency versions are recorded anywhere, deliberately — versions belong in resolved lockfiles, not in prose. Nothing has been compatibility-tested. |
 | 19 | The documentation set contains 236 relative links; all were verified to resolve to existing files and headings on 2026-10-13. Re-verify after any heading change — moving the `**[MANDATORY]**` labels out of `docs/SECURITY.md` headings during review was needed precisely because they altered 24 anchors. |
 
@@ -1452,6 +1460,99 @@ before filtering and three after, because this exporter's container exposes no
 `tmpfs` mount to drop. The expression is correct and executed; that it *removes* the
 right things is untested, and will be first exercised against a real registered
 server.
+
+### Executed — `TS-01`, the charting-library decision (2026-10-16)
+
+The decision was made **with the test in hand**, which is what PROGRESS §9 asked for
+and what [TECH_STACK.md §2.5](docs/TECH_STACK.md#25-charting-library) means by "the
+gap-rendering criterion must be tested, not assumed". The gate was written first, its
+own failure modes were proven, and only then were candidates run through it. Every
+number below was measured, not estimated.
+
+#### The gap gate, and the proof that it can fail
+
+`frontend/src/components/chart/linePath.test.ts`, **12 tests, all passing.** It
+asserts on the geometry of the rendered SVG path — subpath count *and* vertex count
+— because the two defects have opposite signatures and a test that checks only one
+misses the other:
+
+| Defect | Signature | What an operator reads |
+|---|---|---|
+| Coercion (`null` → `0`) | continuous line, **gains** a vertex on the baseline | a silent host as an idle one |
+| Bridging (`connectNulls`, `spanGaps`) | continuous line, **loses** a vertex | invented data as measured data |
+
+**The gate was then run against a deliberately broken version of the product code**,
+which is stronger evidence than the synthetic paths in its own `describe('the gate
+itself')` block. Removing `.defined()` from `linePath`:
+
+```
+ × breaks the line at a missing sample
+ × plots no vertex on the baseline
+ × keeps the two runs on either side of the hole
+ × draws leading and trailing holes as holes too
+ × draws every-other-sample loss as separate points, not a trend line
+ × renders nothing for a series with no data at all
+AssertionError: continuous line with 5 vertices for 4 real points: the gap was
+  coerced to a value (PRD §4.2) — path: M0,100L100,100L200,200L300,100L400,100
+ Test Files  1 failed (1)
+```
+
+**6 of the 12 failed**, naming the rule and showing the coerced path. Restored, all
+12 pass.
+
+#### The candidates, through the same gate
+
+| Candidate | Gate | Bundle (gzipped) | Notes |
+|---|---|---|---|
+| **`d3-shape` + `d3-scale`** (chosen) | **PASS** — `M0,100L100,100M300,100L400,100`, 2 runs, 4 vertices | **14,926 B** | Gap rule is ours, in one function |
+| Recharts 3.10.1 | PASS by default — `M5,36.67L102.5,36.67M297.5,36.67L395,36.67` | **129,306 B** | Rejected: size, and `role="application"` + 13 tabbables |
+| visx 4.0.0 | PASS with `defined` | 18,480 B | Rejected: a React wrapper over the two packages above |
+| uPlot 1.6.32 | **UNTESTABLE** | not measured | Rejected: canvas, and `TypeError: matchMedia is not a function` under jsdom — it cannot even be imported |
+| Hand-rolled, zero deps | PASS | **348 B** | Adopted for the geometry; has no tick selection, which M2.2 needs |
+
+Each candidate was also run through the gate **with its defect switched on**, so the
+gate's discrimination is evidence rather than assertion: Recharts with
+`connectNulls` → `FAIL: the gap was bridged`; Recharts fed `null → 0` → `FAIL: … 5
+vertices for 4 real points … coerced`; visx without `defined` → the same coercion
+failure.
+
+#### Bundle impact on the application
+
+```
+before: dist/assets/index-CeSHwmyG.js  313,223 B raw   94,583 B gzipped
+after:  dist/assets/index-CeSHwmyG.js  313,223 B raw   94,583 B gzipped
+```
+
+**Byte-identical, same content hash.** Nothing imports `linePath` yet, so the
+dependency is tree-shaken out entirely; the +14,926 B arrives when M2.2 wires it into
+a page. Measured against the precedent this repository already set —
+`react-router-dom`'s +18 kB gzipped, recorded in TECH_STACK §2.6 as "modest" — that
+is below the bar, where Recharts' +129 kB would have **more than doubled the whole
+application bundle**.
+
+#### Supply chain
+
+Ten runtime packages, each `package.json` read rather than the top two assumed:
+`d3-shape`, `d3-scale`, `d3-array`, `d3-color`, `d3-format`, `d3-interpolate`,
+`d3-path`, `d3-time`, `d3-time-format`, `internmap`. **All ISC.** Four dev-only
+`@types` packages come with them (two named, two transitive), and the lockfile was
+checked to confirm nothing a rejected candidate pulled in survived it. `npm audit
+--audit-level=high` reports 0 vulnerabilities, which matters because it is a gate in
+`scripts/check-all.sh` and in CI.
+
+#### Full suite after the change
+
+`./scripts/check-all.sh` — **ALL CHECKS PASSED, 18/18, exit 0, nothing skipped.**
+Backend 496 unit + 237 integration (unchanged: no backend file was touched),
+frontend **127 passed** (115 + the 12 new) across 14 files, `tsc --noEmit` clean under
+`strict` + `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess`, eslint and
+prettier clean, `npm audit --audit-level=high` **0 vulnerabilities**, and the build
+confirming the unchanged bundle (`index-CeSHwmyG.js`, gzip 95.00 kB).
+
+**The frontend changed-line coverage gate judged `linePath.ts` at 10/10 (100.0 %)** —
+which it could only do because of the fix recorded in issue 56 earlier the same day.
+Before that fix the file would have been untracked and therefore invisible to the
+gate, and this decision's one piece of product code would have shipped unjudged.
 
 ### Executed — `./scripts/check-all.sh`, 18/18 passed (M1.7, 2026-10-15)
 
@@ -2096,20 +2197,33 @@ usable `rate()` reading and that budget was tuned on a faster machine, and the
 **It is blocked on a decision, and the decision should be made first and with a test
 in hand:**
 
-- **`TS-01` (charting library) is still unselected, and it is now the critical
-  path.** Its gate is functional, not aesthetic: the library must render a data gap
-  **as a gap** and never as a zero ([TECH_STACK.md §2.5](docs/TECH_STACK.md#25-charting-library)).
-  M2.1 made that testable for the first time — the client already returns
-  `None` for `NaN` and `+Inf`, and an unscraped instance already returns no series
-  at all, so a candidate library can be handed a real gap rather than a hypothetical
-  one. Decide it by writing the one test (a series containing `null` renders a gap)
-  against two candidates, not by reading feature lists.
+- **`TS-01` is RESOLVED (2026-10-16): `d3-shape` + `d3-scale`, used directly with no
+  React wrapper.** It was the critical path and it is no longer blocking. Decided the
+  way this section asked — by writing the gap test first and running three candidates
+  through it, not by reading feature lists. Full record in
+  [TECH_STACK.md §2.5](docs/TECH_STACK.md#25-charting-library); measurements in
+  [§7](#7-tests-executed-and-their-actual-results). **What M2.2 inherits:**
+  `frontend/src/components/chart/linePath.ts` (two functions — `scalesFor` and
+  `linePath` — and nothing else) plus `linePath.test.ts`, the gate, kept as a
+  standing regression test. **What M2.2 still owes:** everything above the geometry
+  — axes, ticks, tooltips, responsive sizing, keyboard focus, and criterion 3's
+  data-table fallback for screen readers. Also criterion 1, "a 24 h range without
+  jank on a dashboard with several charts", which could not be measured because
+  there is no chart on a page yet.
 - **`OPEN-14` (target discovery) gates M2.3**, not M2.2. The target list in
   `infra/prometheus/prometheus.yml` is static and says so.
 - **`TS-02` (systemd metrics source) gates M2.4.**
 
-**What M2.2 inherits from M2.1, and what it must not re-litigate:**
+**What M2.2 inherits from M2.1 and from the `TS-01` decision, and what it must not
+re-litigate:**
 
+- **The gap rule is `linePath`'s, and it is already pinned.** Do not reach for a
+  chart library's own null handling, and do not write `?? 0` to satisfy a type
+  checker: `line().defined()` inside `linePath` is the whole mechanism, and
+  `linePath.test.ts` fails if a rendered path comes back continuous. Removing
+  `.defined()` as a mutation fails 6 of its 12 tests, so the gate is known to work
+  rather than assumed to. A chart component's job is to put `linePath`'s output in a
+  `<path d=…>`, not to re-decide what a hole means.
 - **The guards are already written and tested** (`app/metrics/service.py`:
   `check_time_range` and `check_selection`). §15.2 and §15.3 should *call* them, not
   re-derive the bounds in the handler. The point-count arithmetic has an off-by-one
@@ -2266,8 +2380,26 @@ than opportunistic:
   fetched or redirected to; adding the checks only for the new field would have left
   two known-weaker copies of the same rule a few lines away.
 
+**Then, in the same session and at the user's direction, `TS-01`.** Scope was the
+*decision* and the test it rests on — not M2.2. **Added:**
+`frontend/src/components/chart/linePath.ts` (two functions: `scalesFor`, `linePath`)
+and `linePath.test.ts` (the gate, 12 tests). **Modified:**
+`frontend/package.json` + `package-lock.json` (four pinned entries),
+`docs/TECH_STACK.md` §2.5 and §12, `docs/IMPLEMENTATION_PLAN.md` (three places),
+`PROGRESS.md`. **No chart component, no axes, no tooltip, no page change** — those
+are M2.2's, and building them here would have been exactly the scope creep CLAUDE.md
+§3 forbids. Three candidate libraries and a zero-dependency baseline were installed
+with `--no-save` for the measurements and removed again, so nothing a losing
+candidate pulled in survives in `package.json` or the lockfile.
+
+**Two new dependencies:** `d3-shape@3.2.0` and `d3-scale@4.0.2`, both pinned exactly,
+runtime, plus their `@types` as dev dependencies. §10 rung 3 is the rung that failed,
+and only half of it — the line geometry *is* a few lines and was written as a few
+lines; tick selection over an arbitrary time domain is not. Recorded in TECH_STACK
+§2.5 with the measurements and the three rejections.
+
 **Deliberately not done, and recorded instead:** endpoints §15.1–§15.3 and charts
-(M2.2, and `TS-01` is still unselected); target discovery from inventory
+(M2.2 — though `TS-01`, which gated it, is now resolved); target discovery from inventory
 (`OPEN-14`, M2.3); `agent_status` and registration-time `metrics_instance`
 verification (M2.3 — not widened into §14.2); systemd and `TS-02` (M2.4). **The
 dashboard's `utilisation` section was left `not_configured` with nulls**, because

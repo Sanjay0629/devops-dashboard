@@ -382,7 +382,7 @@ backend/tests/dashboard/test_summary.py
 
 **Prerequisites.** Phase 1 complete. Prometheus in Compose. At least one exporter target (the bundled `node-exporter` suffices). OPEN-14 (target discovery) and OPEN-09 (Windows scope) decided; TS-01 (charting library) and TS-02 (systemd exporter) selected.
 
-**Prerequisite state as of M2.1 (2026-10-16): three of the five are still open, and the milestone that needs each is named rather than the whole phase being blocked on all of them.** Phase 1 is complete; Prometheus and `node-exporter` are now configured and scraped rather than declared, which satisfies the second and third. `OPEN-09` has a working default *recorded and implemented* (Windows is `UNSUPPORTED`, see M2.1 below) rather than being decided. **`OPEN-14` still gates M2.3**, not M2.1 — the target list in `infra/prometheus/prometheus.yml` is static on purpose. **`TS-01` gates M2.2** and is still unselected; its functional gate (a data gap must render as a gap, never as a zero) wants deciding with a test in hand. **`TS-02` gates M2.4.** M2.1 needed none of the three.
+**Prerequisite state as of M2.1 (2026-10-16): three of the five are still open, and the milestone that needs each is named rather than the whole phase being blocked on all of them.** Phase 1 is complete; Prometheus and `node-exporter` are now configured and scraped rather than declared, which satisfies the second and third. `OPEN-09` has a working default *recorded and implemented* (Windows is `UNSUPPORTED`, see M2.1 below) rather than being decided. **`OPEN-14` still gates M2.3**, not M2.1 — the target list in `infra/prometheus/prometheus.yml` is static on purpose. **`TS-01` is RESOLVED (2026-10-16)**: `d3-shape` + `d3-scale`, used directly with no React wrapper, integrated as `frontend/src/components/chart/linePath.ts` ([TECH_STACK.md §2.5](TECH_STACK.md#25-charting-library)). It was decided the way this plan asked — with the gap test in hand, not under M2.2's deadline — and the test stays as a standing regression test. **M2.2 is no longer blocked on a decision.** **`TS-02` gates M2.4.** M2.1 needed none of the three.
 
 **Dependencies.** M1.2 (schema), M1.4 (authz), M1.5 (inventory + `metrics_instance`), M1.6 (dashboard shell).
 
@@ -440,7 +440,7 @@ backend/tests/dashboard/test_summary.py
 
 **Security:** per-server scope enforced on metric reads; comparison endpoint drops out-of-scope servers and reports `excluded_count`.
 
-**Risks:** chart library coerces `null` to `0`. Mitigation: this is a selection criterion ([TECH_STACK.md §2.5](TECH_STACK.md#25-charting-library)) with a test, not a hope.
+**Risks:** chart library coerces `null` to `0`. **Mitigated ahead of the milestone (2026-10-16), and the mitigation is a test rather than a hope.** `TS-01` was resolved to `d3-shape` + `d3-scale` used directly, so the gap rule is one function of ours (`linePath`, using `line().defined()`) rather than a library default that a minor release could change — which is precisely how Recharts would have held it, through `connectNulls` continuing to default to `false`. `frontend/src/components/chart/linePath.test.ts` asserts the rendered path geometry and catches **both** failure modes: coercion (continuous line, a vertex gained on the baseline) and bridging (continuous line, a vertex lost). Removing `.defined()` as a mutation fails 6 of its 12 tests. What M2.2 still owes is the *frontend* half of its own test list — a series containing `null` rendered through an actual chart component — since `linePath` is geometry and not yet a component.
 
 ---
 
@@ -821,7 +821,7 @@ backend/tests/dashboard/test_summary.py
 | OPEN-14 target discovery | M2.3 |
 | OPEN-15 audit export | M6.2 |
 | **OPEN-27 scoping a dimension-less resource** (new in M1.5) | **Not M1.6.** Corrected 2026-10-15 after M1.6 was built: §13.1 counts servers, failed services, alerts and recent activity — `application_id` appears only as a *filter*, and it resolves through `application_servers` to servers, which are already scope-filtered. The first milestone genuinely blocked is one that lists or counts applications in their own right. Working default in place: applications are not scope-filtered ([API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions)) |
-| TS-01 charting library | M2.2 |
+| ~~TS-01 charting library~~ | ~~M2.2~~ — **resolved 2026-10-16**, before M2.2 began |
 | TS-02 systemd exporter | M2.4 |
 
 Full register: [ARCHITECTURE.md §19](ARCHITECTURE.md#19-open-decisions).
