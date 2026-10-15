@@ -10,15 +10,16 @@
  * `403` and `423` on its own account (docs/SECURITY.md §6).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { listServers, type Page, type Result, type ServerSummary } from '@/api/inventory';
+import { listServers } from '@/api/inventory';
 import { PERMISSIONS } from '@/auth/permissions';
 import { useCanRender, useIsReadOnly } from '@/auth/useSession';
 import { EmptyState, LoadingState } from '@/components/EmptyState';
 import { Pager } from '@/components/Pager';
 import { useCursorPaging } from '@/components/useCursorPaging';
+import { useLatestResponse } from '@/components/useLatestResponse';
 import { ErrorState } from '@/components/ErrorState';
 import { StatusBadge } from '@/components/StatusBadge';
 
@@ -29,27 +30,27 @@ export function ServerList(): React.JSX.Element {
   const [environment, setEnvironment] = useState('');
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
-  const [result, setResult] = useState<Result<Page<ServerSummary>> | null>(null);
   const mayWrite = useCanRender(PERMISSIONS.serverWrite);
   const readOnly = useIsReadOnly();
   const paging = useCursorPaging();
   const { cursor, reset } = paging;
 
-  const load = useCallback(async () => {
-    setResult(null);
-    setResult(
-      await listServers({
+  // Through `useLatestResponse`, so a slower unfiltered request cannot land
+  // after a faster filtered one and leave the list showing the wrong answer.
+  const {
+    value: result,
+    loading,
+    reload: load,
+  } = useLatestResponse(
+    () =>
+      listServers({
         environment,
         status,
         q: q.trim() || undefined,
         cursor: cursor ?? undefined,
       }),
-    );
-  }, [environment, status, q, cursor]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+    [environment, status, q, cursor],
+  );
 
   // A filter change is a different collection, so page 1. Keyed on the filter
   // values and not on `load`, which also changes with the cursor — resetting
@@ -154,7 +155,7 @@ export function ServerList(): React.JSX.Element {
         </button>
       </form>
 
-      {result === null && <LoadingState what="servers" />}
+      {loading && <LoadingState what="servers" />}
       {result?.kind === 'ok' && result.value.items.length === 0 && (
         <EmptyState message="No servers match these filters, or none are within your access scope." />
       )}

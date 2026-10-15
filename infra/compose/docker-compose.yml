@@ -29,6 +29,17 @@ x-backend-env: &backend-env
   DCP_REDIS_URL: ${DCP_REDIS_URL:-redis://redis:6379/0}
   DCP_DATABASE_STATEMENT_TIMEOUT_MS: ${DCP_DATABASE_STATEMENT_TIMEOUT_MS:-5000}
   DCP_READINESS_TIMEOUT_SECONDS: ${DCP_READINESS_TIMEOUT_SECONDS:-3.0}
+  # Passed through so the E2E suite can set it to 0. A dashboard aggregate is
+  # cached for 15s by default (issue 50), so a test that writes and then reads
+  # a total would flake for a reason that has nothing to do with the test.
+  # Disabling the cache is the fix; sleeping is not (M1.7).
+  DCP_DASHBOARD_CACHE_TTL_SECONDS: ${DCP_DASHBOARD_CACHE_TTL_SECONDS:-15}
+  #
+  # NOTE: this block enumerates the settings the stack passes through, so a
+  # setting that exists on the Settings model but is absent here keeps its
+  # application default no matter what .env says. Five such settings exist
+  # today (PROGRESS issue 54); they all have correct defaults, so nothing is
+  # broken, but a developer who sets one in .env would see no effect.
   DCP_CORS_ORIGINS: ${DCP_CORS_ORIGINS:-}
   # M1.3. Defaults point at the mock-idp service, which only exists in the
   # `mocks` profile — without it /auth/login answers 503, which is the honest
@@ -46,6 +57,12 @@ x-backend-env: &backend-env
   DCP_OIDC_REDIRECT_URL: ${DCP_OIDC_REDIRECT_URL:-http://localhost:5173/api/v1/auth/callback}
   DCP_SESSION_IDLE_TIMEOUT_SECONDS: ${DCP_SESSION_IDLE_TIMEOUT_SECONDS:-1800}
   DCP_SESSION_ABSOLUTE_TIMEOUT_SECONDS: ${DCP_SESSION_ABSOLUTE_TIMEOUT_SECONDS:-28800}
+  # Passed through so a test environment can raise it. The /auth/* class fails
+  # CLOSED (AD-19), and the E2E suite legitimately signs in several times per
+  # run — at the default of 10 per 300s, a couple of local re-runs answer 429
+  # and the failure reads as "the identity provider did not respond".
+  DCP_AUTH_RATE_LIMIT_MAX: ${DCP_AUTH_RATE_LIMIT_MAX:-10}
+  DCP_AUTH_RATE_LIMIT_WINDOW_SECONDS: ${DCP_AUTH_RATE_LIMIT_WINDOW_SECONDS:-300}
 
 # Applied to every service: no new privileges, bounded resources.
 x-hardening: &hardening
@@ -70,6 +87,10 @@ services:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # Creates `dcp_test` on first init, so the integration suite has a
+      # database without a documented manual psql step — and so that
+      # scripts/smoke-test.sh's `down -v` does not silently remove it.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dcp} -d ${POSTGRES_DB:-dcp}"]
       interval: 10s
@@ -103,6 +124,43 @@ services:
       resources:
         limits: { cpus: "0.5", memory: 512m }
 
+  # One-shot: applies the schema, then exits. Added by M1.7.
+  #
+  # Nothing used to do this. The stack came up "healthy" on an empty volume
+  # with no schema at all, because the container healthcheck is /healthz
+  # (liveness) while the migration gate lives on /readyz — so a fresh clone
+  # followed the README exactly and got a 503 backend and a login that could
+  # not reach a `users` table. It worked for five milestones only because the
+  # first developer ran `alembic upgrade head` by hand and the volume outlived
+  # every later `up`. scripts/smoke-test.sh step 19 (`down -v` then `up`) is
+  # what finally caught it.
+  #
+  # A separate service rather than folding `alembic upgrade head` into the
+  # backend's command, so that `worker` and `beat` are ordered behind the
+  # schema too, and so this stays visibly a deployment step rather than
+  # something the application does to itself at startup. No `AD-nn` governs
+  # who applies migrations; this is the local stack's answer only, and a real
+  # deployment still runs it as its own job (one runner, never N replicas
+  # racing).
+  migrate:
+    <<: *hardening
+    profiles: [core]
+    build:
+      context: ../../backend
+      target: development
+    environment: *backend-env
+    command: ["alembic", "upgrade", "head"]
+    volumes:
+      - ../../backend/app:/app/app:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+    # Overrides `restart: unless-stopped` from the hardening anchor: a one-shot
+    # that is restarted for ever is a crash loop that reports as a crash loop.
+    restart: "no"
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
+
   backend:
     <<: *hardening
     profiles: [core]
@@ -122,6 +180,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 1g }
@@ -139,8 +198,16 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.workers.celery_app:celery_app", "inspect", "ping", "-d", "celery@$$HOSTNAME"]
+      # CMD-SHELL, not CMD: in exec form there is no shell, so `$$HOSTNAME`
+      # (compose's escape for a literal `$HOSTNAME`) was passed through to
+      # celery verbatim and it pinged a node called `celery@$HOSTNAME`, which
+      # exists nowhere. That is issue 49 — five retries of "No nodes replied
+      # within time constraint", exit 69, on a worker that was answering the
+      # whole time. Pinging *this* node rather than dropping `-d` keeps the
+      # check about this container.
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app:celery_app inspect ping -d celery@$$HOSTNAME"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -163,6 +230,33 @@ services:
       - ../../backend/app:/app/app:ro
     depends_on:
       redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    # The second half of issue 49, and a *different* fault from the worker's:
+    # beat declared no healthcheck at all, so it inherited the backend image's
+    # `curl localhost:8000/healthz`. Beat serves no HTTP, so that check could
+    # only ever fail — "Failed to connect to localhost port 8000", forever.
+    #
+    # Disabled rather than replaced, because there is nothing here that can be
+    # checked without claiming more than has been verified. Beat is this
+    # container's main process, so Docker's own running state already carries
+    # "the scheduler is alive", and `celery inspect` reports workers, never
+    # beat.
+    #
+    # The schedule file was the candidate and was measured rather than assumed:
+    # /app/celerybeat-schedule was written once at startup and its age then
+    # climbed to 270s with no resync (sampled every 60s). Beat's maxinterval here
+    # is 300s, so a staleness check would need a window above five minutes to
+    # avoid calling a healthy scheduler sick — a signal too coarse to be worth
+    # the claim, and the behaviour right at that boundary is unverified.
+    #
+    # (An earlier draft of this comment said "nothing for five hours". That
+    # was wrong: it compared a container mtime against the host clock.)
+    #
+    # What *can* be verified is verified where the evidence exists:
+    # scripts/smoke-test.sh asserts beat's container state and its startup log
+    # line, and the worker round-trip proves the broker path end to end.
+    healthcheck:
+      disable: true
     deploy:
       replicas: 1
       resources:

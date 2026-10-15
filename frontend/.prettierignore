@@ -2,3 +2,12 @@ dist
 coverage
 node_modules
 package-lock.json
+
+# Playwright per-run output (M1.7). `e2e/.auth` holds saved session cookies and
+# `e2e/.artifacts` holds traces and screenshots; both are generated, gitignored,
+# and absent in CI — so this only ever bit a contributor who ran the E2E suite
+# and then `scripts/check-all.sh`, which is precisely the documented order.
+e2e/.auth
+e2e/.artifacts
+playwright-report
+test-results

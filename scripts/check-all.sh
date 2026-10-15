@@ -22,7 +22,7 @@ run "backend: ruff lint"      bash -c 'cd backend && uv run ruff check .'
 run "backend: ruff format"    bash -c 'cd backend && uv run ruff format --check .'
 run "backend: mypy"           bash -c 'cd backend && uv run mypy'
 run "backend: bandit"         bash -c 'cd backend && uv run bandit -q -r app'
-run "backend: unit tests"     bash -c 'cd backend && uv run pytest -m "not integration"'
+run "backend: unit tests"     bash -c 'cd backend && uv run pytest -m "not integration" --cov=app --cov-report=xml'
 
 # Integration tests need a real PostgreSQL. Without this branch the script
 # printed "ALL CHECKS PASSED" while 61 tests silently skipped — a pass it had
@@ -34,7 +34,7 @@ run "backend: unit tests"     bash -c 'cd backend && uv run pytest -m "not integ
 # without TEST_REDIS_URL, so it is reported for the same reason: a partial
 # suite must not read as a complete one.
 if [[ -n "${TEST_DATABASE_URL:-}" ]]; then
-  run "backend: integration"  bash -c 'cd backend && uv run pytest -m integration'
+  run "backend: integration"  bash -c 'cd backend && uv run pytest -m integration --cov=app --cov-append --cov-report=xml'
   if [[ -z "${TEST_REDIS_URL:-}" ]]; then
     printf '    NOTE: TEST_REDIS_URL unset, so the authentication suite skipped\n'
     skipped+=("backend: integration (auth — needs TEST_REDIS_URL)")
@@ -48,12 +48,29 @@ run "backend: pip-audit"      bash -c 'cd backend && uv run pip-audit'
 run "frontend: eslint"        bash -c 'cd frontend && npx eslint .'
 run "frontend: prettier"      bash -c 'cd frontend && npx prettier --check .'
 run "frontend: tsc"           bash -c 'cd frontend && npx tsc --noEmit'
-run "frontend: vitest"        bash -c 'cd frontend && npx vitest run'
+run "frontend: vitest"        bash -c 'cd frontend && npx vitest run --coverage'
 run "frontend: build"         bash -c 'cd frontend && npm run build'
 run "frontend: npm audit"     bash -c 'cd frontend && npm audit --audit-level=high'
 # Regenerates in place, so a drift leaves the corrected file in the working
 # tree ready to commit — which is the fix, not a side effect.
 run "contracts: api types"    bash -c './scripts/generate-api-types.sh >/dev/null && git diff --exit-code -- frontend/src/api/schema.ts'
+run "config: .env.example"    bash -c 'cd backend && uv run python ../scripts/check_env_example.py'
+
+# OPEN-22's floor is on CHANGED code, not on a total (docs/TESTING.md §19), so
+# it needs something to diff against. BASE_REF defaults to origin/main, which
+# is what a pull request will be measured against; on main itself there is no
+# diff and the script says so and passes.
+BASE_REF="${BASE_REF:-origin/main}"
+if git rev-parse --verify --quiet "$BASE_REF" >/dev/null; then
+  run "coverage: backend diff"  python scripts/check_coverage_diff.py \
+    --coverage backend/coverage.xml --base "$BASE_REF" --label "backend changed lines"
+  run "coverage: frontend diff" python scripts/check_coverage_diff.py \
+    --coverage frontend/coverage/cobertura-coverage.xml --base "$BASE_REF" \
+    --label "frontend changed lines"
+else
+  printf '\n=== coverage: changed lines\n    SKIPPED — %s is not a known ref\n' "$BASE_REF"
+  skipped+=("coverage: changed lines (no $BASE_REF)")
+fi
 run "docs: link check"        python scripts/check_doc_links.py .
 
 printf '\n========================================\n'

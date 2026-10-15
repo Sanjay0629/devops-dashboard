@@ -58,6 +58,10 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The changed-line coverage gate below diffs against the pull
+          # request's base, so the base commit has to be in the clone.
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -117,6 +121,23 @@ jobs:
           uv run alembic downgrade base
           uv run alembic upgrade head
 
+      - name: Changed-line coverage floor
+        # OPEN-22's working default: 80 % on **changed** code, gating per-diff
+        # (docs/TESTING.md §19). Not a total: a repository-wide percentage can
+        # sit above any threshold while the branch under review adds an
+        # untested authorisation path.
+        #
+        # Pull requests only. A push to `main` has no diff to measure against
+        # that means anything — the merge has already happened — and gating it
+        # would either block the merge commit or silently compare against an
+        # arbitrary parent.
+        if: github.event_name == 'pull_request'
+        run: |
+          uv run python ../scripts/check_coverage_diff.py \
+            --coverage coverage.xml \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --label "backend changed lines"
+
       - name: Dependency vulnerability audit
         # NOT --strict: the local project is not published to PyPI, and --strict
         # turns that unauditable-package notice into a failure. Plain pip-audit
@@ -131,12 +152,19 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          # As in the backend job: the coverage gate needs the base commit.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - run: npm ci
       - run: npm run lint
@@ -145,6 +173,16 @@ jobs:
       - run: npm run test:coverage
       - run: npm run build
       - run: npm audit --audit-level=high
+
+      - name: Changed-line coverage floor
+        # Same floor and the same script as the backend: vitest emits a
+        # Cobertura report alongside lcov so one parser serves both ends.
+        if: github.event_name == 'pull_request'
+        run: |
+          python ../scripts/check_coverage_diff.py \
+            --coverage coverage/cobertura-coverage.xml \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --label "frontend changed lines"
 
   contracts:
     name: API types match the backend schema
@@ -238,6 +276,78 @@ jobs:
         run: docker compose -f infra/compose/docker-compose.yml --profile core config --quiet
       - name: Smoke test the core stack
         run: ./scripts/smoke-test.sh
+
+  env-example:
+    name: .env.example is complete
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - name: Every live setting is documented
+        # Imports the Settings model rather than parsing config.py, so a field
+        # that moved cannot escape the check (M1.7).
+        run: uv run python ../scripts/check_env_example.py
+
+  e2e:
+    name: End-to-end (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Install the browser
+        # Chromium only. The suite asserts behaviour and accessibility, not
+        # cross-browser rendering; three browsers would triple the runtime for
+        # no new signal at this milestone.
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Start the stack
+        env:
+          # Issue 50: a dashboard aggregate is cached for 15 s, so a test that
+          # writes and then reads a total would flake for a reason unrelated to
+          # the test. Disabling the cache is the fix; sleeping is not.
+          DCP_DASHBOARD_CACHE_TTL_SECONDS: '0'
+        run: |
+          docker compose -f infra/compose/docker-compose.yml \
+            --profile core --profile mocks \
+            up -d --build --wait --wait-timeout 300
+
+      - name: Run the end-to-end suite
+        run: npm run test:e2e
+        working-directory: frontend
+
+      - name: Stack logs on failure
+        if: failure()
+        run: docker compose -f infra/compose/docker-compose.yml --profile core --profile mocks logs --tail=200
+
+      - name: Upload traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: frontend/e2e/.artifacts
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f infra/compose/docker-compose.yml --profile core --profile mocks down -v
 
   docs:
     name: Documentation links

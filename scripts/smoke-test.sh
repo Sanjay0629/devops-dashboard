@@ -1,23 +1,42 @@
 #!/usr/bin/env bash
 # Compose smoke test (docs/TESTING.md §11).
 #
-# NOT YET VERIFIED: never executed. The Docker daemon was unavailable when M1.1
-# was implemented, so this script is specification, not a passing check. The
-# first person with a working daemon should run it and fix whatever it reveals.
+# Steps are numbered to match §11 so the mapping is auditable, and the ones
+# that cannot be covered yet say which milestone brings them rather than being
+# quietly dropped:
 #
-# M1.1 covers steps 1-5 and 9. The remaining steps from docs/TESTING.md §11
-# (seeded inventory, demo banner, mock IdP login, observability) arrive with the
-# milestones that implement them.
+#   §11.8  observability profile (Prometheus/Loki) — M2.1 / M3.1. The services
+#          are placeholders today; asserting anything about them would be
+#          asserting a mocked integration (CLAUDE.md §7).
+#   §11.12 "resource limits present in the production overlay" — there is no
+#          production overlay in infra/compose yet. What exists is checked:
+#          non-root, no privileged flags, no added capabilities, and limits
+#          declared for the core services in the file we do have.
+#
+# This script drives a real login through the mock IdP, which is a development
+# aid: passing here is evidence the stack is self-consistent, NOT that a real
+# identity provider works (CLAUDE.md §7, infra/compose/mock-idp/README.md).
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
 COMPOSE_FILE="${COMPOSE_FILE:-infra/compose/docker-compose.yml}"
-COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile core)
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-180}"
+# The `mocks` profile is not optional any more: §11.7 is "mock IdP login
+# completes end to end", and §11.5 reads inventory through an authenticated
+# request, so there has to be an identity provider to authenticate against.
+COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks)
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-240}"
+FRONTEND="http://localhost:${FRONTEND_HOST_PORT:-5173}"
+BACKEND="http://localhost:${BACKEND_HOST_PORT:-8000}"
+IDP="http://localhost:${MOCK_IDP_HOST_PORT:-9000}"
+ADMIN_EMAIL="admin@example.invalid"
+JAR="$(mktemp)"
 
 log()  { printf '\n=== %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 
 cleanup() {
+  rm -f "$JAR"
   if [[ "${KEEP_STACK:-0}" != "1" ]]; then
     log "Tearing down"
     "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
@@ -25,58 +44,207 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Brings the stack up and waits for every service that declares a healthcheck.
+# `--wait` is the assertion for §11.1: it fails if anything does not reach
+# healthy, which is why the worker's broken healthcheck (issue 49) had to be
+# fixed before this script could pass honestly.
+bring_up() {
+  "${COMPOSE[@]}" up -d --build --wait --wait-timeout "$TIMEOUT_SECONDS" \
+    || { "${COMPOSE[@]}" ps; "${COMPOSE[@]}" logs --tail=80; fail "stack did not become healthy"; }
+}
+
+# One hop of a redirect chain, returning the Location. Each hop is taken
+# explicitly rather than with `-L` because the mock IdP's authorise endpoint
+# needs `&user=` appended to it mid-chain, and because a flow that is followed
+# blindly cannot assert which hop went where.
+hop() {
+  curl -sS -c "$JAR" -b "$JAR" -o /dev/null -w '%{redirect_url}' --max-time 15 "$1"
+}
+
+api() {
+  curl -sS -c "$JAR" -b "$JAR" --max-time 20 "$FRONTEND/api/v1$1"
+}
+
 log "1. Validating Compose configuration"
 "${COMPOSE[@]}" config --quiet || fail "compose config is invalid"
 
-log "2. Starting the core stack"
-"${COMPOSE[@]}" up -d --build --wait --wait-timeout "$TIMEOUT_SECONDS" \
-  || { "${COMPOSE[@]}" ps; "${COMPOSE[@]}" logs --tail=80; fail "stack did not become healthy"; }
+log "2. Starting the full core stack plus mocks (§11.1)"
+bring_up
+"${COMPOSE[@]}" ps
 
-log "3. Liveness"
-curl -fsS --max-time 10 http://localhost:8000/healthz | grep -q '"status":"ok"' \
+log "3. Migrations are applied and at head (§11.2)"
+current="$("${COMPOSE[@]}" exec -T backend alembic current 2>&1 | tr -d '\r')"
+printf '%s\n' "$current"
+grep -q '(head)' <<<"$current" || fail "alembic current is not at head"
+
+log "4. Liveness (§11.3)"
+curl -fsS --max-time 10 "$BACKEND/healthz" | grep -q '"status":"ok"' \
   || fail "/healthz did not report ok"
 
-log "4. Readiness"
-readyz="$(curl -fsS --max-time 15 http://localhost:8000/readyz)" || fail "/readyz not reachable"
+log "5. Readiness, every dependency true (§11.3)"
+readyz="$(curl -fsS --max-time 15 "$BACKEND/readyz")" || fail "/readyz not reachable"
 printf '%s\n' "$readyz"
 grep -q '"database":true' <<<"$readyz" || fail "database check did not pass"
 grep -q '"broker":true'   <<<"$readyz" || fail "broker check did not pass"
+# The third required check, and the one worth asserting loudest: it compares
+# the applied revision against the head this build ships. An earlier draft of
+# this script checked only database and broker, and would therefore have
+# called a schemaless stack ready — which is the exact fault step 19 found.
+grep -q '"migrations":true' <<<"$readyz" || fail "migrations check did not pass"
 
-log "5. Readiness leaks nothing"
+log "6. Readiness leaks nothing"
 for forbidden in postgres 5432 password psycopg Traceback; do
   grep -qi "$forbidden" <<<"$readyz" && fail "/readyz leaked '$forbidden'"
 done
+printf 'no forbidden token in the readiness payload\n'
 
-log "6. Frontend is served"
-curl -fsS --max-time 15 http://localhost:5173/ | grep -q '<div id="root">' \
+log "7. Frontend is served through the proxy (§11.4)"
+curl -fsS --max-time 15 "$FRONTEND/" | grep -q '<div id="root">' \
   || fail "frontend did not serve the app shell"
+# The SPA and the API must share one origin (AD-02); the dev server's proxy is
+# what reproduces that locally, and it silently did not until M1.3.
+curl -fsS --max-time 15 "$FRONTEND/healthz" | grep -q '"status":"ok"' \
+  || fail "the frontend proxy did not reach the backend"
 
-log "7. Security headers are present"
-headers="$(curl -fsS -D - -o /dev/null --max-time 10 http://localhost:8000/healthz)"
+log "8. Security headers are present"
+headers="$(curl -fsS -D - -o /dev/null --max-time 10 "$BACKEND/healthz")"
 grep -qi 'x-content-type-options: nosniff' <<<"$headers" || fail "missing nosniff"
 grep -qi 'content-security-policy'         <<<"$headers" || fail "missing CSP"
 grep -qi 'x-correlation-id'                <<<"$headers" || fail "missing correlation id"
 
-log "8. Containers do not run as root"
-for service in backend worker beat; do
+log "9. Containers do not run as root (§11.12)"
+for service in backend worker beat frontend; do
   uid="$("${COMPOSE[@]}" exec -T "$service" id -u | tr -d '\r')"
   [[ "$uid" != "0" ]] || fail "$service runs as root"
+  printf '%s uid=%s\n' "$service" "$uid"
 done
 
-log "9. Broker round-trip through Celery"
+log "10. No privileged flags and no added capabilities (§11.12)"
+for service in postgres redis backend worker beat frontend; do
+  container="$("${COMPOSE[@]}" ps -q "$service")"
+  [[ -n "$container" ]] || fail "$service has no container"
+  privileged="$(docker inspect --format '{{.HostConfig.Privileged}}' "$container")"
+  cap_add="$(docker inspect --format '{{.HostConfig.CapAdd}}' "$container")"
+  no_new_priv="$(docker inspect --format '{{.HostConfig.SecurityOpt}}' "$container")"
+  [[ "$privileged" == "false" ]] || fail "$service is privileged"
+  [[ "$cap_add" == "[]" || "$cap_add" == "<no value>" ]] || fail "$service adds capabilities: $cap_add"
+  grep -q 'no-new-privileges:true' <<<"$no_new_priv" || fail "$service lacks no-new-privileges"
+  printf '%s privileged=%s cap_add=%s\n' "$service" "$privileged" "$cap_add"
+done
+
+log "11. Resource limits are declared for the core services (§11.12, partial)"
+# Partial on purpose: §11 asks for limits in the *production overlay*, and no
+# such overlay exists yet. This asserts the limits the file we have declares,
+# so the check is true rather than aspirational.
+limits="$("${COMPOSE[@]}" config | grep -c 'cpus:')"
+[[ "$limits" -ge 6 ]] || fail "expected cpu limits on at least 6 services, found $limits"
+printf '%s services declare a cpu limit\n' "$limits"
+printf 'NOTE: no production overlay exists; its limits cannot be checked (PROGRESS issue 21/52)\n'
+
+log "12. Worker and beat are connected, and ping round-trips (§11.9)"
+# The worker's own healthcheck already pinged it by node name (that is what
+# issue 49 fixed), so this asserts the stronger property: a task crosses the
+# broker and comes back.
 "${COMPOSE[@]}" exec -T backend python -c "
 from app.workers.tasks.ping import ping
 assert ping.delay().get(timeout=30) == 'pong'
 print('ping -> pong')
 " || fail "celery round-trip failed"
+# Beat declares no healthcheck (see the comment in docker-compose.yml), so its
+# evidence is its container state and its own startup line.
+beat_state="$(docker inspect --format '{{.State.Status}}' "$("${COMPOSE[@]}" ps -q beat)")"
+[[ "$beat_state" == "running" ]] || fail "beat is not running (state: $beat_state)"
+"${COMPOSE[@]}" logs beat 2>&1 | grep -q 'beat: Starting' \
+  || fail "beat did not log that the scheduler started"
+printf 'beat state=%s, scheduler started\n' "$beat_state"
 
-log "10. Database outage degrades honestly"
+log "13. Mock IdP login completes end to end (§11.7)"
+authorize_url="$(hop "$FRONTEND/api/v1/auth/login?next=/dashboard")"
+[[ "$authorize_url" == "$IDP/authorize"* ]] \
+  || fail "login did not redirect to the identity provider (got: ${authorize_url:-<none>})"
+# The mock renders an account picker without `user=`; naming the account is
+# what makes this scriptable.
+callback_url="$(hop "${authorize_url}&user=admin")"
+[[ "$callback_url" == *"/api/v1/auth/callback?"* ]] \
+  || fail "the identity provider did not redirect back to the callback (got: ${callback_url:-<none>})"
+landing="$(hop "$callback_url")"
+printf 'callback landed on: %s\n' "${landing:-<no redirect>}"
+
+session="$(api /auth/session)" || fail "session endpoint not reachable after login"
+grep -q "$ADMIN_EMAIL" <<<"$session" || fail "the session is not the account that logged in"
+printf 'logged in as %s\n' "$ADMIN_EMAIL"
+
+log "14. Demonstration mode is reported by the API (§11.6)"
+# The *banner* is asserted by the Playwright suite, which is the only place
+# that can see rendered DOM; this asserts the flag the banner is wired to.
+grep -q '"demo_mode":true' <<<"$session" \
+  || fail "demo_mode is not true in a stack started with DCP_DEMO_MODE=true"
+printf 'demo_mode: true\n'
+
+log "15. Granting the first administrator through the application"
+# JIT provisioning deliberately creates users with no roles, so the login
+# above produced an identity with no access at all. The bootstrap CLI is the
+# only way to grant the first role; exit 2 means an administrator already
+# exists, which is success for a re-run.
+set +e
+"${COMPOSE[@]}" exec -T backend python -m app.admin.bootstrap --email "$ADMIN_EMAIL"
+bootstrap_status=$?
+set -e
+[[ "$bootstrap_status" == "0" || "$bootstrap_status" == "2" ]] \
+  || fail "bootstrap failed with exit $bootstrap_status"
+printf 'bootstrap exit %s (0 granted, 2 already present)\n' "$bootstrap_status"
+
+log "16. Seeding synthetic inventory"
+"${COMPOSE[@]}" exec -T backend python -m app.inventory.seed || fail "inventory seed failed"
+
+log "17. Seeded inventory is visible through the API (§11.5)"
+# A role change takes effect on the next request with no re-login, so the
+# session from step 13 is now an administrator.
+servers="$(api /servers)" || fail "server list not reachable"
+grep -q '\[DEMO\]' <<<"$servers" \
+  || fail "seeded inventory is not visible (is the seed marked [DEMO]?)"
+count="$(grep -o '"hostname"' <<<"$servers" | wc -l | tr -d ' ')"
+printf 'server list returned %s rows, visibly synthetic\n' "$count"
+
+log "18. A database outage degrades honestly, with no zeros (§11.10)"
 "${COMPOSE[@]}" stop postgres >/dev/null
-sleep 5
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 http://localhost:8000/readyz)"
+# Poll rather than sleep: the readiness probe has its own per-check deadline,
+# so the transition is quick but not instant.
+for _ in $(seq 1 10); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$BACKEND/readyz")"
+  [[ "$code" == "503" ]] && break
+  sleep 2
+done
 [[ "$code" == "503" ]] || fail "expected 503 with postgres stopped, got $code"
-curl -fsS --max-time 10 http://localhost:8000/healthz >/dev/null \
+curl -fsS --max-time 10 "$BACKEND/healthz" >/dev/null \
   || fail "liveness should survive a database outage"
+# The point of §11.10: the dashboard must not answer a count of 0 when it
+# cannot reach the database. It must fail or say unavailable — never invent a
+# number (PRD §4.2, CLAUDE.md §5).
+degraded="$(api /dashboard/summary || true)"
+if grep -q '"count":0' <<<"$degraded"; then
+  fail "the dashboard reported a zero count while the database was down"
+fi
+printf 'readyz=503, healthz=200, and no zero was substituted for an unknown\n'
 "${COMPOSE[@]}" start postgres >/dev/null
+until [ "$(docker inspect --format '{{.State.Health.Status}}' "$("${COMPOSE[@]}" ps -q postgres)")" = "healthy" ]; do
+  sleep 2
+done
+printf 'postgres is healthy again\n'
+
+log "19. down -v then up reaches the same healthy state (§11.11)"
+# No hidden local state: the volumes are destroyed, so migrations have to run
+# from nothing and every service has to come back healthy on its own.
+"${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1
+bring_up
+current="$("${COMPOSE[@]}" exec -T backend alembic current 2>&1 | tr -d '\r')"
+grep -q '(head)' <<<"$current" || fail "migrations are not at head after a volume wipe"
+readyz="$(curl -fsS --max-time 15 "$BACKEND/readyz")" || fail "/readyz not reachable after recreate"
+grep -q '"database":true'   <<<"$readyz" || fail "database not ready after recreate"
+grep -q '"broker":true'     <<<"$readyz" || fail "broker not ready after recreate"
+grep -q '"migrations":true' <<<"$readyz" || fail "migrations not applied after recreate"
+printf 'stack returned to the same healthy state from empty volumes\n'
 
 printf '\nSMOKE TEST PASSED\n'
+printf 'Covered docs/TESTING.md §11 steps 1-7 and 9-12.\n'
+printf 'Step 8 (observability profile) belongs to M2.1/M3.1 and is not asserted here.\n'

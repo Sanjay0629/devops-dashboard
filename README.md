@@ -32,10 +32,30 @@ Centralized monitoring and management portal for servers and applications across
 
 ```bash
 cp .env.example .env
-docker compose -f infra/compose/docker-compose.yml --profile core --profile mocks up --build
+docker compose --env-file .env -f infra/compose/docker-compose.yml --profile core --profile mocks up --build --wait
 ```
 
 Then: frontend on <http://localhost:5173>, API on <http://localhost:8000>, API docs on <http://localhost:8000/docs> (local only).
+
+> **`--env-file .env` is not optional, and M1.7 is where that was found out.**
+> Compose takes its *project directory* from the compose file's location, so with
+> `-f infra/compose/docker-compose.yml` it looks for `.env` in `infra/compose/` and never
+> reads the one at the repository root. Every `${VAR}` in the compose file has a default, so
+> the stack came up correctly anyway and nobody noticed — but the `cp` above was a no-op, and
+> anything you edited in `.env` (a port, a password) was silently discarded. Verified directly:
+> `DCP_LOG_LEVEL=WARNING` in a root `.env` still produced `INFO` in the container without this
+> flag, and `WARNING` with it.
+>
+> `--wait` is there so the command returns when the stack is actually ready rather than when
+> the containers have been created.
+
+The stack applies its own migrations: a one-shot `migrate` service runs `alembic upgrade head`
+and exits, and `backend`, `worker` and `beat` all wait for it to succeed. **Before M1.7 nothing
+did this** — a fresh clone got a stack of healthy containers over an empty database, because the
+container healthcheck is `/healthz` (liveness) while the migration gate is on `/readyz`. It
+worked for five milestones only because the first developer had run `alembic upgrade head` by
+hand and the volume outlived every later `up`. `scripts/smoke-test.sh` step 19 (`down -v`, then
+`up` again) is what caught it.
 
 **Sign in at <http://localhost:5173>.** The `mocks` profile is what makes that work: it runs a
 [mock OIDC provider](infra/compose/mock-idp/README.md) that checks no password and offers three
@@ -68,9 +88,32 @@ with no re-login.
 >   server's proxy reproduces that, so the login flow and the redirect at the end of it stay on
 >   the origin you are browsing.
 
-> **`scripts/smoke-test.sh` is still unexecuted**, so the M1.1 criterion "every service starts
-> healthy" is not formally verified — though the `core` and `mocks` services have now been
-> started and used. See `PROGRESS.md`.
+**Check the whole stack in one command:**
+
+```bash
+./scripts/smoke-test.sh
+```
+
+It brings up `core` plus `mocks`, asserts every service reaches healthy, that migrations are at
+head, that `/readyz` reports all three dependencies true, that nothing runs as root or
+privileged, that a Celery task round-trips, that a login completes through the mock IdP, that the
+seeded inventory is readable, that a database outage degrades to `503` without substituting
+zeros, and that `down -v` followed by `up` returns to the same state from empty volumes. Then it
+tears the stack down (`KEEP_STACK=1` leaves it running). Its steps are numbered to match
+[`docs/TESTING.md`](docs/TESTING.md) §11; step 8 (the observability profile) belongs to M2.1/M3.1
+and is not asserted.
+
+**End-to-end tests** need the stack running, and run against it rather than starting their own:
+
+```bash
+docker compose --env-file .env -f infra/compose/docker-compose.yml --profile core --profile mocks up -d --wait
+cd frontend && npm run test:e2e
+```
+
+The suite seeds what it needs (an administrator via the bootstrap CLI, then a Viewer granted
+`VIEWER`) and is idempotent, so it can be re-run against a long-lived stack. Set
+`DCP_DASHBOARD_CACHE_TTL_SECONDS=0` when starting the stack if you add a test that writes and
+then reads a dashboard total — the aggregate is cached for 15 s by default.
 
 ## Quick start — without Docker
 

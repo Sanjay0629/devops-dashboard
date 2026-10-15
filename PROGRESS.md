@@ -2,9 +2,16 @@
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
 **Last updated:** 2026-10-15
-**Updated by:** the issue 44 session — the **server edit form and association
-management UI**, taken deliberately before M1.7 so that milestone's first E2E suite
-is not written around a missing page. §14.4, §14.6 and §14.7 now have controls.
+**Updated by:** the **M1.7 implementation session (Phase 1 consolidation)**. The
+milestone's own deliverables — a Compose smoke test and a first E2E suite — found
+**four faults that had been latent for five milestones**, which is the argument for
+consolidation milestones existing. Read [§3](#3-in-progress-milestone) first; the
+short version is that *nothing applied the migrations*, so the documented path from
+clone to working stack had never worked on a machine that did not already have a
+populated volume. Issues **20** and **49** are RESOLVED, and three new ones (**52**,
+**53**, **54**) are recorded. Before it, the issue 44 session — the **server edit form
+and association management UI**, taken deliberately before M1.7 so that milestone's
+first E2E suite is not written around a missing page. §14.4, §14.6 and §14.7 now have controls.
 **No backend file changed**, and the evidence is that `npm run generate:api`
 regenerated `frontend/src/api/schema.ts` with no diff. Read the **issue 44 row in
 [§6](#6-known-issues)** first: it records the four decisions the contract leaves to a
@@ -36,7 +43,8 @@ enforcement) and M1.3
 
 ## 1. Current project stage
 
-**Stage: Phase 1 — Foundation. Milestones M1.1 – M1.6 complete; M1.7 next.**
+**Stage: Phase 1 — Foundation. Milestones M1.1 – M1.7 complete. Phase 1 is done;
+M2.1 is next.**
 
 The application has a running skeleton, a migrated PostgreSQL schema, working OIDC
 authentication with server-side sessions, authorisation (one matcher, one
@@ -51,8 +59,16 @@ which source it came from or which milestone will give it one.
 As of the **issue 44** change (2026-10-15) the inventory UI is no longer
 read-and-register only. A server's mutable fields (§14.4) are editable at
 `/servers/:serverId/edit`, and its application associations (§14.6, §14.7) are
-managed from the server detail page — which is what M1.7's E2E suite will be written
+managed from the server detail page — which is what M1.7's E2E suite was written
 against, rather than around.
+
+**M1.7 (2026-10-15) made the stack reproducible rather than adding a feature.** It
+has a Compose smoke test that passes, a first Playwright suite that passes, a
+changed-line coverage gate, and a `.env.example` that is checked against the code.
+What it mostly did, though, was discover that the documented path from a clone to a
+working stack had three independent breakages in it, all hidden by the same
+accident: the only machine that had ever run the stack had a PostgreSQL volume that
+outlived every `docker compose up`, so nobody had started from nothing since M1.2.
 
 It still monitors nothing — see [§4](#4-pending-milestones). That is the point of
 M1.6 rather than a gap in it: of the dashboard's nine sections exactly two have a
@@ -157,7 +173,198 @@ development aid and is labelled as one in its own README, in the Compose file an
 
 ## 3. In-progress milestone
 
-**None.** M1.6 is finished; M1.7 (Phase 1 consolidation) has not begun.
+**None.** M1.7 is finished, and with it Phase 1. M2.1 has not begun.
+
+### What M1.7 implemented (2026-10-15)
+
+#### The four faults it found, which is the point of the milestone
+
+Each was found by a deliverable of this milestone, not by reading code. Each had
+been present for several milestones. None was reachable on a machine that already
+had a populated volume, which is why five milestones passed over them.
+
+**1. Nothing applied the migrations.** A fresh volume produced a stack of
+*healthy* containers over an **empty database**. The container healthcheck is
+`/healthz` (liveness); the migration gate is on `/readyz`, which `--wait` does not
+consult. So `docker compose up --wait` reported success, `GET /readyz` answered
+`503 migrations: false`, and a login could not reach a `users` table. It had worked
+since M1.2 only because the first developer ran `alembic upgrade head` by hand and
+the volume survived. **Found by `scripts/smoke-test.sh` step 19** (`down -v`, then
+`up` again), which is the step that exists precisely to prove there is no hidden
+local state. Fixed with a one-shot `migrate` service; `backend`, `worker` and `beat`
+all wait on `service_completed_successfully`. No `AD-nn` governs who applies
+migrations — this is the local stack's answer only, and a real deployment still runs
+it as its own job, one runner rather than N replicas racing.
+
+**2. The root `.env` was never read.** Compose takes its *project directory* from
+the compose file's location, so `-f infra/compose/docker-compose.yml` looks for
+`infra/compose/.env` and ignores the one at the repository root. The README's very
+first instruction, `cp .env.example .env`, was a **no-op**, and anything a developer
+edited there — a port, a password — was silently discarded. Every `${VAR}` in the
+compose file has a default, which is why the stack always came up correctly and
+nobody noticed. Measured directly: `DCP_LOG_LEVEL=WARNING` in a root `.env` still
+produced `INFO` in the container, and `WARNING` once `--env-file .env` was passed.
+The README now passes it.
+
+**3. Fixing (2) immediately exposed a stale value.** With `.env` finally being read,
+`DCP_OIDC_REDIRECT_URL` from `.env.example` — `http://localhost:8000/…`, the value
+for running the backend *natively* — overrode the compose default of
+`http://localhost:5173/…`, and the login callback landed on the backend, which
+serves no SPA. The two files had disagreed for five milestones with no consequence,
+because one of them was never read. **Found by following the README on a fresh
+clone**, not by any test. `.env.example` now carries the Compose value, and
+`scripts/check_env_example.py` grew a fifth rule that fails when the two sources
+disagree — demonstrated to catch it by reverting the value.
+
+**4. An unguarded response race in five views.** `ServerList`, `ApplicationList`,
+`ApplicationDetail`, `ServerDetail` and the issue-44 association picker all did
+`setResult(await load())` with **nothing tying a response to the request that asked
+for it**. Change a filter and two requests are in flight; whichever *resolves* last
+wins, and the unfiltered one is slower precisely because it returns more rows. So
+the list could settle on the answer to a question the operator had already changed,
+and stay there. Not theoretical: **§12.2 of the new E2E suite failed about three
+runs in eight**, typing a hostname into the search box and getting all 34 rows back,
+and it grew *more* likely as the table grew. The dashboard was worse — it refreshes
+on a timer, so overlapping requests there are certain rather than possible. Fixed
+once, where all five route through, by `useLatestResponse` (a ticket per request;
+an answer that is no longer the newest is discarded). Its own test fails against the
+previous implementation — verified by deleting the guard and watching
+`expected 'unfiltered' to be 'filtered'`.
+
+#### A trap that cost an hour, and will cost the next person one too
+
+**Vite's file watcher does not see edits through the Windows bind mount.** The
+`frontend` container mounts `frontend/src` read-only and runs the dev server. After
+writing the fix for fault 4, the E2E suite kept failing at the same rate — because
+the container was still serving the **pre-fix modules**. The fix only took effect
+after `docker compose restart frontend`: before the restart, 3 of 8 probe attempts
+showed the unfiltered list; after it, 0 of 8. This means **`npm run test:e2e` can
+validate code that is not the code in the working tree**, which is a worse failure
+mode than a flake. Recorded as **issue 53**; the E2E section of the README says to
+restart the frontend container after changing `src/`.
+
+#### Issue 49, which was two different faults wearing one number
+
+PROGRESS attributed both `worker` and `beat` reporting `unhealthy` to one cause
+("a hostname mismatch"). Measured, they were unrelated:
+
+- **`worker`** used exec-form `CMD`, so compose's `$$HOSTNAME` (its escape for a
+  literal `$HOSTNAME`) reached celery **verbatim** — there is no shell in exec form
+  to expand it — and it pinged a node called `celery@$HOSTNAME`, which exists
+  nowhere. The health log showed five retries of `No nodes replied within time
+  constraint`, exit 69, on a worker that was answering the whole time: `celery
+  inspect ping` by hand returned `celery@afb4637f73ce: OK`. Fixed with `CMD-SHELL`.
+- **`beat`** declared **no healthcheck at all**, so it inherited the backend image's
+  `HEALTHCHECK curl -fsS http://localhost:8000/healthz`. Beat serves no HTTP, so
+  that check could only ever fail — the log showed `Failed to connect to localhost
+  port 8000`, for ever.
+
+Beat's is **disabled** rather than replaced, and that was a measurement rather than
+a shrug. Beat is the container's main process, so Docker's own running state already
+carries "the scheduler is alive"; `celery inspect` reports workers and never beat;
+and the schedule file was sampled every 60s and went **270s with no resync** against
+a `maxinterval` of 300s, so a staleness check would need a window above five minutes
+to avoid calling a healthy scheduler sick — too coarse to be worth the claim, and
+unverified right at the boundary that matters. What *can* be checked is checked
+where the evidence exists: the smoke test asserts beat's container state and its own
+`beat: Starting...` line, and the worker round-trip proves the broker path.
+
+#### What the smoke test covers, and what it does not
+
+`scripts/smoke-test.sh` is numbered to match [`docs/TESTING.md`](docs/TESTING.md)
+§11. It covers steps **1–7 and 9–12** and brings up `core` **plus `mocks`**, because
+§11.7 is a real login and §11.5 reads inventory through an authenticated request.
+Two honest gaps are printed by the script rather than hidden:
+
+- **§11.8 (observability profile) is not asserted.** Prometheus and Loki are
+  placeholders until M2.1/M3.1; asserting anything would be presenting a mocked
+  integration as operational (CLAUDE.md §7).
+- **§11.12 is partial.** "Resource limits present in the production overlay" has
+  nothing to check, because **there is no production overlay** — `infra/compose/`
+  holds one compose file and the mock IdP. What exists is checked instead: non-root
+  (four services), no privileged flag, no added capabilities, `no-new-privileges` on
+  every service, and eight services declaring a CPU limit. Recorded as **issue 52**.
+
+It also creates `dcp_test` now, via `infra/compose/postgres-init/`, because the
+script ends in `down -v` — which destroyed the hand-created test database and made
+the next `pytest -m integration` fail for reasons that looked nothing like the
+cause.
+
+#### The E2E suite, and two things that nearly made it worthless
+
+Playwright, `frontend/e2e/`, covering §12 paths **1, 2 and 8**. Paths 3–7 and 9 need
+metrics, services, logs, alerts, deployments or approvals and are **not stubbed**: a
+test named "server health inspection" that asserted an empty panel would report a
+working feature.
+
+1. **A direct API assertion must send an `Origin` header.** `app/core/csrf.py`
+   checks origin **before** the route's permission dependency, and also answers
+   `403 forbidden` — so `expect(status).toBe(403)` on a request without one passes
+   on a *CSRF rejection* and proves nothing about permissions. This was made and
+   caught: the 403 arrived carrying `"CSRF validation failed."`. Path 8 now asserts
+   the refusal is **not** a CSRF refusal.
+2. **The Viewer is granted the same scope as the administrator.** If the Viewer's
+   scope were narrower, "a Viewer cannot register a server" would pass because the
+   row is out of reach rather than because `VIEWER` lacks `server:write` — and it
+   would keep passing if the permission matrix broke.
+
+The suite seeds its own preconditions and is idempotent (inventory, an administrator
+via the bootstrap CLI, then a Viewer granted `VIEWER`), and **reuses saved sessions
+when they still authenticate**, because signing in is rate limited: the `/auth/*`
+class is 10 per 300s and fails closed, and an unconditional login started answering
+`429` after a few local re-runs — surfacing as "the mock identity provider heading
+was not found", which looks nothing like its cause. `retries: 0`, deliberately:
+this project has already paid for a flaky suite once (issue 51).
+
+**Accessibility: contrast is checked here for the first time.** jsdom has no layout,
+so the component tests can only ever get "incomplete" from the contrast rule and
+disable it explicitly. The E2E suite runs `axe-core` in a real browser across the
+dashboard, the server list and the registration form, with no rules disabled.
+
+#### The coverage gate, and how it gates
+
+`scripts/check_coverage_diff.py` implements `OPEN-22`'s working default — **80 % on
+changed code** — and gates **per-diff**, which is the part worth being explicit
+about:
+
+- It reads a **Cobertura** report plus `git diff`, so one script serves both ends of
+  the stack (vitest now emits Cobertura alongside lcov).
+- It diffs from the **merge base** to the **working tree**, not `base...HEAD`. The
+  first version used `base...HEAD` and silently measured *nothing* for an
+  uncommitted change — which is exactly when a contributor runs it locally.
+- **Pull requests only.** A push to `main` has no meaningful diff to measure
+  against, and gating it would either block the merge commit or compare against an
+  arbitrary parent.
+- Lines the report does not mention are not counted (a blank line, a comment, an
+  `if TYPE_CHECKING:` import), and a diff touching no measurable file passes with a
+  message saying so, rather than becoming noise people learn to override.
+- Not `diff-cover`: that would be a new dependency for about eighty lines of XML and
+  `git diff` parsing (TECH_STACK §10 rung 7). `--cov-fail-under` is a *total*, which
+  is the thing TESTING §19 explicitly declines to gate on.
+
+**It failed on this milestone's own diff, at 60 %**, naming the load expressions in
+`ApplicationList.tsx` and `ApplicationDetail.tsx` — two pages M1.5 shipped with no
+component tests at all. Writing a gate and exempting the first thing it caught would
+be pointless, so `Applications.test.tsx` was written (7 tests) and the diff went to
+**100 %**. Overall frontend line coverage rose from 88.75 % to 93.77 % as a
+side effect, which is not the point and is not a target.
+
+#### The demonstration-mode banner needed no code
+
+It was wired to `demo_mode` in M1.3 and unit-tested there (`SessionProvider.test.tsx`,
+"is never silent"). M1.7 verified it rather than rebuilding it, and added the
+assertion no unit test can make: the banner **rendering** against a real stack
+started with `DCP_DEMO_MODE=true`. The smoke test asserts the flag on the API; the
+E2E suite asserts the DOM.
+
+#### What M1.7 did not do
+
+- **No backend code changed at all.** Not one Python file; the backend's 360 unit
+  and 231 integration tests are identical to M1.6's, which is the evidence.
+- **No migration.** The schema is still at `0004`.
+- **Issues 21, 26, 40 and `TS-01` were left alone**, as scoped. They are still open.
+- **The `e2e` CI job has not been observed running on GitHub Actions**, only
+  locally. See [§7](#7-tests-executed-and-their-actual-results).
 
 ### What M1.6 implemented (2026-10-15)
 
@@ -696,7 +903,7 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 
 | Phase | Milestones | Status |
 |---|---|---|
-| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · M1.7 consolidation | **M1.7 next** ([§9](#9-next-recommended-task)); issue 44 done 2026-10-15 |
+| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · ~~M1.7 consolidation~~ **done** | **Phase 1 COMPLETE** 2026-10-15; M2.1 next ([§9](#9-next-recommended-task)) |
 | 2 — Monitoring | M2.1 Prometheus client · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | Pending |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
@@ -809,7 +1016,7 @@ Once a decision is reviewed, record the date and the outcome here.
 
 | # | Issue | Severity | Handling |
 |---|---|---|---|
-| 20 | **FURTHER RESOLVED 2026-10-13 (M1.3).** The full `core` stack **plus** the `mocks` profile was started and used: `postgres`, `redis`, `backend`, `worker`, `beat`, `frontend` and `mock-idp` all reached `healthy`, and login/logout were driven through them in a real browser. `scripts/smoke-test.sh` itself is **still unexecuted**, so the M1.1 criterion is not formally signed off by its own gate. Previously: the Docker daemon became available during M1.2, and `postgres` and `redis` were started and verified healthy (PostgreSQL 17.2, `redis-cli ping` → PONG). Originally: **the Compose stack has never been started.** No Docker daemon on the implementation machine. `docker compose --profile core config` validates (exit 0), but `up` is unexecuted, so "every service starts healthy" is **unverified**. `scripts/smoke-test.sh` has likewise never run. | Blocks the M1.7 smoke gate only | Run `scripts/smoke-test.sh` and record the result. The stack itself is known to come up. |
+| 20 | **RESOLVED 2026-10-15 (M1.7). `scripts/smoke-test.sh` has now been executed and passes**, twice, including once from empty volumes — so the M1.1 criterion "every service starts healthy" is signed off by its own gate for the first time. It did not pass on the first attempt: it failed at step 19 (`down -v` then `up`) with "migrations are not at head after a volume wipe", which is how the missing migration step was found (see [§3](#3-in-progress-milestone)). The script now covers docs/TESTING.md §11 steps 1–7 and 9–12; step 8 belongs to M2.1/M3.1 and §11.12 is partial because no production overlay exists (issue 52). Previously: **FURTHER RESOLVED 2026-10-13 (M1.3).** The full `core` stack **plus** the `mocks` profile was started and used: `postgres`, `redis`, `backend`, `worker`, `beat`, `frontend` and `mock-idp` all reached `healthy`, and login/logout were driven through them in a real browser. `scripts/smoke-test.sh` itself is **still unexecuted**, so the M1.1 criterion is not formally signed off by its own gate. Previously: the Docker daemon became available during M1.2, and `postgres` and `redis` were started and verified healthy (PostgreSQL 17.2, `redis-cli ping` → PONG). Originally: **the Compose stack has never been started.** No Docker daemon on the implementation machine. `docker compose --profile core config` validates (exit 0), but `up` is unexecuted, so "every service starts healthy" is **unverified**. `scripts/smoke-test.sh` has likewise never run. | Blocks the M1.7 smoke gate only | Run `scripts/smoke-test.sh` and record the result. The stack itself is known to come up. |
 | 21 | **Images use exact tags, not digests**, contrary to AD-16. A digest cannot be resolved without a daemon, and inventing one would be fabricating a fact. | Reproducibility | `scripts/pin-digests.sh` resolves them; commit the result and close this entry. |
 | 22 | **Native Windows without `--reload` cannot reach PostgreSQL.** uvicorn 0.54 picks its loop by platform: no `--reload` on Windows means `ProactorEventLoop`, which psycopg's async driver rejects, so `/readyz` reports `database: false` even with PostgreSQL up. Verified directly. | Local dev ergonomics only; production is Linux | Documented in `README.md`. An attempted `asyncio` policy fix was **removed** — uvicorn uses a loop *factory* and ignores the policy, so the code fixed nothing while looking like it did. |
 | 23 | **Compose host ports moved off the defaults.** A PostgreSQL instance is already listening on 5432 on the implementation machine, so the original mapping would have collided on first `up`. | Avoided | PostgreSQL now publishes on host 5433 and Redis on 6380, both overridable. Container-to-container traffic is unchanged. |
@@ -861,9 +1068,18 @@ Once a decision is reviewed, record the date and the outcome here.
 
 | # | Issue | Severity | Handling |
 |---|---|---|---|
-| 49 | **`worker` and `beat` report `unhealthy` in `docker compose ps`, and have since before M1.5.** Recorded here because it was invisible: no entry existed for it. Their healthcheck is `celery inspect ping -d celery@$$HOSTNAME`, so the likely cause is a hostname mismatch in the check rather than a sick worker — the containers run, and `/readyz` reports `broker: true` throughout. **Not investigated and not fixed**: nothing in M1.6 uses Celery, and fixing it here would have been scope creep. | Local signal only; no known functional impact, but an `unhealthy` container that is actually fine trains people to ignore the column | Verify whether the worker answers `celery inspect ping` under its real node name, and correct the healthcheck. Belongs with M1.7's Compose smoke test (issue 20), which is the milestone that asserts the stack is healthy |
+| 49 | **RESOLVED 2026-10-15 (M1.7), and it was two unrelated faults rather than the one cause recorded here.** `worker` used exec-form `CMD`, so compose's `$$HOSTNAME` reached celery as the literal string `$HOSTNAME` — exec form has no shell to expand it — and it pinged `celery@$HOSTNAME`, a node that exists nowhere; the health log showed five retries of `No nodes replied within time constraint` (exit 69) while `celery inspect ping` by hand answered `celery@afb4637f73ce: OK`. Fixed with `CMD-SHELL`. `beat` declared **no healthcheck at all** and therefore inherited the backend image's `curl localhost:8000/healthz`, which a scheduler serving no HTTP can never satisfy; it is now explicitly disabled, after measuring that the schedule file goes 270s without a resync against a 300s `maxinterval` and so cannot support an honest staleness check. The smoke test asserts beat's container state and its `beat: Starting...` line instead. Both services now report correctly in `docker compose ps`, which unblocked issue 20. Previously: **`worker` and `beat` report `unhealthy` in `docker compose ps`, and have since before M1.5.** Recorded here because it was invisible: no entry existed for it. Their healthcheck is `celery inspect ping -d celery@$$HOSTNAME`, so the likely cause is a hostname mismatch in the check rather than a sick worker — the containers run, and `/readyz` reports `broker: true` throughout. **Not investigated and not fixed**: nothing in M1.6 uses Celery, and fixing it here would have been scope creep. | Local signal only; no known functional impact, but an `unhealthy` container that is actually fine trains people to ignore the column | Verify whether the worker answers `celery inspect ping` under its real node name, and correct the healthcheck. Belongs with M1.7's Compose smoke test (issue 20), which is the milestone that asserts the stack is healthy |
 | 50 | **A dashboard write is not reflected until the cache entry expires** (up to `DCP_DASHBOARD_CACHE_TTL_SECONDS`, default 15 s). Retiring a server and immediately reloading shows the old total. This is the cache behaving as specified, not a defect, but it is a real behaviour an operator will notice and it is not written in the contract beyond the TTL field. | Accepted, by design | None needed. If it ever matters, invalidate on write — which means deleting every dashboard key for every scope, so it is a real cost rather than a one-liner. `DCP_DASHBOARD_CACHE_TTL_SECONDS=0` disables caching entirely. The integration tests that write then read use an `uncached` fixture rather than asserting the cache away |
 | 51 | **RESOLVED 2026-10-15. Two pre-existing integration tests were order-dependent and failed roughly one run in six.** `tests/integration/test_admin_roles.py::test_granting_production_scope_requires_holding_it` (M1.4) and `tests/integration/test_auth_flow.py::test_audit_rows_are_correlated_with_the_request` (M1.3). Both took `rows[0]` from a query filtered only by `action_type` and ordered by `occurred_at DESC`, assuming the newest row of that type was their own. **The original diagnosis of a tie was wrong, and so was the proposed fix.** A probe test run last in the session found **zero** `(action_type, occurred_at)` groups with more than one row across five full suite runs; rows of one action type are 200–700 ms apart. The real mechanism is an *inversion*: `occurred_at` is the **transaction** timestamp while the insert happens later (measured gap 7–30 ms, varying fourfold between rows), so ordering by it is not insertion order and an outlier gap reorders two rows. The recovered failure confirms it — `assert 'empty_scope' == 'delegation_escalation'`, where the count assertion on the preceding line had passed, so exactly one new row existed and `rows[0]` was still an older test's. A tiebreaker would **not** have fixed this: under an inversion `occurred_at DESC` still decides and `id DESC` is never consulted, and `app/db/types.py` documents uuid7 as monotonic *per millisecond only*. Scale was also understated: probing straight after `test_admin_roles` shows **49** `AUTHZ_DENIED` rows, not the 5 the end-of-run probe sees (`test_migrations.py` recreates the schema mid-session). | Was a flaky suite. No production defect: the ordering was a test-side assumption, not application behaviour | Each query now names the row it means instead of trusting the ordering: `_denied_rows` takes the per-test `caller`; `SESSION_TERMINATED` selects on the administrator and bootstrap `ROLE_GRANTED` on the grant it created; `_audit_rows` takes `actor_id` or `correlation_id`, with `_correlation_of` mirroring `audit.service.correlation_uuid` — correlation is the only handle on `LOGIN_FAILED` and `identity_conflict` rows, which are written with `actor_type` `SYSTEM` and no `actor_id`. `inventory_helpers.audit_rows` was **not** affected (every caller already filters by `target_id` and asserts a single row) and only gained a note. Three global `before + 1` counts became "exactly one row for this request", which is narrower, not looser. `id DESC` added as a secondary only. **Verified: 16 consecutive clean runs** — 8 on the fix branch off `main` (209 passed each) and 8 with the M1.6 suite present (231 passed each) — plus `scripts/check-all.sh` green end to end. Application code untouched (AD-11). The change was written on `fix-issue-51-audit-row-ordering` off `main`, because both test modules predate M1.6, and **reached `main` with M1.6 itself** — merged into `phase-M1.6` at `900bf5c`, then `main` by PR #8 at `d3e9544`, so that branch needs no PR of its own |
+
+### Implementation issues (found during M1.7, 2026-10-15)
+
+| # | Issue | Severity | Handling |
+|---|---|---|---|
+| 52 | **There is no production Compose overlay**, so docs/TESTING.md §11.12's "resource limits present in the production overlay" has nothing to assert. `infra/compose/` holds one compose file (the local development stack) and the mock IdP. The development file does declare limits — eight services carry a CPU limit — and the smoke test asserts those, plus non-root, no privileged flag, no added capabilities and `no-new-privileges`, so the half of §11.12 that is checkable is checked. | Verification gap in a step that reads as fully covered | Write the overlay when there is a deployment target to write it for (Phase 6, alongside `OPEN-07`'s recovery objectives). Until then the smoke test prints `NOTE: no production overlay exists` rather than passing silently |
+| 53 | **Vite's file watcher does not see edits through the Windows bind mount, so the E2E suite can validate code that is not in the working tree.** The `frontend` container mounts `frontend/src:ro` and runs the dev server; a changed module is not picked up, and the container keeps serving the previously built graph. Measured while fixing the response race (issue 54's cousin, see [§3](#3-in-progress-milestone)): with the fix on disk the probe still showed the unfiltered list 3 times in 8, and 0 times in 8 after `docker compose restart frontend`. This is worse than a flake — a green E2E run can be evidence about stale code. | **Trust in the E2E suite.** No production impact | `docker compose restart frontend` after changing `frontend/src`, which the README's E2E section now says. A real fix is either polling (`usePolling` in the Vite server config, which costs CPU) or running the dev server on the host rather than in the container. Not chosen here: both are workflow changes that deserve their own decision, and CI is unaffected because it builds from a fresh checkout |
+| 55 | **The E2E suite exhausts the `/auth/*` rate limit after about three consecutive runs at the default setting.** The suite signs in three times per run (two in global setup, one in the §12.1 test that is *about* signing in), and the auth class allows 10 per 300s and **fails closed**. The fourth or fifth consecutive run therefore gets `429` from `/auth/login`, which surfaces as "the mock identity provider heading was not found" — a message that looks like the IdP is down. Verified: a five-run series on a default stack went pass, pass, pass, pass, fail with the limiter key at `11`. Global setup already reuses saved sessions when they still authenticate, which makes the steady-state cost zero; the problem is only after a stack recreate, when every saved session is stale. | Local iteration only. CI runs once against a fresh stack (three logins) and is unaffected | Start the stack with `DCP_AUTH_RATE_LIMIT_MAX=100` for E2E work, which the compose file passes through and docs/TESTING.md §16 documents. Deliberately **not** raised by default: the limit is a real control (AD-19) and a test environment that disables it stops exercising the thing. If the suite grows more logins, give it an identity per spec rather than raising the ceiling |
+| 54 | **`x-backend-env` in the compose file enumerates the settings it passes through, so a setting absent from that list keeps its application default whatever `.env` says.** Five settings are in that position today — `DCP_READ_RATE_LIMIT_MAX`, `DCP_READ_RATE_LIMIT_WINDOW_SECONDS`, `DCP_SERVER_STALE_AFTER_SECONDS`, `DCP_SSRF_HOST_ALLOWLIST`, `DCP_SSRF_INSECURE_HOSTS` — all now documented in `.env.example` (M1.7) and all with correct defaults, so nothing is broken; but a developer who sets one in `.env` sees no effect and no warning. Found by `scripts/check_env_example.py`, which checks that the *names* exist, not that they are plumbed. | Configuration surprise; no behavioural fault today | Either add the five to `x-backend-env`, or switch the backend services to `env_file` and stop enumerating. The second is smaller but makes the container's configuration surface implicit, which is a real trade-off and not this milestone's call. The checker could be extended to compare the two lists once the decision is made |
 
 ---
 
@@ -871,6 +1087,172 @@ Once a decision is reviewed, record the date and the outcome here.
 
 All results below were produced by running the commands and reading the output.
 Nothing here is inferred.
+
+### Executed — `./scripts/check-all.sh`, 18/18 passed (M1.7, 2026-10-15)
+
+Run from `D:/devops-dashboard` against the live Compose stack, both variables set so
+nothing skipped. The suite is **18 checks** now rather than 15: `.env.example`
+completeness and the two changed-line coverage gates are new.
+
+| Check | Result |
+|---|---|
+| backend: ruff lint | ok |
+| backend: ruff format | ok |
+| backend: mypy | ok |
+| backend: bandit | ok |
+| backend: unit tests | **360 passed**, 231 deselected, 1 warning, 23.90s |
+| backend: integration | **231 passed**, 360 deselected, 1 warning, 63.83s |
+| backend: pip-audit | No known vulnerabilities found |
+| frontend: eslint | ok |
+| frontend: prettier | ok |
+| frontend: tsc | ok |
+| frontend: vitest | **115 passed**, 13 files |
+| frontend: build | ok |
+| frontend: npm audit | 0 vulnerabilities |
+| contracts: api types | ok — regenerated, no drift |
+| **config: .env.example** (new) | `.env.example is complete` |
+| **coverage: backend diff** (new) | `no coverable line changed against origin/main` |
+| **coverage: frontend diff** (new) | **26/26 changed lines covered (100.0%)**, floor 80% |
+| docs: link check | ok — 400 relative links in 13 files, 0 problems |
+
+`ALL CHECKS PASSED`, exit 0.
+
+**The backend numbers are identical to M1.6's and issue 44's — 360 and 231.** That
+is the evidence for "no backend code changed": this milestone touched no Python
+file, and the suites agree. The frontend went from 108 to 115 (the seven
+`Applications.test.tsx` tests the coverage gate asked for); 108 was itself 105 plus
+the three `useLatestResponse` tests.
+
+The backend coverage gate reporting "no coverable line changed" is the correct
+answer, not a skip — and it is the reason that gate has not been exercised against a
+real backend diff yet. The frontend one has: it **failed at 60 %** before the
+application tests were written.
+
+### Executed — `./scripts/smoke-test.sh`, PASSED (M1.7, 2026-10-15)
+
+**Run twice, and the first run failed**, which is worth recording because the
+failure is the milestone's main finding.
+
+Run A — failed at step 19 with `FAIL: migrations are not at head after a volume
+wipe`. Steps 1–18 had passed. Nothing applied the schema, so a stack from empty
+volumes was healthy and unusable (see [§3](#3-in-progress-milestone)).
+
+Run B, after the `migrate` service was added — **`SMOKE TEST PASSED`**, exit 0, and
+this run exercised the from-nothing path end to end:
+
+```
+=== 11. Resource limits are declared for the core services (§11.12, partial)
+8 services declare a cpu limit
+NOTE: no production overlay exists; its limits cannot be checked
+=== 12. Worker and beat are connected, and ping round-trips (§11.9)
+ping -> pong
+beat state=running, scheduler started
+=== 13. Mock IdP login completes end to end (§11.7)
+callback landed on: http://localhost:5173/dashboard
+logged in as admin@example.invalid
+=== 14. Demonstration mode is reported by the API (§11.6)
+demo_mode: true
+=== 15. Granting the first administrator through the application
+bootstrap exit 0 (0 granted, 2 already present)
+=== 16. Seeding synthetic inventory
+seed_created applications=3 servers=6
+=== 17. Seeded inventory is visible through the API (§11.5)
+server list returned 6 rows, visibly synthetic
+=== 18. A database outage degrades honestly, with no zeros (§11.10)
+readyz=503, healthz=200, and no zero was substituted for an unknown
+=== 19. down -v then up reaches the same healthy state (§11.11)
+stack returned to the same healthy state from empty volumes
+SMOKE TEST PASSED
+```
+
+A third run after the final compose changes also passed, starting from a populated
+volume (`bootstrap exit 2`, `seed 0/0`, 45 rows) — so both the first-run and the
+re-run paths are evidenced.
+
+### Executed — E2E suite, 11/11, five consecutive runs (M1.7, 2026-10-15)
+
+`npm run test:e2e` against the Compose stack, serially, nothing else running, with
+the stack started using the **E2E overrides docs/TESTING.md §16 documents** —
+`DCP_AUTH_RATE_LIMIT_MAX=100` and `DCP_DASHBOARD_CACHE_TTL_SECONDS=0`:
+
+```
+--- run 1 ---  11 passed (54.0s)
+--- run 2 ---  11 passed (43.3s)
+--- run 3 ---  11 passed (41.8s)
+--- run 4 ---  11 passed (42.1s)
+--- run 5 ---  11 passed (40.9s)
+```
+
+**The override matters and the figure would be dishonest without it** (issue 55).
+At the default limit of 10 logins per 300s the suite exhausts the `/auth/*` rate
+limiter after roughly three consecutive runs: a separate five-run series on a
+default stack passed, passed, passed, passed, then failed, and the limiter key read
+`11`. That is the control working as designed — it fails closed — not a defect, but
+it means "five clean runs" is only meaningful with the configuration stated. A
+single run on a fresh stack, which is what CI does, uses three logins and is well
+inside the default.
+
+**Two earlier measurements were discarded and should not be read as results.** One
+batch was run while two other background suites were competing for the machine; it
+produced 1 and 9 unit-test failures and several E2E failures, all timeouts in files
+the change did not touch, and none of them reproduced serially. A second batch ran
+against a **stale frontend bundle** (issue 53). The five runs above are the first
+clean serial measurement of the current code.
+
+Composition: 5 authorisation tests (§12.8, including the direct-API half), 3
+critical-path tests (§12.1, §12.2), 3 `axe-core` passes over the dashboard, the
+server list and the registration form — in a real browser, with the contrast rule
+**enabled**, which jsdom cannot do.
+
+### Executed — developer setup from a fresh clone (M1.7, 2026-10-15)
+
+The M1.7 acceptance criterion. **Precisely what this was:** the branch was cloned
+with `git clone --branch phase-M1.7` into a new empty directory outside the working
+tree, `.env` was created from `.env.example`, and the README's quick-start command
+was run verbatim. Docker volumes and the Compose project were destroyed first, so
+the database and Redis were genuinely empty.
+
+**This was *not* a clean machine**, and the claim is not made. The host already had
+Docker, git, Python and Node installed, and Docker's image layer cache was warm, so
+the build was faster than a first-ever build would be. What was fresh: the checkout,
+the volumes, the containers and the `.env`. What was not: the host toolchain and the
+image cache. A genuinely clean machine remains unverified.
+
+Results, all read from the running stack:
+
+```
+Container dcp-migrate-1   Exited (0)
+Container dcp-postgres-1  Healthy      dcp-redis-1     Healthy
+Container dcp-backend-1   Healthy      dcp-worker-1    Healthy
+Container dcp-beat-1      Healthy      dcp-frontend-1  Healthy
+Container dcp-mock-idp-1  Healthy
+
+/readyz  -> {"status":"ok","checks":{"database":true,"broker":true,"migrations":true}}
+alembic  -> 0004 (head)
+SPA      -> <div id="root">
+dcp_test -> created automatically by infra/compose/postgres-init/
+login    -> landed: http://localhost:5173/dashboard
+session  -> signed in as: admin@example.invalid | roles: [] | demo_mode: True
+```
+
+`roles: []` is the documented behaviour, not a fault: every account starts with no
+roles and there is no bootstrap administrator by design.
+
+**The first attempt at this exposed fault 3** — the login redirect went to
+`:8000`, which serves no SPA, because `.env.example` carried the native-development
+value. The run above is after that fix.
+
+### Not executed, and therefore not claimed
+
+- **The `e2e` and `env-example` CI jobs have never run on GitHub Actions.** Both are
+  configured in `.github/workflows/ci.yml` and both pass locally, but no push has
+  exercised them. The acceptance criterion says "E2E suite passes in CI"; what is
+  evidenced is "passes locally against the same stack CI builds". The first PR will
+  settle it.
+- **The coverage gate has never run on a backend diff**, because this milestone
+  changed no backend file.
+- **A genuinely clean machine** — see above.
+- `pre-commit`, `gitleaks` and `trivy` are still not installed locally (issue 26).
 
 ### Executed — `./scripts/check-all.sh`, 15/15 passed (issue 44, 2026-10-15)
 
@@ -1330,13 +1712,46 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-**M1.7 — Phase 1 consolidation**
-([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m17--phase-1-consolidation)).
-Its dependencies are satisfied: M1.6 is complete, and **issue 44 is done**
-(2026-10-15) — the UI gap that would otherwise have shaped the first E2E suite around
-a missing page is closed, which was the whole reason for taking it first.
+**Open the pull request and watch CI, before anything else.** Two jobs this
+milestone added — `e2e` and `env-example` — have never run on GitHub Actions, and the
+acceptance criterion is that the E2E suite passes *in CI*. Locally it passes against
+the same stack CI builds, which is strong but is not the claim. Expect to find
+runner-specific problems: the E2E job builds the stack with `--wait --wait-timeout
+300` on a two-core runner, and the suite's own timeouts (45s per test) were tuned on
+a faster machine.
 
-**What M1.7 can build on:**
+**Then M2.1 — Prometheus client and metric templates**
+([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m21--prometheus-client-and-metric-templates)),
+the first milestone of Phase 2. Its prerequisites are **not all met**, and two are
+decisions rather than work:
+
+- **`TS-01` (charting library) is still unselected.** It gates M2.2, not M2.1, but
+  it has a functional gate attached — the library must render a data gap as a gap,
+  never as a zero — so it wants deciding with a test in hand rather than under
+  deadline.
+- **`TS-02` (systemd metrics source)** and **`OPEN-14` (target discovery)** are
+  likewise open. `OPEN-09` (Windows scope) has a working default.
+- Prometheus and `node-exporter` exist in the `observability` Compose profile as
+  **placeholders**. M2.1 is the milestone that makes them real, which also makes
+  docs/TESTING.md §11 step 8 assertable for the first time — the one smoke-test step
+  deliberately left uncovered.
+
+**What Phase 2 can build on, and what it should read first:**
+
+- **`scripts/smoke-test.sh` and the E2E suite are now the two places a stack-level
+  regression gets caught.** Extend them rather than adding a third mechanism; §11
+  step 8 and §12 paths 3–7 are written and waiting.
+- **Issue 53 before touching the frontend**: the dev container can serve stale
+  modules, so `docker compose restart frontend` after editing `src/`. A green E2E
+  run is not evidence until that is ruled out.
+- **`useLatestResponse` for any view that re-requests.** Every new filtered or
+  polled view needs it; the race it prevents is invisible in jsdom and intermittent
+  in a browser.
+- **The coverage gate will judge the diff**, 80 % on changed lines. It has not yet
+  run against a backend change, so M2.1 will be the first to find out whether the
+  Cobertura path matching works on `app/` paths in anger.
+
+**What M1.7 built on (kept for history):**
 
 - `frontend/src/api/schema.ts` and `npm run generate:api` — the E2E suite should use
   the generated types rather than hand-writing fixtures.
@@ -1392,6 +1807,57 @@ a missing page is closed, which was the whole reason for taking it first.
    dashboard total.
 
 ## 10. Scope confirmation
+
+**M1.7 implementation session (2026-10-15).** Scope was milestone M1.7 plus
+**issue 49**, which was explicitly in scope because the smoke test cannot assert a
+healthy stack while two services lie about their health.
+
+**Added:** `scripts/check_env_example.py`, `scripts/check_coverage_diff.py`,
+`infra/compose/postgres-init/01-create-test-database.sql`,
+`frontend/playwright.config.ts`, `frontend/e2e/` (`support.ts`, `global-setup.ts`,
+`critical-path.spec.ts`, `authorisation.spec.ts`),
+`frontend/src/components/useLatestResponse.ts` and its test, and
+`frontend/src/pages/applications/Applications.test.tsx`.
+
+**Rewritten:** `scripts/smoke-test.sh` — 19 numbered steps mapped onto
+docs/TESTING.md §11, where it previously covered a subset and had never run.
+
+**Modified:** `infra/compose/docker-compose.yml` (the `migrate` service; the worker
+and beat healthchecks; three `depends_on`; the postgres init mount; three settings
+passed through), `.env.example` (six additions and one corrected value),
+`README.md`, `docs/TESTING.md`, `docs/IMPLEMENTATION_PLAN.md`,
+`.github/workflows/ci.yml` (two jobs added, two coverage steps, `fetch-depth: 0`),
+`scripts/check-all.sh`, `.gitignore`, `frontend/package.json`,
+`frontend/tsconfig.json`, `frontend/vite.config.ts`.
+
+Changes touching code outside the milestone's own files, each forced by it rather
+than opportunistic:
+
+- **Four frontend pages** (`ServerList`, `ApplicationList`, `ApplicationDetail`,
+  `ServerDetail`) moved onto `useLatestResponse`. Not a refactor for tidiness: the
+  race it fixes is what made the new E2E suite fail three runs in eight, and
+  patching only the one page the test touched would have left four copies of a known
+  defect (CLAUDE.md §3 allows noting and moving on; this one blocked the
+  milestone's own acceptance criterion).
+- **`frontend/vite.config.ts`** — `cobertura` added to the coverage reporters so one
+  parser serves both ends of the stack, and `test.include` scoped to `src/` because
+  vitest was otherwise collecting the Playwright specs and `test.describe` threw
+  inside the vitest runner.
+- **`frontend/tsconfig.json`** — `e2e` and `playwright.config.ts` added to
+  `include`, so the E2E code is typechecked rather than exempt.
+
+**One new dependency:** `@playwright/test`, pinned exactly, dev-only. TECH_STACK §8.2
+already names Playwright as this project's E2E tool, so rung 1 of §10 is satisfied
+by the stack document — the same argument M1.6 used for `openapi-typescript`.
+**`@axe-core/playwright` was deliberately not added**: `axe-core` is already a
+dependency and `page.addScriptTag` plus `axe.run` is the whole of what the wrapper
+provides (rung 5).
+
+**Deliberately not touched, as scoped:** issue 21 (digest pinning), issue 26
+(proving the secret scanner), issue 40 (the CSRF error code), `TS-01`. Issues 42, 47
+and 50 are also still open and untouched.
+
+**No backend file changed, and no migration.** The schema is still at `0004`.
 
 **Issue 44 session (2026-10-15).** Scope was issue 44 and nothing else: the server
 edit form and association management UI, taken before M1.7 for the reason in

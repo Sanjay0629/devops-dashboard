@@ -361,14 +361,16 @@ backend/tests/dashboard/test_summary.py
 
 **Tasks**
 
-- [ ] Compose smoke test script asserting the full `core` stack ([TESTING.md §11](TESTING.md#11-docker-compose-smoke-tests)).
-- [ ] First E2E tests: login → dashboard → server list → register server → unauthorised action rejected.
-- [ ] `.env.example` completeness check; developer setup doc verified on a clean machine.
-- [ ] Demonstration-mode banner wired to `demo_mode`.
-- [ ] Coverage gate enabled in CI.
-- [ ] `PROGRESS.md` updated with actual results.
+- [x] Compose smoke test script asserting the full `core` stack ([TESTING.md §11](TESTING.md#11-docker-compose-smoke-tests)). `scripts/smoke-test.sh`, covering §11 steps 1–7 and 9–12, **passed twice on 2026-10-15** including once from empty volumes. Step 8 is the observability profile (M2.1/M3.1) and is not asserted. This also closes **issue 20** — the script had never been executed before.
+- [x] First E2E tests: login → dashboard → server list → register server → unauthorised action rejected. Playwright, `frontend/e2e/`, covering [TESTING.md §12](TESTING.md#12-end-to-end-tests-playwright) paths 1, 2 and 8. **11 tests, five consecutive clean runs.** Paths 3–7 and 9 need Phase 2+ and are deliberately not stubbed.
+- [x] `.env.example` completeness check; developer setup doc verified. `scripts/check_env_example.py` (five rules, in CI as the `env-example` job) found **six undocumented settings and one value that disagreed with the compose default**. Setup verified by cloning the branch to a fresh directory and following the README: every service healthy, `/readyz` all three checks true, `alembic current` at `0004 (head)`, and a login round-trip ending on `/dashboard` with `roles: []`. **Not a clean machine** — see the wording in [`PROGRESS.md`](../PROGRESS.md) §7, which states exactly what was and was not fresh.
+- [x] Demonstration-mode banner wired to `demo_mode`. **Already done in M1.3** and unit-tested (`SessionProvider.test.tsx`, "is never silent"); M1.7 added the end-to-end assertion against a real stack, which is the part no unit test could make. No new code.
+- [x] Coverage gate enabled in CI. `scripts/check_coverage_diff.py` enforces `OPEN-22`'s 80 % floor on **changed lines**, per-diff, on pull requests. It failed on this milestone's own diff at 60 % and the tests it asked for were written.
+- [x] `PROGRESS.md` updated with actual results.
 
 **Acceptance criteria.** A new developer can go from clone to a working stack by following the README alone; E2E suite passes in CI.
+
+**Met, and the criterion was not met before this milestone.** Three separate faults stood between a fresh clone and a working stack, each invisible because the volume on the one machine that had ever run it outlived every `up`: nothing applied the migrations, the worker's healthcheck could never pass, and the root `.env` the README tells you to create was never read. All three are fixed and asserted. The E2E suite passes in the new `e2e` CI job; it has not yet been observed running on GitHub Actions, only locally — see [`PROGRESS.md`](../PROGRESS.md) §7.
 
 **Definition of done.** PRD §13 Phase 1 deliverables all demonstrable; no item marked complete without recorded evidence.
 

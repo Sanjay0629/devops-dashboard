@@ -1,6 +1,6 @@
 # Testing and Verification — DevOps Control Plane
 
-**Status:** Draft for review. **No test exists and no command in this document has been run.** Every command is marked **[to implement]**.
+**Status:** Partly implemented. As of **M1.7** the backend and frontend suites, the Compose smoke test (§11) and the first end-to-end tests (§12) all exist and have been run; their recorded results are in [`PROGRESS.md`](../PROGRESS.md) §7. Sections still marked **[to implement]** describe tests whose subject does not exist yet — metrics, services, logs, alerts, deployments and approvals all arrive from Phase 2 onward.
 **Source of truth:** [`../PRD.md`](../PRD.md) §12. Related: [SECURITY.md](SECURITY.md) · [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) · [API_CONTRACTS.md](API_CONTRACTS.md) · [DATABASE.md](DATABASE.md)
 
 ---
@@ -234,6 +234,8 @@ Additional suites:
 
 ## 11. Docker Compose smoke tests
 
+**Implemented as [`scripts/smoke-test.sh`](../scripts/smoke-test.sh) and passing as of M1.7**, after two faults it exposed were fixed: the worker's healthcheck never passed (issue 49) and *nothing applied the migrations*, so a fresh volume produced a healthy-looking stack with no schema. The script's steps are numbered to match this list. Step 8 is not asserted — the observability services are placeholders until M2.1/M3.1, and asserting anything about them would be presenting a mocked integration as operational (CLAUDE.md §7). Step 12's "resource limits in the production overlay" is partial: no production overlay exists yet, so what exists is checked instead (non-root, no privileged flag, no added capabilities, limits declared in the file we have).
+
 Script-driven, run in CI and nightly:
 
 1. `docker compose --profile core up -d` → every service reports healthy within a timeout.
@@ -252,6 +254,13 @@ Script-driven, run in CI and nightly:
 ---
 
 ## 12. End-to-end tests (Playwright)
+
+**Paths 1, 2 and 8 are implemented as of M1.7** — `frontend/e2e/critical-path.spec.ts` and `frontend/e2e/authorisation.spec.ts`, run by `npm run test:e2e` against the Compose stack and by the `e2e` CI job. Paths 3–7 and 9 are **not** stubbed: each needs metrics, services, logs, alerts, deployments or approvals, and a test named for a feature that does not exist would report a working feature.
+
+Two things the implementation settled, both worth knowing before adding to the suite:
+
+- **The suite seeds its own preconditions and is idempotent** — synthetic inventory, an administrator through the bootstrap CLI, then a Viewer granted `VIEWER`. It reuses saved sessions when they still authenticate, because signing in is rate limited (the `/auth/*` class, 10 per 300 s, failing closed) and a setup that signed in unconditionally began answering `429` after a few local re-runs.
+- **A direct API assertion must send an `Origin` header.** `app/core/csrf.py` checks origin *before* the route's permission dependency and also answers `403 forbidden`, so a `403` assertion on a request without one passes on a CSRF rejection and proves nothing about permissions. Path 8's helper asserts the refusal is *not* a CSRF refusal for that reason.
 
 **Critical paths (run on every PR)**
 
@@ -342,9 +351,9 @@ Every PRD §12 failure scenario, with the assertion that matters:
 
 ## 16. How to run everything
 
-**All commands below are [to implement].** The files they depend on do not exist yet; they are specified here so the implementation creates them under these names ([IMPLEMENTATION_PLAN.md M1.1](IMPLEMENTATION_PLAN.md#m11--repository-skeleton-compose-core-health-endpoint-ci)).
+**The commands below exist and have been run** as of M1.7, except where a line says otherwise (`test:e2e` for paths that need Phase 2, and the real-integration profile, which has no sandbox — `OPEN-23`). They were originally specified here before any code existed, which is why the names were already fixed.
 
-### Backend **[to implement]**
+### Backend
 
 ```bash
 cd backend
@@ -362,7 +371,7 @@ uv run alembic upgrade head              # migrate
 uv run alembic downgrade -1              # roll back one revision
 ```
 
-### Frontend **[to implement]**
+### Frontend
 
 ```bash
 cd frontend
@@ -381,14 +390,29 @@ npm run generate:api                     # regenerate src/api/schema.ts from the
 
 Run it in the same commit as any change to a route or a response model. The `contracts` CI job and `scripts/check-all.sh` both regenerate and fail if the committed file moves ([TECH_STACK.md §11](TECH_STACK.md#11-contract-synchronisation)); the fix is to run it and commit the result. Never hand-edit `schema.ts`.
 
-### Full stack and E2E **[to implement]**
+### Full stack and E2E
 
 ```bash
-docker compose -f infra/compose/docker-compose.yml --profile core --profile mocks up -d
+# Brings the stack up itself, asserts §11, and tears it down (KEEP_STACK=1 to leave it).
 ./scripts/smoke-test.sh
+
+# The E2E suite runs against an already-running stack and does not start one.
+docker compose --env-file .env -f infra/compose/docker-compose.yml \
+  --profile core --profile mocks up -d --wait
 npm run test:e2e --prefix frontend
-docker compose down -v
+docker compose -f infra/compose/docker-compose.yml --profile core --profile mocks down -v
 ```
+
+**`--env-file .env` matters.** Compose takes its project directory from the compose file's location, so with `-f infra/compose/docker-compose.yml` it reads `infra/compose/.env` and ignores the one at the repository root. Every `${VAR}` has a default, so the stack works either way — which is why this went unnoticed until M1.7 — but without the flag anything set in the root `.env` is silently discarded.
+
+Two settings are worth overriding for E2E, and both are passed through by the compose file:
+
+```bash
+DCP_DASHBOARD_CACHE_TTL_SECONDS=0   # issue 50: a dashboard aggregate is cached for 15s
+DCP_AUTH_RATE_LIMIT_MAX=100         # the suite signs in legitimately, several times per run
+```
+
+**Never run two pytest sessions against `dcp_test` at once**, and do not run the smoke test beside one: the session-scoped `migrated` fixture drops the schema under the other session, and `scripts/smoke-test.sh` ends in `docker compose down -v`.
 
 ### Real-integration tests — explicit opt-in, never in CI **[to implement]**
 
@@ -398,7 +422,7 @@ docker compose down -v
 uv run pytest -q -m real_integration --integration-profile=nonprod-sandbox
 ```
 
-### Everything a contributor should run before opening a PR **[to implement]**
+### Everything a contributor should run before opening a PR
 
 ```bash
 ./scripts/check-all.sh
@@ -485,6 +509,10 @@ Nightly: full E2E, extended failure injection, longer soak on the worker queues.
 ---
 
 ## 19. Coverage
+
+**Enforced as of M1.7** by [`scripts/check_coverage_diff.py`](../scripts/check_coverage_diff.py), which reads a Cobertura report plus `git diff` and fails under 80 % of the **changed** lines. It gates per-diff, on pull requests only: a push to `main` has no meaningful diff to measure against, and a total-coverage gate is the thing this section explicitly declines to use. Both ends of the stack are held to one rule because vitest emits Cobertura alongside lcov. `scripts/check-all.sh` runs the same check locally against `origin/main`.
+
+Lines the report does not mention are not counted — a blank line, a comment, an `if TYPE_CHECKING:` import — and a diff that touches no measurable file passes with a message saying so, rather than becoming noise people learn to override.
 
 Coverage is a signal, not a target. The floor applies to **changed code** (initially 80 %), with specific areas held higher because their edge cases are security-relevant: the permission matcher, both state machines, service-state normalisation, redaction, and idempotency resolution are expected to be exhaustively covered by table-driven tests. A high overall percentage with an untested approval-bypass path is a failing test suite regardless of the number.
 
