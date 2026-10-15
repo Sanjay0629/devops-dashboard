@@ -15,20 +15,31 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { listApplications, type ApplicationSummary, type Page, type Result } from '@/api/inventory';
-import { Empty, Failure, Loading, Status } from '@/pages/inventory/states';
+import { EmptyState, LoadingState } from '@/components/EmptyState';
+import { Pager } from '@/components/Pager';
+import { useCursorPaging } from '@/components/useCursorPaging';
+import { ErrorState } from '@/components/ErrorState';
+import { StatusBadge } from '@/components/StatusBadge';
 
 export function ApplicationList(): React.JSX.Element {
   const [q, setQ] = useState('');
   const [result, setResult] = useState<Result<Page<ApplicationSummary>> | null>(null);
+  const paging = useCursorPaging();
+  const { cursor, reset } = paging;
 
   const load = useCallback(async () => {
     setResult(null);
-    setResult(await listApplications({ q: q.trim() || undefined }));
-  }, [q]);
+    setResult(await listApplications({ q: q.trim() || undefined, cursor: cursor ?? undefined }));
+  }, [q, cursor]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A search change is a different collection, so page 1.
+  useEffect(() => {
+    reset();
+  }, [q, reset]);
 
   return (
     <section aria-labelledby="applications-heading">
@@ -67,11 +78,11 @@ export function ApplicationList(): React.JSX.Element {
         </button>
       </form>
 
-      {result === null && <Loading what="applications" />}
+      {result === null && <LoadingState what="applications" />}
       {result?.kind === 'ok' && result.value.items.length === 0 && (
-        <Empty message="No applications are registered." />
+        <EmptyState message="No applications are registered." />
       )}
-      {result !== null && result.kind !== 'ok' && <Failure result={result} />}
+      {result !== null && result.kind !== 'ok' && <ErrorState result={result} />}
 
       {result?.kind === 'ok' && result.value.items.length > 0 && (
         <table className="w-full text-left text-sm">
@@ -106,12 +117,21 @@ export function ApplicationList(): React.JSX.Element {
                   {application.owner_team ?? 'Not recorded'}
                 </td>
                 <td>
-                  <Status value={application.status} />
+                  <StatusBadge value={application.status} />
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+
+      {result?.kind === 'ok' && (
+        <Pager
+          paging={paging}
+          nextCursor={result.value.page.next_cursor}
+          hasMore={result.value.page.has_more}
+          label="Applications"
+        />
       )}
     </section>
   );

@@ -89,8 +89,11 @@ describe('ServerList', () => {
     renderList({ kind: 'authenticated', session: session(['server:read']) });
     expect(await screen.findByRole('link', { name: 'Web 01' })).toBeInTheDocument();
     expect(screen.getByText('web-01.internal.example')).toBeInTheDocument();
-    // getAllBy: "PENDING" is also one of the status filter's options.
-    expect(screen.getAllByText('PENDING').length).toBeGreaterThan(1);
+    // M1.6's StatusBadge renders a human label; the filter option still
+    // carries the API value. Asserting both is what proves the row's status
+    // came from the row rather than from the dropdown.
+    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'PENDING' })).toBeInTheDocument();
   });
 
   it('says an owner was never recorded rather than showing a dash', async () => {

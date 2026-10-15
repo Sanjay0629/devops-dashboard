@@ -16,7 +16,11 @@ import { Link } from 'react-router-dom';
 import { listServers, type Page, type Result, type ServerSummary } from '@/api/inventory';
 import { PERMISSIONS } from '@/auth/permissions';
 import { useCanRender, useIsReadOnly } from '@/auth/useSession';
-import { Empty, Failure, Loading, Status } from '@/pages/inventory/states';
+import { EmptyState, LoadingState } from '@/components/EmptyState';
+import { Pager } from '@/components/Pager';
+import { useCursorPaging } from '@/components/useCursorPaging';
+import { ErrorState } from '@/components/ErrorState';
+import { StatusBadge } from '@/components/StatusBadge';
 
 const ENVIRONMENTS = ['development', 'staging', 'production', 'other'];
 const STATUSES = ['PENDING', 'MANAGED', 'STALE', 'UNREACHABLE', 'RETIRED'];
@@ -28,15 +32,31 @@ export function ServerList(): React.JSX.Element {
   const [result, setResult] = useState<Result<Page<ServerSummary>> | null>(null);
   const mayWrite = useCanRender(PERMISSIONS.serverWrite);
   const readOnly = useIsReadOnly();
+  const paging = useCursorPaging();
+  const { cursor, reset } = paging;
 
   const load = useCallback(async () => {
     setResult(null);
-    setResult(await listServers({ environment, status, q: q.trim() || undefined }));
-  }, [environment, status, q]);
+    setResult(
+      await listServers({
+        environment,
+        status,
+        q: q.trim() || undefined,
+        cursor: cursor ?? undefined,
+      }),
+    );
+  }, [environment, status, q, cursor]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A filter change is a different collection, so page 1. Keyed on the filter
+  // values and not on `load`, which also changes with the cursor — resetting
+  // there would send "Next" straight back to the first page.
+  useEffect(() => {
+    reset();
+  }, [environment, status, q, reset]);
 
   return (
     <section aria-labelledby="servers-heading">
@@ -134,11 +154,11 @@ export function ServerList(): React.JSX.Element {
         </button>
       </form>
 
-      {result === null && <Loading what="servers" />}
+      {result === null && <LoadingState what="servers" />}
       {result?.kind === 'ok' && result.value.items.length === 0 && (
-        <Empty message="No servers match these filters, or none are within your access scope." />
+        <EmptyState message="No servers match these filters, or none are within your access scope." />
       )}
-      {result !== null && result.kind !== 'ok' && <Failure result={result} />}
+      {result !== null && result.kind !== 'ok' && <ErrorState result={result} />}
 
       {result?.kind === 'ok' && result.value.items.length > 0 && (
         <table className="w-full text-left text-sm">
@@ -164,7 +184,7 @@ export function ServerList(): React.JSX.Element {
                 <td>{server.hostname}</td>
                 <td>{server.environment}</td>
                 <td>
-                  <Status value={server.status} />
+                  <StatusBadge value={server.status} />
                 </td>
                 {/* An owner that was never recorded is unknown, not "—". */}
                 <td
@@ -178,11 +198,13 @@ export function ServerList(): React.JSX.Element {
         </table>
       )}
 
-      {result?.kind === 'ok' && result.value.page.has_more && (
-        <p className="mt-3 text-sm" style={{ color: 'var(--c-text-muted)' }}>
-          More results exist. Narrow the filters to see them — paging through the list arrives with
-          the dashboard shell.
-        </p>
+      {result?.kind === 'ok' && (
+        <Pager
+          paging={paging}
+          nextCursor={result.value.page.next_cursor}
+          hasMore={result.value.page.has_more}
+          label="Servers"
+        />
       )}
     </section>
   );

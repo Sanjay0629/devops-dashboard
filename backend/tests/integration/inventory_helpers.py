@@ -85,12 +85,21 @@ def disable_account(engine: Engine, identifier: uuid.UUID) -> None:
 
 
 def audit_rows(engine: Engine, action_type: str) -> list[dict[str, Any]]:
+    """Every audit row of one action type.
+
+    Callers narrow this to their own row by ``target_id`` and must keep doing
+    so: ``occurred_at`` defaults to ``now()``, the *transaction* timestamp
+    rather than the insert timestamp, so the order here is not insertion order
+    and the newest-looking row is not reliably the caller's own (PROGRESS.md
+    issue 51). ``id`` (uuid7) only breaks an exact tie.
+    """
     with engine.connect() as connection:
         rows = connection.execute(
             text(
                 "SELECT actor_id, actor_label, outcome, target_type, target_id,"
                 " environment, sanitized_metadata"
-                " FROM audit_events WHERE action_type = :a ORDER BY occurred_at DESC"
+                " FROM audit_events WHERE action_type = :a"
+                " ORDER BY occurred_at DESC, id DESC"
             ),
             {"a": action_type},
         ).mappings()

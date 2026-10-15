@@ -43,6 +43,47 @@ function status(ok: boolean, code: number, body: unknown = {}): Response {
 
 type Handler = (init?: RequestInit) => Response;
 
+/**
+ * M1.6 made the dashboard the landing route, so rendering `<App />` now also
+ * fetches §13.1 and §13.2. These are the smallest payloads that satisfy the
+ * client's shape guards; what the dashboard *renders* is tested in
+ * `pages/dashboard/Dashboard.test.tsx`, not here.
+ */
+const DASHBOARD_SUMMARY = {
+  servers: {
+    total: 0,
+    pending: 0,
+    managed: 0,
+    stale: 0,
+    unreachable: 0,
+    retired: 0,
+    data_state: 'ok',
+    collected_at: '2026-10-15T00:00:00Z',
+    source: 'postgresql',
+  },
+  server_health: { data_state: 'not_configured', healthy: null, warning: null, critical: null },
+  utilisation: { data_state: 'not_configured', cpu_percent_avg: null },
+  failed_services: { data_state: 'ok', count: 0 },
+  active_alerts: { data_state: 'not_configured', critical: null },
+  recent_deployments: { data_state: 'not_configured', items: null },
+  recent_operations: { data_state: 'not_configured', items: null },
+  recent_health_changes: { data_state: 'not_configured', items: null },
+  filters_applied: {},
+  demo_mode: false,
+  cache_ttl_seconds: 15,
+};
+
+const DASHBOARD_HEALTH = {
+  items: [],
+  page: { limit: 25, next_cursor: null, has_more: false, total: null },
+  health: { data_state: 'not_configured' },
+  alerts: { data_state: 'not_configured' },
+  collected_at: '2026-10-15T00:00:00Z',
+  filters_applied: {},
+  demo_mode: false,
+  cache_ttl_seconds: 15,
+};
+
 function mockApi(handlers: Partial<Record<'session' | 'logout' | 'readyz', Handler>>) {
   // Both parameters are declared so the recorded call tuples keep their
   // arity — the tests read `init` back to assert on the CSRF header.
@@ -53,6 +94,12 @@ function mockApi(handlers: Partial<Record<'session' | 'logout' | 'readyz', Handl
     }
     if (url.includes('/auth/logout')) {
       return Promise.resolve(handlers.logout?.(init) ?? status(true, 200, { logged_out: true }));
+    }
+    if (url.includes('/dashboard/summary')) {
+      return Promise.resolve(status(true, 200, DASHBOARD_SUMMARY));
+    }
+    if (url.includes('/dashboard/health')) {
+      return Promise.resolve(status(true, 200, DASHBOARD_HEALTH));
     }
     return Promise.resolve(handlers.readyz?.(init) ?? status(true, 200, READYZ));
   });

@@ -374,7 +374,12 @@ npm run test
 npm run test:coverage
 npm run build
 npm audit --audit-level=high
+npm run generate:api                     # regenerate src/api/schema.ts from the backend
 ```
+
+`generate:api` runs [`scripts/generate-api-types.sh`](../scripts/generate-api-types.sh), which reads the OpenAPI schema out of the backend (`python -m app.openapi`, no server and no database) and writes `frontend/src/api/schema.ts`. It needs **both** toolchains, `uv` and `npm`, because the contract has two ends.
+
+Run it in the same commit as any change to a route or a response model. The `contracts` CI job and `scripts/check-all.sh` both regenerate and fail if the committed file moves ([TECH_STACK.md §11](TECH_STACK.md#11-contract-synchronisation)); the fix is to run it and commit the result. Never hand-edit `schema.ts`.
 
 ### Full stack and E2E **[to implement]**
 

@@ -51,6 +51,9 @@ run "frontend: tsc"           bash -c 'cd frontend && npx tsc --noEmit'
 run "frontend: vitest"        bash -c 'cd frontend && npx vitest run'
 run "frontend: build"         bash -c 'cd frontend && npm run build'
 run "frontend: npm audit"     bash -c 'cd frontend && npm audit --audit-level=high'
+# Regenerates in place, so a drift leaves the corrected file in the working
+# tree ready to commit — which is the fix, not a side effect.
+run "contracts: api types"    bash -c './scripts/generate-api-types.sh >/dev/null && git diff --exit-code -- frontend/src/api/schema.ts'
 run "docs: link check"        python scripts/check_doc_links.py .
 
 printf '\n========================================\n'

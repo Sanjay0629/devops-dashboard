@@ -156,6 +156,69 @@ def _after_cursor(
     return statement.where(pair > boundary if cursor.order == "asc" else pair < boundary)
 
 
+def server_filter_conditions(
+    *,
+    environment: list[str] | None = None,
+    provider: list[str] | None = None,
+    cloud_account_id: list[uuid.UUID] | None = None,
+    region: list[str] | None = None,
+    status: list[str] | None = None,
+    operating_system: list[str] | None = None,
+    application_id: list[uuid.UUID] | None = None,
+    owner_team: list[str] | None = None,
+    monitoring_enabled: bool | None = None,
+    q: str | None = None,
+) -> list[ColumnExpressionArgument[bool]]:
+    """The §6 server filters, as conditions, for everything that filters servers.
+
+    One definition, used by §14.1 and by the dashboard (§13.1, §13.2). The
+    dashboard's filter set is a subset of this one and it intersects with the
+    same scope predicate, so a second copy here would be a second place for
+    ``provider`` to stop resolving through ``cloud_accounts`` — the sort of
+    divergence that shows up as two screens disagreeing about how many
+    servers exist.
+    """
+    conditions: list[ColumnExpressionArgument[bool]] = []
+    if environment:
+        conditions.append(Server.environment.in_(environment))
+    if cloud_account_id:
+        conditions.append(Server.cloud_account_id.in_(cloud_account_id))
+    if region:
+        conditions.append(Server.region.in_(region))
+    if status:
+        conditions.append(Server.status.in_(status))
+    if operating_system:
+        conditions.append(Server.operating_system.in_(operating_system))
+    if owner_team:
+        conditions.append(Server.owner_team.in_(owner_team))
+    if monitoring_enabled is not None:
+        conditions.append(Server.monitoring_enabled.is_(monitoring_enabled))
+    if provider:
+        conditions.append(
+            Server.cloud_account_id.in_(
+                select(CloudAccount.id).where(CloudAccount.provider.in_(provider))
+            )
+        )
+    if application_id:
+        conditions.append(
+            Server.id.in_(
+                select(ApplicationServer.server_id).where(
+                    ApplicationServer.application_id.in_(application_id)
+                )
+            )
+        )
+    if q:
+        pattern = _like(q)
+        conditions.append(
+            or_(
+                Server.hostname.ilike(pattern, escape="\\"),
+                Server.display_name.ilike(pattern, escape="\\"),
+                Server.provider_resource_id.ilike(pattern, escape="\\"),
+            )
+        )
+    return conditions
+
+
 def servers_query(
     grants: Sequence[Grant],
     *,
@@ -184,45 +247,19 @@ def servers_query(
     statement = select(Server).where(
         Server.deleted_at.is_(None),
         readable_servers(grants, "server", "read"),
+        *server_filter_conditions(
+            environment=environment,
+            provider=provider,
+            cloud_account_id=cloud_account_id,
+            region=region,
+            status=status,
+            operating_system=operating_system,
+            application_id=application_id,
+            owner_team=owner_team,
+            monitoring_enabled=monitoring_enabled,
+            q=q,
+        ),
     )
-
-    if environment:
-        statement = statement.where(Server.environment.in_(environment))
-    if cloud_account_id:
-        statement = statement.where(Server.cloud_account_id.in_(cloud_account_id))
-    if region:
-        statement = statement.where(Server.region.in_(region))
-    if status:
-        statement = statement.where(Server.status.in_(status))
-    if operating_system:
-        statement = statement.where(Server.operating_system.in_(operating_system))
-    if owner_team:
-        statement = statement.where(Server.owner_team.in_(owner_team))
-    if monitoring_enabled is not None:
-        statement = statement.where(Server.monitoring_enabled.is_(monitoring_enabled))
-    if provider:
-        statement = statement.where(
-            Server.cloud_account_id.in_(
-                select(CloudAccount.id).where(CloudAccount.provider.in_(provider))
-            )
-        )
-    if application_id:
-        statement = statement.where(
-            Server.id.in_(
-                select(ApplicationServer.server_id).where(
-                    ApplicationServer.application_id.in_(application_id)
-                )
-            )
-        )
-    if q:
-        pattern = _like(q)
-        statement = statement.where(
-            or_(
-                Server.hostname.ilike(pattern, escape="\\"),
-                Server.display_name.ilike(pattern, escape="\\"),
-                Server.provider_resource_id.ilike(pattern, escape="\\"),
-            )
-        )
 
     if cursor is not None:
         statement = _after_cursor(statement, spec, Server.id, cursor)

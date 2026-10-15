@@ -119,6 +119,12 @@ class Settings(BaseSettings):
     #: sweep that recomputes ``status`` to M2.5, and inventing them here would
     #: pre-empt that milestone.
     server_stale_after_seconds: int = Field(default=300, ge=30, le=86_400)
+    #: How long a dashboard aggregate may be served from Redis (§13).
+    #: Short by design: the dashboard is a polled view, so the cache exists to
+    #: absorb a refresh interval rather than to hold data. ``0`` disables
+    #: caching entirely, which is correct and slower — the documented rollback
+    #: for M1.6 (IMPLEMENTATION_PLAN.md).
+    dashboard_cache_ttl_seconds: int = Field(default=15, ge=0, le=3_600)
     readiness_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
     # NoDecode: without it pydantic-settings tries to JSON-parse the env value
     # and fails before the validator below ever runs.

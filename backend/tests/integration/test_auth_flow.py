@@ -241,7 +241,17 @@ async def _clear_namespace() -> None:
     from app.core.redis import get_redis
 
     client = get_redis()
-    for pattern in ("dcp:session:*", "dcp:user-sessions:*", "dcp:oidc-login:*", "dcp:ratelimit:*"):
+    for pattern in (
+        "dcp:session:*",
+        "dcp:user-sessions:*",
+        "dcp:oidc-login:*",
+        "dcp:ratelimit:*",
+        # M1.6: the dashboard aggregate cache. Left behind, a 15-second entry
+        # outlives the test that wrote it and the next one reads someone
+        # else's totals — which is the very failure the cache-key tests exist
+        # to detect, arriving as a flake instead.
+        "dcp:dashboard:*",
+    ):
         keys = [key async for key in client.scan_iter(match=pattern, count=500)]
         if keys:
             await client.delete(*keys)
@@ -269,15 +279,53 @@ async def _login(client: httpx.AsyncClient, idp: FakeIdp, next_path: str = "/") 
     )
 
 
-def _audit_rows(engine: Engine, action_type: str) -> list[dict[str, Any]]:
+def _correlation_of(response: httpx.Response) -> uuid.UUID:
+    """The ``correlation_id`` the audit rows for *this* request carry.
+
+    Mirrors ``audit.service.correlation_uuid``: the echoed header is used as
+    is when it is already a UUID, and derived through the namespace otherwise.
+    The only handle on a row whose actor is a system identity, since those
+    rows carry no ``actor_id`` to select on.
+    """
+    from app.audit.service import _CORRELATION_NAMESPACE
+
+    raw = response.headers["X-Correlation-ID"]
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return uuid.uuid5(_CORRELATION_NAMESPACE, raw)
+
+
+def _audit_rows(
+    engine: Engine,
+    action_type: str,
+    *,
+    actor_id: uuid.UUID | None = None,
+    correlation_id: uuid.UUID | None = None,
+) -> list[dict[str, Any]]:
+    """Audit rows of one action type, newest first.
+
+    ``occurred_at`` defaults to ``now()``, which is the *transaction*
+    timestamp rather than the insert timestamp, so ordering by it does not
+    order rows by insertion and ``rows[0]`` is not reliably the row the caller
+    just produced (PROGRESS.md issue 51). Pass ``actor_id`` or
+    ``correlation_id`` to name that row instead of trusting the ordering;
+    ``id`` (uuid7) only breaks an exact tie.
+    """
     with engine.connect() as connection:
         rows = connection.execute(
             text(
                 "SELECT actor_type, actor_id, actor_label, outcome, target_type,"
                 " sanitized_metadata, source_ip, user_agent, correlation_id"
-                " FROM audit_events WHERE action_type = :action ORDER BY occurred_at DESC"
+                " FROM audit_events WHERE action_type = :action"
+                # Static SQL with optional predicates, rather than a query
+                # assembled from fragments: parameterised only (CLAUDE.md §5).
+                " AND (CAST(:actor AS uuid) IS NULL OR actor_id = CAST(:actor AS uuid))"
+                " AND (CAST(:correlation AS uuid) IS NULL"
+                " OR correlation_id = CAST(:correlation AS uuid))"
+                " ORDER BY occurred_at DESC, id DESC"
             ),
-            {"action": action_type},
+            {"action": action_type, "actor": actor_id, "correlation": correlation_id},
         ).mappings()
         return [dict(row) for row in rows]
 
@@ -513,13 +561,12 @@ async def test_disabled_user_cannot_log_in(
             text("UPDATE users SET status = 'DISABLED' WHERE id = :id"), {"id": user_id}
         )
 
-    before = len(_audit_rows(migrated, "LOGIN_DENIED"))
     response = await _login(client, idp)
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "forbidden"
 
-    denied = _audit_rows(migrated, "LOGIN_DENIED")
-    assert len(denied) == before + 1
+    denied = _audit_rows(migrated, "LOGIN_DENIED", correlation_id=_correlation_of(response))
+    assert len(denied) == 1
     # Mandatory rule 10: attributed to the real user, not to "unknown".
     assert denied[0]["actor_id"] == user_id
     assert denied[0]["outcome"] == "DENIED"
@@ -928,7 +975,6 @@ async def test_a_failed_login_is_audited(
 ) -> None:
     """The audit row must survive the failed request's rollback."""
     client, _ = auth_app
-    before = len(_audit_rows(migrated, "LOGIN_FAILED"))
     response = await client.get(
         "/api/v1/auth/callback",
         params={"code": "x", "state": "never-issued"},
@@ -936,8 +982,8 @@ async def test_a_failed_login_is_audited(
     )
     assert response.status_code == 400
 
-    rows = _audit_rows(migrated, "LOGIN_FAILED")
-    assert len(rows) == before + 1
+    rows = _audit_rows(migrated, "LOGIN_FAILED", correlation_id=_correlation_of(response))
+    assert len(rows) == 1
     # No user to attribute to, so a named system actor owns it, and the DB
     # CHECK requires actor_id to be NULL in that case.
     assert rows[0]["actor_type"] == "SYSTEM"
@@ -968,7 +1014,8 @@ async def test_audit_rows_are_correlated_with_the_request(
     from app.audit.service import _CORRELATION_NAMESPACE
 
     expected = uuid.uuid5(_CORRELATION_NAMESPACE, correlation)
-    rows = _audit_rows(migrated, "LOGIN_SUCCEEDED")
+    rows = _audit_rows(migrated, "LOGIN_SUCCEEDED", actor_id=_user_id(migrated, idp.subject))
+    assert len(rows) == 1
     assert rows[0]["correlation_id"] == expected
 
 
@@ -977,7 +1024,8 @@ async def test_login_audit_records_the_client_address_and_agent(
 ) -> None:
     client, idp = auth_app
     await _login(client, idp)
-    rows = _audit_rows(migrated, "LOGIN_SUCCEEDED")
+    rows = _audit_rows(migrated, "LOGIN_SUCCEEDED", actor_id=_user_id(migrated, idp.subject))
+    assert len(rows) == 1
     assert rows[0]["user_agent"] is not None
 
 
@@ -1068,7 +1116,6 @@ async def test_identity_conflict_is_denied_not_a_500(
     await _login(client, idp)
     taken = idp.email
 
-    before = len(_audit_rows(migrated, "LOGIN_DENIED"))
     # A different identity, same address.
     other = FakeIdp(idp.key, f"integration-subject-{uuid.uuid4()}")
     other.email = taken
@@ -1094,8 +1141,8 @@ async def test_identity_conflict_is_denied_not_a_500(
     # mention the address at all.
     assert taken not in response.text
 
-    denied = _audit_rows(migrated, "LOGIN_DENIED")
-    assert len(denied) == before + 1
+    denied = _audit_rows(migrated, "LOGIN_DENIED", correlation_id=_correlation_of(response))
+    assert len(denied) == 1
     assert denied[0]["sanitized_metadata"]["reason"] == "identity_conflict"
     # No second user row was created.
     with migrated.connect() as connection:

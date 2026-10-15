@@ -291,9 +291,13 @@ Also `403` + `LOGIN_DENIED` (M1.3, assumption A-05): a **new** identity whose em
 ```json
 {
   "servers": {
-    "total": 0, "managed": 0, "healthy": 0, "warning": 0,
-    "critical": 0, "unreachable": 0, "stale": 0, "pending": 0,
+    "total": 6, "pending": 1, "managed": 3, "stale": 1, "unreachable": 1, "retired": 0,
     "data_state": "ok", "collected_at": "2026-01-15T09:30:00Z", "source": "postgresql"
+  },
+  "server_health": {
+    "healthy": null, "warning": null, "critical": null, "unknown": null,
+    "data_state": "not_configured", "collected_at": null, "source": "prometheus",
+    "unavailable_reason": "Server health evaluation is not implemented yet (M2.1)."
   },
   "utilisation": {
     "cpu_percent_avg": null, "memory_percent_avg": null,
@@ -303,19 +307,53 @@ Also `403` + `LOGIN_DENIED` (M1.3, assumption A-05): a **new** identity whose em
     "collected_at": null,
     "source": "prometheus"
   },
-  "failed_services": { "count": 0, "data_state": "ok", "collected_at": "2026-01-15T09:29:00Z" },
-  "active_alerts": { "critical": 0, "warning": 0, "info": 0, "data_state": "ok" },
-  "recent_deployments": [],
-  "recent_operations": [],
-  "recent_health_changes": [],
+  "failed_services": { "count": 0, "data_state": "ok", "collected_at": "2026-01-15T09:29:00Z", "source": "postgresql" },
+  "active_alerts": { "critical": null, "warning": null, "info": null, "data_state": "not_configured" },
+  "recent_deployments": { "items": null, "data_state": "not_configured" },
+  "recent_operations": { "items": null, "data_state": "not_configured" },
+  "recent_health_changes": { "items": null, "data_state": "not_configured" },
   "filters_applied": { "environment": ["staging"] },
-  "demo_mode": false
+  "demo_mode": false,
+  "cache_ttl_seconds": 15
 }
 ```
 
-The `utilisation` block above illustrates the required behaviour: Prometheus is down, so values are `null` with `data_state: "unavailable"` — **never `0`** (PRD §4.2 acceptance criterion).
+The `utilisation` block illustrates the required behaviour: Prometheus is down, so values are `null` with `data_state: "unavailable"` — **never `0`** (PRD §4.2 acceptance criterion).
+
+**Two shape decisions, taken in M1.6 and recorded here rather than left as a silent divergence.** An earlier draft of this section drew `healthy`, `warning` and `critical` inside `servers` beside `total` and `managed`, and the three recent-activity keys as bare `[]`.
+
+1. **`server_health` is a sibling section, not three fields inside `servers`.** `total`, `pending`, `managed`, `stale`, `unreachable` and `retired` are counts of the `servers.status` column — a real source, `data_state: "ok"`. `healthy`, `warning` and `critical` are a *health* rollup with no source until M2.1. One envelope carries one `data_state` (§4), and a block that mixed the two would have to claim either that the status counts are unavailable or that the health counts are collected. Both are false. The field names are unchanged, so a client reads `summary.server_health.healthy` instead of `summary.servers.healthy`.
+2. **`recent_deployments`, `recent_operations` and `recent_health_changes` are `DataSection`s carrying `items: null`, not bare arrays.** There is no deployments table, no operations table and no health-event table. `[]` asserts "nothing happened recently", which is a claim this product cannot make before M5.1, M4.2 and M2.5 respectively — and §4 rule 2 plus PRD §4.2 forbid a substitute value for an absent one just as firmly for an empty list as for a zero. Each carries an `unavailable_reason` naming the milestone that will fill it.
+
+`stale` and `unreachable` under `servers` are the stored statuses. AD-14's sweep, which recomputes them from `last_seen_at`, is M2.5; until then nothing moves a server into them automatically, so the counts report what registration and administration set — an accurate count of a real column, not an observation of the host.
+
+`cache_ttl_seconds` reports `DCP_DASHBOARD_CACHE_TTL_SECONDS`, so a client need not guess how often polling is worth anything. The cached entry is keyed on the caller's **resolved scope** as well as the filters (docs/SECURITY.md §20); a write is not reflected until the entry expires.
 
 **13.2** Query: as 13.1 plus `health_status` and cursor pagination. Returns per-server `{server_id, display_name, hostname, environment, provider, health_state, status, last_seen_at, stale, failed_service_count, active_alert_count}`. Selecting a status filter updates this list (PRD §4.2 acceptance criterion).
+
+```json
+{
+  "items": [
+    {
+      "server_id": "…", "display_name": "web-01", "hostname": "web-01.internal.example",
+      "environment": "staging", "provider": "ON_PREM", "status": "MANAGED",
+      "health_state": null, "last_seen_at": null, "stale": null,
+      "failed_service_count": 0, "active_alert_count": null
+    }
+  ],
+  "page": { "limit": 50, "next_cursor": null, "has_more": false, "total": null },
+  "health": { "data_state": "not_configured", "unavailable_reason": "Server health evaluation is not implemented yet (M2.1)." },
+  "alerts": { "data_state": "not_configured", "unavailable_reason": "Alerting is not implemented yet (M3.3)." },
+  "collected_at": "2026-01-15T09:30:00Z",
+  "filters_applied": {},
+  "demo_mode": false,
+  "cache_ttl_seconds": 15
+}
+```
+
+`health_state` is `null` until M2.1 and is **never defaulted to `healthy`** — an unmonitored host is unknown, not well. The `health` and `alerts` sections carry that reason once for the page rather than repeating it on every row; `stale` is `null` when `last_seen_at` is (never seen is not stale), and `failed_service_count` is a real count over `services`, which exists.
+
+Filtering on `health_status` therefore matches nothing and returns an empty page with `health.data_state: "not_configured"`. The filter is **honoured rather than ignored**: silently dropping a filter the backend cannot yet apply would return the whole list looking as though the filter had applied, and an operator would read it as the healthy subset.
 
 Errors: `401`, `403`, `422` (unknown filter value), `503` (database unavailable). No audit (read).
 
