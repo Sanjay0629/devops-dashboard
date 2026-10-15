@@ -2,13 +2,16 @@
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
 **Last updated:** 2026-10-15
-**Updated by:** M1.6 implementation session (dashboard shell, database-only). The three
-decisions taken before the milestone — add `openapi-typescript` first, build paging
-controls, leave the server edit form alone — are implemented as agreed. Two things to
-read first: the **two shape divergences from [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §13**
-that honest data states forced, and **issue 51**, a pre-existing order-dependence in two
-M1.3/M1.4 integration tests that this milestone's extra audit volume makes fail roughly
-one run in five (see [§3](#3-in-progress-milestone) and [§6](#6-known-issues)).
+**Updated by:** the issue 51 fix session (order-dependent audit-row assertions),
+which changed only that issue's rows here. Before it, M1.6 implementation session
+(dashboard shell, database-only): the three decisions taken before the milestone —
+add `openapi-typescript` first, build paging controls, leave the server edit form
+alone — are implemented as agreed. The thing to read first is the **two shape
+divergences from [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §13** that honest
+data states forced. **Issue 51** — the pre-existing order-dependence in two M1.3/M1.4
+integration tests that this milestone's extra audit volume exposed — is **RESOLVED**;
+its row is worth reading before the M1.7 E2E suite, because the fix was not the
+tiebreaker first proposed (see [§3](#3-in-progress-milestone) and [§6](#6-known-issues)).
 Previously: M1.5 implementation session (server and application inventory), which
 amended `A-09` and opened `OPEN-27`; before that, M1.4 (RBAC and authorisation
 enforcement) and M1.3
@@ -844,7 +847,7 @@ Once a decision is reviewed, record the date and the outcome here.
 |---|---|---|---|
 | 49 | **`worker` and `beat` report `unhealthy` in `docker compose ps`, and have since before M1.5.** Recorded here because it was invisible: no entry existed for it. Their healthcheck is `celery inspect ping -d celery@$$HOSTNAME`, so the likely cause is a hostname mismatch in the check rather than a sick worker — the containers run, and `/readyz` reports `broker: true` throughout. **Not investigated and not fixed**: nothing in M1.6 uses Celery, and fixing it here would have been scope creep. | Local signal only; no known functional impact, but an `unhealthy` container that is actually fine trains people to ignore the column | Verify whether the worker answers `celery inspect ping` under its real node name, and correct the healthcheck. Belongs with M1.7's Compose smoke test (issue 20), which is the milestone that asserts the stack is healthy |
 | 50 | **A dashboard write is not reflected until the cache entry expires** (up to `DCP_DASHBOARD_CACHE_TTL_SECONDS`, default 15 s). Retiring a server and immediately reloading shows the old total. This is the cache behaving as specified, not a defect, but it is a real behaviour an operator will notice and it is not written in the contract beyond the TTL field. | Accepted, by design | None needed. If it ever matters, invalidate on write — which means deleting every dashboard key for every scope, so it is a real cost rather than a one-liner. `DCP_DASHBOARD_CACHE_TTL_SECONDS=0` disables caching entirely. The integration tests that write then read use an `uncached` fixture rather than asserting the cache away |
-| 51 | **Two pre-existing integration tests are order-dependent and fail intermittently.** `tests/integration/test_admin_roles.py::test_granting_production_scope_requires_holding_it` (M1.4) and `tests/integration/test_auth_flow.py::test_audit_rows_are_correlated_with_the_request` (M1.3). Both take `rows[0]` from `SELECT … FROM audit_events WHERE action_type = :a ORDER BY occurred_at DESC` and assume the newest row of that type is their own. `audit_events.occurred_at` defaults to `now()`, which is the **transaction** timestamp, so rows from overlapping transactions can tie — and `ORDER BY` has no tiebreaker, leaving PostgreSQL free to return either first. **Not caused by M1.6, but made more likely by it:** the new suite adds 22 more logins and a few hundred audit rows to the same append-only table. Measured on 2026-10-15: 2 failures in ~12 full integration runs with the new tests present (always one of these two, never a dashboard test); 0 failures in 4 runs with `tests/integration/test_dashboard_api.py` removed — 4 runs is weak evidence of a baseline, so this is "more likely", not "only with". | Flaky suite. No production defect: the ordering is a test-side assumption, not application behaviour | One-line fix in each query — order by `(occurred_at, id)`, since `id` is a uuid7 and therefore time-ordered — or filter the query to the row the test just created. **Not done here**: both are M1.3/M1.4 test modules and outside this milestone (CLAUDE.md §3). Worth doing before M1.7 adds an E2E suite on top of a suite that is already intermittently red |
+| 51 | **RESOLVED 2026-10-15. Two pre-existing integration tests were order-dependent and failed roughly one run in six.** `tests/integration/test_admin_roles.py::test_granting_production_scope_requires_holding_it` (M1.4) and `tests/integration/test_auth_flow.py::test_audit_rows_are_correlated_with_the_request` (M1.3). Both took `rows[0]` from a query filtered only by `action_type` and ordered by `occurred_at DESC`, assuming the newest row of that type was their own. **The original diagnosis of a tie was wrong, and so was the proposed fix.** A probe test run last in the session found **zero** `(action_type, occurred_at)` groups with more than one row across five full suite runs; rows of one action type are 200–700 ms apart. The real mechanism is an *inversion*: `occurred_at` is the **transaction** timestamp while the insert happens later (measured gap 7–30 ms, varying fourfold between rows), so ordering by it is not insertion order and an outlier gap reorders two rows. The recovered failure confirms it — `assert 'empty_scope' == 'delegation_escalation'`, where the count assertion on the preceding line had passed, so exactly one new row existed and `rows[0]` was still an older test's. A tiebreaker would **not** have fixed this: under an inversion `occurred_at DESC` still decides and `id DESC` is never consulted, and `app/db/types.py` documents uuid7 as monotonic *per millisecond only*. Scale was also understated: probing straight after `test_admin_roles` shows **49** `AUTHZ_DENIED` rows, not the 5 the end-of-run probe sees (`test_migrations.py` recreates the schema mid-session). | Was a flaky suite. No production defect: the ordering was a test-side assumption, not application behaviour | Each query now names the row it means instead of trusting the ordering: `_denied_rows` takes the per-test `caller`; `SESSION_TERMINATED` selects on the administrator and bootstrap `ROLE_GRANTED` on the grant it created; `_audit_rows` takes `actor_id` or `correlation_id`, with `_correlation_of` mirroring `audit.service.correlation_uuid` — correlation is the only handle on `LOGIN_FAILED` and `identity_conflict` rows, which are written with `actor_type` `SYSTEM` and no `actor_id`. `inventory_helpers.audit_rows` was **not** affected (every caller already filters by `target_id` and asserts a single row) and only gained a note. Three global `before + 1` counts became "exactly one row for this request", which is narrower, not looser. `id DESC` added as a secondary only. **Verified: 16 consecutive clean runs** — 8 on the fix branch off `main` (209 passed each) and 8 with the M1.6 suite present (231 passed each) — plus `scripts/check-all.sh` green end to end. Application code untouched (AD-11). **The code change is not on this branch yet:** it is commit `cc23f5b` on `fix-issue-51-audit-row-ordering`, taken off `main` because both test modules predate M1.6. Until that lands, `phase-M1.6`'s own test files still carry the old assertions and this suite can still fail about one run in six — merge it, or merge `main` once it is in, to get the fixed assertions here |
 
 ---
 
@@ -884,12 +887,15 @@ TEST_REDIS_URL=redis://127.0.0.1:6380/1
 `ALL CHECKS PASSED`, exit 0. The suite is 15 checks now rather than 14: the API-type
 drift gate was added by this milestone.
 
-**One caveat on the integration number, stated rather than buried.** That run was
-clean, but the integration suite is **not reliably clean**: see issue 51. Across
-roughly twelve full runs on 2026-10-15, two failed, each time one of two
-*pre-existing* M1.3/M1.4 tests with an order-dependent audit-row assertion, never a
-dashboard test. The 231 figure above is a real result from a real run; it is not a
-claim that every run is green.
+**The caveat on the integration number, now settled.** When this milestone was
+written the integration suite was **not reliably clean**: across roughly twelve full
+runs on 2026-10-15, two failed, each time one of two *pre-existing* M1.3/M1.4 tests
+with an order-dependent audit-row assertion, never a dashboard test. That cause was
+fixed later the same day (issue 51, now RESOLVED) and the suite has since run **16
+consecutive times clean**, 8 of them with this milestone's tests present at 231
+passed. Sixteen clean runs against a roughly one-in-six failure rate is strong but
+not proof on its own; the stronger argument is structural — the assertions no longer
+depend on row ordering at all.
 
 #### Verified by hand, over HTTP against the running stack (2026-10-15)
 
@@ -1284,10 +1290,17 @@ Its dependency is satisfied: M1.6 is complete.
 
 **What M1.7 should clear first, in roughly this order:**
 
-- **Issue 51 — the flaky audit-row assertions.** Do this *before* adding an E2E
-  suite. Two one-line fixes (`ORDER BY occurred_at DESC, id DESC`, or filter to the
-  row the test created). Building a new suite on top of one that is red about one run
-  in five makes every future failure ambiguous.
+- **Issue 51 — the flaky audit-row assertions. Fixed 2026-10-15 (RESOLVED), but the
+  fix rides on `fix-issue-51-audit-row-ordering` off `main`, not on this branch** —
+  confirm it is merged before relying on a green suite. Worth reading before writing
+  the E2E suite anyway: the fix was *not* the tiebreaker this section originally proposed —
+  that would have left the flake live while looking fixed — and the two traps it
+  turned up bite any new suite. **Never run two pytest sessions against `dcp_test` at
+  once** (the session-scoped `migrated` fixture drops the schema under the other one;
+  this produced an 84-failure run during the fix that had nothing to do with any code
+  change), and **module subsets are not supported** — `pytest` on
+  `test_admin_roles.py` plus `test_auth_flow.py` fails 22 tests on an unmodified tree
+  while each passes alone. Verify with `-m integration`.
 - **Issues 20 and 49 together** — `scripts/smoke-test.sh` has never run, and `worker`
   and `beat` have reported `unhealthy` since before M1.5. M1.7's own task list
   includes a Compose smoke test asserting the stack is healthy, so it has to resolve
@@ -1360,7 +1373,7 @@ rather than opportunistic:
 
 **Deliberately not touched:** issue 44 (server edit form and association
 management), `TS-01`, anything Prometheus, and the two flaky M1.3/M1.4 test modules
-in issue 51 — diagnosed and recorded, not fixed, because they belong to those
+in issue 51 — diagnosed and recorded here, then fixed on 2026-10-15 (see the row), deliberately not during M1.6 because they belong to those
 milestones (CLAUDE.md §3).
 
 **No migration.** The schema is still at `0004`; M1.6 only reads existing tables.
