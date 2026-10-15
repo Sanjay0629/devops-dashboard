@@ -75,6 +75,37 @@ def documented_keys(text: str) -> set[str]:
     return keys
 
 
+def documented_values(text: str) -> dict[str, str]:
+    """`{key: value}` for the assignments in a dotenv file."""
+    values = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def compose_defaults() -> dict[str, str]:
+    """`{VAR: default}` for every `${VAR:-default}` in the compose file.
+
+    Rule 5 exists because of a real bug. `.env.example` said
+    `DCP_OIDC_REDIRECT_URL=…:8000/…` — the value for running the backend
+    natively — while the compose default was `…:5173/…`, the value Compose
+    needs. The two disagreed for five milestones and nothing broke, because
+    Compose never read `.env.example`'s file at all. The moment M1.7 fixed
+    that (`--env-file .env`), the stale value won and the login flow landed on
+    a port that serves no SPA. Two sources of truth for one value, caught only
+    by following the README on a fresh clone.
+    """
+    text = COMPOSE.read_text(encoding="utf-8")
+    return {
+        match.group(1): match.group(2)
+        for match in re.finditer(r"\$\{([A-Z_][A-Z0-9_]*):-([^}]*)\}", text)
+    }
+
+
 def compose_variables() -> tuple[set[str], dict[str, set[str]]]:
     """Variables substituted by implemented profiles, and those deferred.
 
@@ -152,6 +183,22 @@ def main() -> int:
             "These variables are substituted by an implemented Compose "
             "profile but are not documented in .env.example:\n  "
             + "\n  ".join(missing_compose)
+        )
+
+    # Rule 5: where both files give a value for the same variable, they must
+    # agree. See `compose_defaults` for the bug this exists to prevent.
+    values = documented_values(ENV_EXAMPLE.read_text(encoding="utf-8"))
+    defaults = compose_defaults()
+    disagreements = [
+        f"{key}: .env.example says {values[key]!r}, compose defaults to {defaults[key]!r}"
+        for key in sorted(values.keys() & defaults.keys())
+        if values[key] != defaults[key]
+    ]
+    if disagreements:
+        problems.append(
+            "These variables are given different values by .env.example and "
+            "the compose file, so which one applies depends on whether "
+            "--env-file was passed:\n  " + "\n  ".join(disagreements)
         )
 
     missing_harness = sorted(set(REQUIRED_HARNESS_VARS) - documented)

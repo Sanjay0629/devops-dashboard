@@ -45,15 +45,23 @@ test.describe('§12.1 login, dashboard, logout', () => {
     await expect(page.getByRole('link', { name: 'Continue to identity provider' })).toBeVisible();
   });
 
-  test('the demonstration banner is rendered, not merely configured', async ({ page }) => {
-    // AD-15 and CLAUDE.md §7: a mocked integration is never presented as
-    // operational. The smoke test asserts `demo_mode: true` on the API; this
-    // is the only place that can see whether the banner actually renders, and
-    // the stack it runs against sets DCP_DEMO_MODE=true.
-    await logIn(page, 'admin');
-    const banner = page.getByText(/Demonstration mode/i);
-    await expect(banner).toBeVisible();
-    await expect(page.getByText(/integrations are not operational/i)).toBeVisible();
+  // A saved session, not a fresh login: signing in is rate limited (10 per
+  // 300s, failing closed) and this test does not need the redirect chain. With
+  // a login here the suite needed four per run, and a couple of local re-runs
+  // then answered 429 — which surfaces as "the mock identity provider heading
+  // was not found" and looks nothing like its cause.
+  test.describe('with a saved session', () => {
+    test.use({ storageState: STORAGE_STATE.admin });
+
+    test('the demonstration banner is rendered, not merely configured', async ({ page }) => {
+      // AD-15 and CLAUDE.md §7: a mocked integration is never presented as
+      // operational. The smoke test asserts `demo_mode: true` on the API; this
+      // is the only place that can see whether the banner actually renders,
+      // and the stack it runs against sets DCP_DEMO_MODE=true.
+      await page.goto('/dashboard');
+      await expect(page.getByText(/Demonstration mode/i)).toBeVisible();
+      await expect(page.getByText(/integrations are not operational/i)).toBeVisible();
+    });
   });
 });
 
