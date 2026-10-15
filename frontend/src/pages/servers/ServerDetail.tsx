@@ -23,7 +23,10 @@ import {
 } from '@/api/inventory';
 import { PERMISSIONS } from '@/auth/permissions';
 import { useCanRender, useIsReadOnly } from '@/auth/useSession';
-import { Failure, Loading, NotCollected, Status } from '@/pages/inventory/states';
+import { DataStateBanner } from '@/components/DataStateBanner';
+import { LoadingState } from '@/components/EmptyState';
+import { ErrorState } from '@/components/ErrorState';
+import { StatusBadge } from '@/components/StatusBadge';
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -64,8 +67,8 @@ export function ServerDetail(): React.JSX.Element {
     void load();
   }, [load]);
 
-  if (result === null) return <Loading what="this server" />;
-  if (result.kind !== 'ok') return <Failure result={result} />;
+  if (result === null) return <LoadingState what="this server" />;
+  if (result.kind !== 'ok') return <ErrorState result={result} />;
 
   const server = result.value;
 
@@ -91,7 +94,7 @@ export function ServerDetail(): React.JSX.Element {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Status value={server.status} />
+          <StatusBadge value={server.status} />
           {mayWrite && (
             <button
               type="button"
@@ -109,7 +112,7 @@ export function ServerDetail(): React.JSX.Element {
         </div>
       </header>
 
-      {retireError !== null && <Failure result={retireError} />}
+      {retireError !== null && <ErrorState result={retireError} />}
 
       <h2 className="mt-6 mb-2 font-medium">Overview</h2>
       <dl className="text-sm">
@@ -146,18 +149,23 @@ export function ServerDetail(): React.JSX.Element {
             String(server.stale)
           )}
         </Row>
-        <Row label="Health">{server.health.state ?? <NotCollected section={server.health} />}</Row>
+        <Row label="Health">
+          {server.health.state ?? <DataStateBanner section={server.health} />}
+        </Row>
         <Row label="Open alerts">
-          {server.open_alerts.counts === null ? (
-            <NotCollected section={server.open_alerts} />
+          {/* `== null` catches both: the generated type makes a field with a
+              Pydantic default optional, so "absent" and "null" are the same
+              unknown and must render the same way. */}
+          {server.open_alerts.counts == null ? (
+            <DataStateBanner section={server.open_alerts} />
           ) : (
             `${String(server.open_alerts.counts.critical)} critical, ${String(server.open_alerts.counts.warning)} warning`
           )}
         </Row>
         <Row label="Registered services">{server.registered_service_count}</Row>
         <Row label="Management capabilities">
-          {server.management_capabilities.capabilities === null ? (
-            <NotCollected section={server.management_capabilities} />
+          {server.management_capabilities.capabilities == null ? (
+            <DataStateBanner section={server.management_capabilities} />
           ) : (
             Object.entries(server.management_capabilities.capabilities)
               .filter(([, supported]) => supported)

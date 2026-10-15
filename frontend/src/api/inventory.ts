@@ -1,108 +1,37 @@
 /**
  * Inventory client (API_CONTRACTS.md §14, §18).
  *
- * **Hand-written, and that is a gap rather than a choice.**
- * docs/TECH_STACK.md §11 says TypeScript types are generated from the
- * backend's OpenAPI schema into a committed file and never hand-edited, with
- * CI failing when the two drift. No generator is wired up yet — adding
- * `openapi-typescript` would be a second new frontend dependency in a
- * milestone that agreed to exactly one (React Router) — so these shapes are
- * written by hand and pinned by the backend's own response tests instead.
- * Recorded in PROGRESS.md; the generator is the next change to make here, and
- * it replaces this file wholesale.
+ * **The response shapes are generated, not written here.** `schema.ts` is
+ * produced from the backend's OpenAPI schema by `npm run generate:api`
+ * (docs/TECH_STACK.md §11, CLAUDE.md §5) and the `contracts` CI job fails if
+ * it drifts, so a backend model change breaks the build rather than the
+ * dashboard. The aliases below exist only to give the generated
+ * `components['schemas'][...]` entries the short names the pages already use;
+ * never widen or re-declare one by hand.
+ *
+ * What stays hand-written is the part the schema has nothing to say about:
+ * `Result`, `FieldProblem` and the fetch wrappers are this client's error
+ * handling, not API shapes.
  *
  * Nothing here authorises anything. The pages hide controls using the
  * advisory `permissions` array (docs/SECURITY.md §6); the backend answers
  * `403`, `404` or `423` on its own account whatever the UI renders.
  */
 
+import type { components } from '@/api/schema';
 import { request } from '@/api/session';
 
-export interface CursorPage {
-  limit: number;
-  next_cursor: string | null;
-  has_more: boolean;
-  /** Always null on a cursor page, by §5. Not a number waiting to arrive. */
-  total: null;
-}
+type Schemas = components['schemas'];
 
+export type CursorPage = Schemas['CursorPage'];
 /** The §4 partial-data envelope. `null` is unknown and never a substitute. */
-export interface DataSection {
-  data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
-  collected_at: string | null;
-  source: string | null;
-  stale_after_seconds: number | null;
-  unavailable_reason: string | null;
-}
-
-export interface ServerSummary {
-  id: string;
-  cloud_account_id: string;
-  provider_resource_id: string;
-  hostname: string;
-  display_name: string;
-  operating_system: string;
-  os_version: string | null;
-  environment: string;
-  region: string | null;
-  private_ip: string | null;
-  owner_team: string | null;
-  management_method: string;
-  monitoring_enabled: boolean;
-  metrics_instance: string | null;
-  agent_status: string;
-  status: string;
-  last_seen_at: string | null;
-  registered_at: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AssociatedApplication {
-  id: string;
-  name: string;
-  slug: string;
-  role_on_server: string | null;
-}
-
-export interface ServerDetail extends ServerSummary {
-  provider_metadata: Record<string, unknown>;
-  /** null when the host has never been seen — that is not staleness. */
-  stale: boolean | null;
-  health: DataSection & { state: string | null };
-  applications: AssociatedApplication[];
-  registered_service_count: number;
-  open_alerts: DataSection & { counts: { critical: number; warning: number } | null };
-  management_capabilities: DataSection & { capabilities: Record<string, boolean> | null };
-}
-
-export interface ApplicationSummary {
-  id: string;
-  name: string;
-  slug: string;
-  description: string | null;
-  owner_team: string | null;
-  repository_reference: string | null;
-  status: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AssociatedServer {
-  id: string;
-  hostname: string;
-  display_name: string;
-  environment: string;
-  status: string;
-  role_on_server: string | null;
-}
-
-export interface ApplicationDetail extends ApplicationSummary {
-  health_check_config: { checks: unknown[] };
-  servers: AssociatedServer[];
-  registered_service_count: number;
-  deployment_targets: DataSection;
-}
+export type DataSection = Schemas['DataSection'];
+export type ServerSummary = Schemas['ServerSummary'];
+export type ServerDetail = Schemas['ServerDetail'];
+export type AssociatedApplication = Schemas['AssociatedApplication'];
+export type ApplicationSummary = Schemas['ApplicationSummary'];
+export type ApplicationDetail = Schemas['ApplicationDetail'];
+export type AssociatedServer = Schemas['AssociatedServer'];
 
 export interface Page<T> {
   items: T[];
@@ -204,7 +133,7 @@ async function resultOf<T>(
   return { kind: 'unreachable', reason: message };
 }
 
-async function call<T>(
+export async function call<T>(
   path: string,
   init: RequestInit = {},
   isExpected: (value: unknown) => boolean = isRecord,
@@ -219,7 +148,7 @@ async function call<T>(
   }
 }
 
-function queryString(filters: Record<string, string | undefined>): string {
+export function queryString(filters: Record<string, string | undefined>): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {
     if (value !== undefined && value !== '') params.set(key, value);

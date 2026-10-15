@@ -241,7 +241,17 @@ async def _clear_namespace() -> None:
     from app.core.redis import get_redis
 
     client = get_redis()
-    for pattern in ("dcp:session:*", "dcp:user-sessions:*", "dcp:oidc-login:*", "dcp:ratelimit:*"):
+    for pattern in (
+        "dcp:session:*",
+        "dcp:user-sessions:*",
+        "dcp:oidc-login:*",
+        "dcp:ratelimit:*",
+        # M1.6: the dashboard aggregate cache. Left behind, a 15-second entry
+        # outlives the test that wrote it and the next one reads someone
+        # else's totals — which is the very failure the cache-key tests exist
+        # to detect, arriving as a flake instead.
+        "dcp:dashboard:*",
+    ):
         keys = [key async for key in client.scan_iter(match=pattern, count=500)]
         if keys:
             await client.delete(*keys)

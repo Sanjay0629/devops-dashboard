@@ -17,7 +17,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { registerServer, type FieldProblem } from '@/api/inventory';
-import { Failure } from '@/pages/inventory/states';
+import { ErrorState, type Failed } from '@/components/ErrorState';
 
 const ENVIRONMENTS = ['development', 'staging', 'production', 'other'];
 const OPERATING_SYSTEMS = ['LINUX', 'WINDOWS', 'OTHER'];
@@ -60,7 +60,7 @@ export function ServerForm(): React.JSX.Element {
     metrics_instance: '',
   });
   const [problems, setProblems] = useState<FieldProblem[]>([]);
-  const [failure, setFailure] = useState<Parameters<typeof Failure>[0]['result'] | null>(null);
+  const [failure, setFailure] = useState<Failed<unknown> | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const set = (name: string) => (event: { target: { value: string } }) => {
@@ -175,7 +175,7 @@ export function ServerForm(): React.JSX.Element {
         A newly registered server is <strong>PENDING</strong> and grants no operational permission.
       </p>
 
-      {failure !== null && <Failure result={failure} />}
+      {failure !== null && <ErrorState result={failure} />}
 
       <form
         onSubmit={(event) => void submit(event)}

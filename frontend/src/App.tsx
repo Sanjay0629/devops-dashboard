@@ -5,6 +5,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { SessionProvider } from '@/auth/SessionProvider';
 import { useIsReadOnly, useSession } from '@/auth/useSession';
 import { Login } from '@/pages/Login';
+import { Dashboard } from '@/pages/dashboard/Dashboard';
 import { ApplicationDetail } from '@/pages/applications/ApplicationDetail';
 import { ApplicationList } from '@/pages/applications/ApplicationList';
 import { ServerDetail } from '@/pages/servers/ServerDetail';
@@ -33,6 +34,7 @@ import { ServerList } from '@/pages/servers/ServerList';
 function Navigation(): React.JSX.Element {
   const { pathname } = useLocation();
   const links = [
+    { to: '/dashboard', label: 'Dashboard' },
     { to: '/servers', label: 'Servers' },
     { to: '/applications', label: 'Applications' },
   ];
@@ -117,8 +119,9 @@ function Shell(): React.JSX.Element {
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M1.5 — server and application inventory. No monitoring, logs, operations or
-            deployments are implemented yet.
+            Milestone M1.6 — dashboard shell over PostgreSQL. Metrics, alerting, operations and
+            deployments are not implemented yet, and every section that depends on them says so
+            rather than showing a zero.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -180,7 +183,10 @@ function Shell(): React.JSX.Element {
       <Navigation />
 
       <Routes>
-        <Route path="/" element={<Navigate to="/servers" replace />} />
+        {/* M1.6 makes the dashboard the landing page, in place of M1.5's
+            redirect to /servers. */}
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/servers" element={<ServerList />} />
         {/* Before the :serverId route, or "new" matches as an id. */}
         <Route path="/servers/new" element={<ServerForm />} />

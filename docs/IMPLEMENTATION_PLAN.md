@@ -315,11 +315,11 @@ backend/tests/inventory/{test_servers_api.py,test_duplicate_detection.py,test_sc
 
 **Tasks**
 
-- [ ] `GET /dashboard/summary` and `/dashboard/health` using **PostgreSQL only**; metric sections return `data_state: "not_configured"` until Phase 2.
-- [ ] Short-TTL Redis caching with explicit `collected_at`.
-- [ ] Frontend dashboard: health summary cards, server status table, filters, drill-through links, and loading / empty / **stale** / error states.
-- [ ] `StatusBadge` as the single owner of status visuals (icon + text + colour).
-- [ ] Configurable auto-refresh.
+- [x] `GET /dashboard/summary` and `/dashboard/health` using **PostgreSQL only**; metric sections return `data_state: "not_configured"` until Phase 2.
+- [x] Short-TTL Redis caching with explicit `collected_at`. `DCP_DASHBOARD_CACHE_TTL_SECONDS`, default 15 s, `0` disables.
+- [x] Frontend dashboard: health summary cards, server status table, filters, drill-through links, and loading / empty / error states. **`stale` is rendered by `DataStateBanner` but no section can reach that state yet** — nothing collects, so nothing can go stale. First reachable in M2.1.
+- [x] `StatusBadge` as the single owner of status visuals (glyph + text + colour), replacing `pages/inventory/states.tsx`.
+- [x] Configurable auto-refresh (`VITE_DASHBOARD_REFRESH_SECONDS`, default 30 s, `0` disables).
 
 **Expected files**
 
@@ -348,8 +348,8 @@ backend/tests/dashboard/test_summary.py
 
 **Security checks**
 
-- [ ] Dashboard counts respect scope.
-- [ ] Cache keys include the identity's scope so one user's aggregate cannot be served to another.
+- [x] Dashboard counts respect scope — applied inside the query via `app/authz/queries.readable_servers`, covered by `test_counts_are_scope_filtered` and `test_the_health_list_is_scope_filtered`.
+- [x] Cache keys include the identity's scope so one user's aggregate cannot be served to another — `test_a_scope_change_is_not_served_from_the_previous_cache_entry` narrows a live caller's grant inside the TTL and asserts the narrowed value, plus four unit cases on the key itself. Both were confirmed to fail against a deliberately scope-blind key before being relied on.
 
 **Definition of done.** Dashboard renders real inventory with honest data states; tests pass; `PROGRESS.md` updated.
 
@@ -792,7 +792,7 @@ backend/tests/dashboard/test_summary.py
 | OPEN-13 notification config | M3.4 |
 | OPEN-14 target discovery | M2.3 |
 | OPEN-15 audit export | M6.2 |
-| **OPEN-27 scoping a dimension-less resource** (new in M1.5) | M1.6 — the dashboard counts applications, so it meets the question immediately. Working default in place: applications are not scope-filtered ([API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions)) |
+| **OPEN-27 scoping a dimension-less resource** (new in M1.5) | **Not M1.6.** Corrected 2026-10-15 after M1.6 was built: §13.1 counts servers, failed services, alerts and recent activity — `application_id` appears only as a *filter*, and it resolves through `application_servers` to servers, which are already scope-filtered. The first milestone genuinely blocked is one that lists or counts applications in their own right. Working default in place: applications are not scope-filtered ([API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions)) |
 | TS-01 charting library | M2.2 |
 | TS-02 systemd exporter | M2.4 |
 

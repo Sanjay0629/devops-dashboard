@@ -1,15 +1,17 @@
 # PROGRESS — DevOps Control Plane
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
-**Last updated:** 2026-10-14
-**Updated by:** M1.5 implementation session (server and application inventory). The
-four decisions recorded for M1.5 are implemented as agreed; one of them — the
-authorisation layer meeting its first scoped resource — exposed a defect in M1.4's
-`A-09` scope semantics that had to be amended to deliver the milestone at all. That
-amendment, and the new `OPEN-27` it did *not* resolve, are the two things to read
-first (see [§3](#3-in-progress-milestone)).
-Previously: M1.4 implementation session (RBAC and authorisation enforcement), amended
-with the four decisions taken for M1.5 including `OPEN-02`; before that, M1.3
+**Last updated:** 2026-10-15
+**Updated by:** M1.6 implementation session (dashboard shell, database-only). The three
+decisions taken before the milestone — add `openapi-typescript` first, build paging
+controls, leave the server edit form alone — are implemented as agreed. Two things to
+read first: the **two shape divergences from [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §13**
+that honest data states forced, and **issue 51**, a pre-existing order-dependence in two
+M1.3/M1.4 integration tests that this milestone's extra audit volume makes fail roughly
+one run in five (see [§3](#3-in-progress-milestone) and [§6](#6-known-issues)).
+Previously: M1.5 implementation session (server and application inventory), which
+amended `A-09` and opened `OPEN-27`; before that, M1.4 (RBAC and authorisation
+enforcement) and M1.3
 
 > **Rules for this file**
 > - Record only what has **actually happened**. Never mark anything complete because a plan says it should be.
@@ -21,7 +23,7 @@ with the four decisions taken for M1.5 including `OPEN-02`; before that, M1.3
 
 ## 1. Current project stage
 
-**Stage: Phase 1 — Foundation. Milestones M1.1 – M1.5 complete; M1.6 next.**
+**Stage: Phase 1 — Foundation. Milestones M1.1 – M1.6 complete; M1.7 next.**
 
 The application has a running skeleton, a migrated PostgreSQL schema, working OIDC
 authentication with server-side sessions, authorisation (one matcher, one
@@ -29,7 +31,14 @@ authentication with server-side sessions, authorisation (one matcher, one
 that fails the build if any route escapes a permission), and — as of M1.5 — a
 **server and application inventory**: twelve endpoints, scope filtering applied
 inside the SQL, cursor pagination, row-level idempotency, and five routed frontend
-pages. It still monitors nothing — see [§4](#4-pending-milestones).
+pages. As of M1.6 it also has a **dashboard shell over PostgreSQL**: endpoints §13.1
+and §13.2, a scope-keyed Redis cache, and a landing page whose every section states
+which source it came from or which milestone will give it one.
+
+It still monitors nothing — see [§4](#4-pending-milestones). That is the point of
+M1.6 rather than a gap in it: of the dashboard's nine sections exactly two have a
+source (server status counts and the failed-unit count, both from PostgreSQL), and
+the other seven report `not_configured` with `null` values rather than zeros.
 
 M1.5 is where the authorisation layer first met a real scoped row, and it found a
 defect: under `A-09` as M1.4 wrote it, the bootstrap administrator's full-scope grant
@@ -101,6 +110,8 @@ writing.
 
 | **M1.5** — server and application inventory, endpoints 14.1–14.7 and 18.1–18.5, scope-filtered queries, cursor pagination, idempotency, React Router and five pages | **Complete** | 2026-10-14 | 349 unit + 209 integration + 55 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; the lifecycle driven over HTTP against the running Compose stack (register → replay → duplicate → patch → environment change → retire → 404) and the UI exercised in a real browser; all 14 checks in `scripts/check-all.sh` pass ([§7](#7-tests-executed-and-their-actual-results)) |
 
+| **M1.6** — dashboard shell: endpoints 13.1 and 13.2, scope-keyed Redis cache, shared `StatusBadge`/`DataStateBanner`/`EmptyState`/`ErrorState`, paging controls, generated TypeScript API types | **Complete** | 2026-10-15 | 360 unit + 231 integration + 76 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; both endpoints driven over HTTP against the running Compose stack and the counts cross-checked by hand against `SELECT count(*)`; `scripts/check-all.sh` passes all 15 checks ([§7](#7-tests-executed-and-their-actual-results)). Both security checks were confirmed to **fail** against a deliberately broken implementation before being relied on |
+
 **M1.3 caveat — the honest limit of what was verified.** Everything was tested
 against the **mock** OIDC provider in `infra/compose/mock-idp/`, which checks no
 password. That proves the OIDC client is self-consistent and that the session, CSRF,
@@ -127,7 +138,123 @@ development aid and is labelled as one in its own README, in the Compose file an
 
 ## 3. In-progress milestone
 
-**None.** M1.5 is finished; M1.6 (dashboard shell) has not begun.
+**None.** M1.6 is finished; M1.7 (Phase 1 consolidation) has not begun.
+
+### What M1.6 implemented (2026-10-15)
+
+The three decisions taken before the milestone were implemented as agreed:
+`openapi-typescript` first, paging controls built once and used in three places, and
+the server edit form (issue 44) deliberately left alone for its own change before
+M1.7.
+
+#### Honest data states, which is what this milestone is actually about
+
+Of the dashboard's nine sections, **two have a source** and seven do not:
+
+| Section | State at M1.6 | Why |
+|---|---|---|
+| `servers` (total, pending, managed, stale, unreachable, retired) | `ok`, `postgresql` | Counts of the `servers.status` column |
+| `failed_services` | `ok`, `postgresql` — a **real zero** | `services` exists and is empty; it is the allowlist, so "no registered unit is failed" is a fact |
+| `server_health` (healthy/warning/critical/unknown) | `not_configured`, all `null` | No collector until M2.1 |
+| `utilisation` | `not_configured`, all `null` | No Prometheus |
+| `active_alerts` | `not_configured`, all `null` | No `alert_events` table |
+| `recent_deployments` / `recent_operations` / `recent_health_changes` | `not_configured`, `items: null` | No tables at all (M5.1 / M4.2 / M2.5) |
+| §13.2 per-server `health_state` | `null`, never `healthy` | Nothing has looked at the host |
+
+`failed_services` is the one section permitted to say `0`, and it says so *because*
+it has a source. Everything else carries `null` plus an `unavailable_reason` naming
+the milestone that will fill it.
+
+#### Two shape divergences from §13's example payload
+
+Both are recorded in [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §13 in the same
+change, as CLAUDE.md §3 requires. Neither was a free choice — §4 gives one
+`data_state` per section, and the example payload could not be produced honestly.
+
+1. **`healthy`/`warning`/`critical` moved out of `servers` into a sibling
+   `server_health` section.** The example drew them beside `total` and `managed`, but
+   those are counts of a stored column and these are a health rollup with no source.
+   One envelope cannot carry one `data_state` for both. Field names are unchanged.
+2. **`recent_*` are sections carrying `items: null`, not bare `[]`.** An empty array
+   asserts "nothing happened recently". There is no table to ask, and §4 rule 2 plus
+   PRD §4.2 forbid a substitute for an absent value as firmly for an empty list as
+   for a zero.
+
+A third, smaller one: `health_status` on §13.2 filters a field with no source, so it
+returns an empty page rather than being ignored. Dropping it silently would return
+the whole list looking like the healthy subset.
+
+#### The cache, and the scope key
+
+`DCP_DASHBOARD_CACHE_TTL_SECONDS` (default 15, `0` disables — the milestone's
+documented rollback), auto-refresh via `VITE_DASHBOARD_REFRESH_SECONDS` (default 30).
+`collected_at` is stamped after the reads and displayed for every section, so a
+cached answer shows its real age.
+
+**The cache key includes the caller's resolved scope**, digested from the
+`server:read` grants that feed `readable_servers` — allows and denies both. This was
+the milestone's stated security risk ("a cache key that ignores scope leaks counts
+across users"), so it has tests that were *demonstrated to catch it*: with
+`_scope_fingerprint` stubbed to a constant,
+`test_two_scopes_produce_different_cache_keys`,
+`test_an_added_deny_changes_the_cache_key` and the end-to-end
+`test_a_scope_change_is_not_served_from_the_previous_cache_entry` all fail. The
+end-to-end one narrows a live caller's grant inside the TTL and asserts the
+*narrowed count*, not merely that something changed.
+
+Counts are scope-filtered **inside the query** by reusing
+`app/authz/queries.readable_servers` — no second translation of scope
+(docs/SECURITY.md §4 rule 7). The six shared server filters were extracted into
+`app/inventory/queries.server_filter_conditions` so §14.1 and §13.1/§13.2 cannot
+drift apart on, say, how `provider` resolves through `cloud_accounts`.
+
+#### Generated API types (closes issue 43)
+
+`openapi-typescript` as a **dev** dependency, so it adds nothing to the bundle.
+`backend/app/openapi.py` prints the schema without starting the app or opening a
+socket; `scripts/generate-api-types.sh` pipes it into the committed
+`frontend/src/api/schema.ts`; `npm run generate:api` runs it; a new `contracts` CI job
+and a `check-all.sh` step regenerate and fail on drift. The hand-written interfaces in
+`frontend/src/api/inventory.ts` are deleted and replaced by aliases onto the generated
+`components['schemas']`.
+
+It paid for itself immediately. The generated types are accurate about Pydantic
+fields with defaults being *optional*, which the hand-written ones claimed were always
+present, and `tsc` then found two places in `ServerDetail.tsx` that would have
+rendered `undefined`.
+
+§10 rung analysis, as the dependency rules require: rung 1 is satisfied by
+[`docs/TECH_STACK.md`](docs/TECH_STACK.md) §11, which names the generator as the
+mechanism this project uses; rungs 2–5 fail because nothing in the stdlib or the
+installed set turns an OpenAPI schema into TypeScript. `axe-core` was added on the
+same basis — TECH_STACK §9 already names `axe` assertions as the accessibility gate,
+and `eslint-plugin-jsx-a11y` is a linter that cannot evaluate rendered DOM. Both are
+dev-only and neither reaches the bundle.
+
+#### Frontend
+
+`pages/inventory/states.tsx` is **deleted**, not left beside the new components, as
+its own docstring asked. `StatusBadge`, `DataStateBanner`, `EmptyState`/`LoadingState`
+and `ErrorState` replace it, and all five existing pages were rewired onto them.
+
+`StatusBadge` is the single owner of status visuals: glyph + word + colour, so status
+is never conveyed by colour alone (PRD §8), and `null` renders "Unknown" rather than
+falling through to healthy. The dashboard is the landing route in place of M1.5's
+redirect to `/servers`. Summary cards link through to the filtered server list.
+
+**Paging controls (closes issue 46).** `useCursorPaging` keeps the stack of visited
+cursors — keyset paging gives "next" for free and no "previous" at all — and `Pager`
+renders it. Used by the dashboard status table, the server list and the application
+list; the server list's "narrow the filters to see them" message is gone. There is no
+"page 3 of 9", because §5 returns `total: null` on purpose.
+
+#### What M1.6 did not do
+
+- **Issue 44** (server edit form, association management) — out of scope by decision;
+  it belongs in its own change before M1.7's E2E suite locks the gap into Phase 1.
+- **No charting library.** `TS-01` is still unselected and M2.2 is where charts live.
+- **No Prometheus and no metric collection.**
+- **No migration.** The schema is still at `0004`; this milestone only reads.
 
 ### What M1.5 implemented (2026-10-14)
 
@@ -550,7 +677,7 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 
 | Phase | Milestones | Status |
 |---|---|---|
-| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · M1.6 dashboard shell · M1.7 consolidation | **M1.6 next** |
+| 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · M1.7 consolidation | **M1.7 next**, after issue 44 ([§9](#9-next-recommended-task)) |
 | 2 — Monitoring | M2.1 Prometheus client · M2.2 host metrics + charts · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | Pending |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
@@ -704,12 +831,20 @@ Once a decision is reviewed, record the date and the outcome here.
 | # | Issue | Severity | Handling |
 |---|---|---|---|
 | 42 | **An idempotent replay is judged against the row's *current* columns, not the original request body.** Migration 0004 stores the key and the requester but not the payload, so `create_server` and `create_application` compare the incoming body against the stored row. A key replayed after the resource was edited therefore reads as "a different body" and is refused with `409`, where [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §7 describes `409` only for a genuinely different request. | Contract divergence in one direction only — it never silently returns something the caller did not ask for | Either store a hash of the canonical body in a third column, or accept and document the narrower rule. Needs a decision; the safe behaviour is in place meanwhile. Documented in [`docs/DATABASE.md`](docs/DATABASE.md) §14. |
-| 43 | **TypeScript API types are still hand-written.** [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §11 and CLAUDE.md §5 require them to be generated from the backend OpenAPI schema into a committed file, with CI failing on drift. `frontend/src/api/inventory.ts` is hand-written instead, because wiring `openapi-typescript` would be a **second** new frontend dependency in a milestone that agreed to exactly one (React Router), and that was not a decision to take unilaterally. The shapes are checked against the real responses by the backend suites rather than by the compiler. | Drift risk between frontend and backend; no behavioural fault today | Add `openapi-typescript` (or equivalent) plus the CI drift gate, and delete the hand-written interfaces. It is a small, self-contained change and it should be the next thing done to this file. |
+| 43 | **RESOLVED 2026-10-15 (M1.6).** `openapi-typescript` is wired up as a dev dependency, `frontend/src/api/schema.ts` is generated and committed, `npm run generate:api` regenerates it, and the `contracts` CI job plus a `scripts/check-all.sh` step fail on drift. The hand-written interfaces are deleted. The generator immediately caught two nullability claims the hand-written types got wrong (see [§3](#3-in-progress-milestone)). Previously: **TypeScript API types are still hand-written.** [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §11 and CLAUDE.md §5 require them to be generated from the backend OpenAPI schema into a committed file, with CI failing on drift. `frontend/src/api/inventory.ts` is hand-written instead, because wiring `openapi-typescript` would be a **second** new frontend dependency in a milestone that agreed to exactly one (React Router), and that was not a decision to take unilaterally. The shapes are checked against the real responses by the backend suites rather than by the compiler. | Drift risk between frontend and backend; no behavioural fault today | Add `openapi-typescript` (or equivalent) plus the CI drift gate, and delete the hand-written interfaces. It is a small, self-contained change and it should be the next thing done to this file. |
 | 44 | **No UI for editing a server or managing associations.** §14.4, §14.6 and §14.7 are implemented, audited and tested on the backend, and the frontend has no control for them — only registration, read and retire. [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) M1.5 lists "edit forms" and "association management" among the frontend tasks. | Incomplete milestone task, stated rather than hidden | Add an edit form and an association control. Small, and natural to do alongside M1.6's shared `StatusBadge`/`EmptyState` components, which also replace `pages/inventory/states.tsx`. |
 | 45 | **There is no UI for registering an application.** §18.2's body carries `health_check_config`, whose URLs are validated against the SSRF host allowlist at write time — and `DCP_SSRF_HOST_ALLOWLIST` is empty by default, so a form offering a URL box would only ever produce a rejection. Applications are registered through the API until the allowlist is configurable. | Deliberate omission | Revisit when the allowlist has a configuration surface (M4/M6). |
-| 46 | **`page.has_more` is reported but there is no "next page" control.** The backend mints a cursor and the list pages say more results exist; the UI asks the operator to narrow the filters instead. | Usability gap, no correctness fault | Paging controls belong with M1.6's list components. |
+| 46 | **RESOLVED 2026-10-15 (M1.6).** `useCursorPaging` + `Pager`, used by the dashboard status table, the server list and the application list. Previously: **`page.has_more` is reported but there is no "next page" control.** The backend mints a cursor and the list pages say more results exist; the UI asks the operator to narrow the filters instead. | Usability gap, no correctness fault | Paging controls belong with M1.6's list components. |
 | 47 | **The cursor signing key is derived from `DCP_DATABASE_URL`**, not from a key of its own, so rotating the database password invalidates in-flight cursors (the client sees `422 invalid_cursor` and re-fetches one page). Chosen over a new mandatory secret, which PRD §11 forbids, and over a per-process random key, which would break cursors across instances and restarts. | Accepted, documented in `app/core/pagination.py` | Add an optional `DCP_CURSOR_SIGNING_KEY` with this as the fallback, if it ever matters. |
 | 48 | **Three migration tests needed a rebuilt schema.** `test_full_downgrade_to_base_leaves_no_tables`, `test_the_migrations_seed_no_user` and `test_seed_revision_is_idempotent` run a real downgrade, and revision 0002 deletes the reference rows it seeded — which it cannot do while an inventory test's server references the seeded cloud account (`ON DELETE RESTRICT`, deliberately). The migration is behaving correctly; the tests' precondition was "nothing has created inventory rows", true by luck until M1.5. | Was blocking the integration suite | Fixed: a `rebuilt` fixture drops and recreates the schema before those three tests. |
+
+### Implementation issues (found during M1.6, 2026-10-15)
+
+| # | Issue | Severity | Handling |
+|---|---|---|---|
+| 49 | **`worker` and `beat` report `unhealthy` in `docker compose ps`, and have since before M1.5.** Recorded here because it was invisible: no entry existed for it. Their healthcheck is `celery inspect ping -d celery@$$HOSTNAME`, so the likely cause is a hostname mismatch in the check rather than a sick worker — the containers run, and `/readyz` reports `broker: true` throughout. **Not investigated and not fixed**: nothing in M1.6 uses Celery, and fixing it here would have been scope creep. | Local signal only; no known functional impact, but an `unhealthy` container that is actually fine trains people to ignore the column | Verify whether the worker answers `celery inspect ping` under its real node name, and correct the healthcheck. Belongs with M1.7's Compose smoke test (issue 20), which is the milestone that asserts the stack is healthy |
+| 50 | **A dashboard write is not reflected until the cache entry expires** (up to `DCP_DASHBOARD_CACHE_TTL_SECONDS`, default 15 s). Retiring a server and immediately reloading shows the old total. This is the cache behaving as specified, not a defect, but it is a real behaviour an operator will notice and it is not written in the contract beyond the TTL field. | Accepted, by design | None needed. If it ever matters, invalidate on write — which means deleting every dashboard key for every scope, so it is a real cost rather than a one-liner. `DCP_DASHBOARD_CACHE_TTL_SECONDS=0` disables caching entirely. The integration tests that write then read use an `uncached` fixture rather than asserting the cache away |
+| 51 | **Two pre-existing integration tests are order-dependent and fail intermittently.** `tests/integration/test_admin_roles.py::test_granting_production_scope_requires_holding_it` (M1.4) and `tests/integration/test_auth_flow.py::test_audit_rows_are_correlated_with_the_request` (M1.3). Both take `rows[0]` from `SELECT … FROM audit_events WHERE action_type = :a ORDER BY occurred_at DESC` and assume the newest row of that type is their own. `audit_events.occurred_at` defaults to `now()`, which is the **transaction** timestamp, so rows from overlapping transactions can tie — and `ORDER BY` has no tiebreaker, leaving PostgreSQL free to return either first. **Not caused by M1.6, but made more likely by it:** the new suite adds 22 more logins and a few hundred audit rows to the same append-only table. Measured on 2026-10-15: 2 failures in ~12 full integration runs with the new tests present (always one of these two, never a dashboard test); 0 failures in 4 runs with `tests/integration/test_dashboard_api.py` removed — 4 runs is weak evidence of a baseline, so this is "more likely", not "only with". | Flaky suite. No production defect: the ordering is a test-side assumption, not application behaviour | One-line fix in each query — order by `(occurred_at, id)`, since `id` is a uuid7 and therefore time-ordered — or filter the query to the row the test just created. **Not done here**: both are M1.3/M1.4 test modules and outside this milestone (CLAUDE.md §3). Worth doing before M1.7 adds an E2E suite on top of a suite that is already intermittently red |
 
 ---
 
@@ -717,6 +852,95 @@ Once a decision is reviewed, record the date and the outcome here.
 
 All results below were produced by running the commands and reading the output.
 Nothing here is inferred.
+
+### Executed — `./scripts/check-all.sh`, 15/15 passed (M1.6, 2026-10-15)
+
+Run from `D:/devops-dashboard` against the live Compose stack, with both variables set
+so nothing skipped:
+
+```
+TEST_DATABASE_URL=postgresql+psycopg://dcp:placeholder-password@127.0.0.1:5433/dcp_test
+TEST_REDIS_URL=redis://127.0.0.1:6380/1
+```
+
+| Check | Result |
+|---|---|
+| backend: ruff lint | ok |
+| backend: ruff format | ok |
+| backend: mypy | ok — 66 source files |
+| backend: bandit | ok |
+| backend: unit tests | **360 passed**, 231 deselected, 1 warning, 18.68s |
+| backend: integration | **231 passed**, 360 deselected, 1 warning, 50.84s |
+| backend: pip-audit | ok |
+| frontend: eslint | ok |
+| frontend: prettier | ok |
+| frontend: tsc | ok |
+| frontend: vitest | **76 passed**, 9 files |
+| frontend: build | ok |
+| frontend: npm audit | 0 vulnerabilities |
+| **contracts: api types** (new) | ok — regenerated, no drift |
+| docs: link check | ok — 386 relative links in 13 files, 0 problems |
+
+`ALL CHECKS PASSED`, exit 0. The suite is 15 checks now rather than 14: the API-type
+drift gate was added by this milestone.
+
+**One caveat on the integration number, stated rather than buried.** That run was
+clean, but the integration suite is **not reliably clean**: see issue 51. Across
+roughly twelve full runs on 2026-10-15, two failed, each time one of two
+*pre-existing* M1.3/M1.4 tests with an order-dependent audit-row assertion, never a
+dashboard test. The 231 figure above is a real result from a real run; it is not a
+claim that every run is green.
+
+#### Verified by hand, over HTTP against the running stack (2026-10-15)
+
+Logged in through `http://localhost:5173` as `admin@example.invalid` (ADMINISTRATOR,
+full scope) via the mock IdP.
+
+- `GET /api/v1/dashboard/summary` → `total 6, pending 1, managed 3, stale 1,
+  unreachable 1, retired 0`. Cross-checked against the database directly
+  (`SELECT count(*) … GROUP BY status` over `deleted_at IS NULL`): **identical**.
+- `failed_services.count` → `0`, `data_state: "ok"`, cross-checked against
+  `SELECT count(*) FROM services WHERE last_observed_state = 'FAILED'` → `0`.
+- Six sections reported `not_configured` with `null` values, each naming its
+  milestone.
+- `?environment=production` → `total 3, managed 2, stale 1`; database agrees.
+- `?bogus=1` → `422`. `?environment=nope` → `422`.
+- `GET /api/v1/dashboard/health?limit=2` → 2 rows, `has_more: true`, a signed cursor;
+  following it returned the next two rows, different servers.
+- Two consecutive summary calls returned an **identical `collected_at`**, i.e. the
+  second was served from cache.
+- `?health_status=healthy` → `items: []` with `health.data_state: "not_configured"`.
+
+#### Verified in a real browser (2026-10-15)
+
+- `/` lands on `/dashboard`, not `/servers`.
+- Counts on the page match the API and the database.
+- Every unavailable card reads "Not configured — … (M2.1/M3.3/M5.1/M4.2/M2.5)".
+  **No zero appears anywhere except `Failed services`, which has a source.**
+- The status table shows `✕ Unreachable`, `◐ Stale`, `◌ Pending`, `● Managed` —
+  glyph *and* word *and* colour — and the Health column shows `? Unknown` for all six
+  servers, never "Healthy".
+- Open alerts reads "Not configured", not `0`.
+- Selecting Environment = production narrowed the cards to 3/2/1/0 and the table to
+  the three production servers (PRD §4.2 acceptance criterion).
+- `collected_at` is displayed for the summary and for the status table.
+- `/servers` and `/applications` render correctly on the replacement components after
+  `pages/inventory/states.tsx` was deleted.
+
+#### The two security checks were shown to fail before being relied on
+
+Rather than asserting that the tests pass, each was run against a deliberately broken
+implementation first:
+
+- `_scope_fingerprint` stubbed to a constant (a scope-blind cache key) →
+  `test_two_scopes_produce_different_cache_keys`,
+  `test_an_added_deny_changes_the_cache_key` and
+  `test_a_scope_change_is_not_served_from_the_previous_cache_entry` **all failed**.
+  Restored → all pass.
+- `Card` changed to render `{value ?? 0}` (the `null`-becomes-zero regression PRD §4.2
+  warns about) → `renders an unavailable metric as unavailable, never as 0` and
+  `names the milestone that will provide each missing section` **both failed**.
+  Restored → all pass.
 
 ### Executed — `./scripts/check-all.sh`, 14/14 passed (M1.5, 2026-10-14)
 
@@ -1036,54 +1260,110 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-**M1.6 — Dashboard shell (database-only)**
-([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m16--dashboard-shell-database-only))
+**Issue 44 — the server edit form and association management**, as a small change
+*before* M1.7.
 
-M1.5 is complete and M1.6's dependency is satisfied. It is `GET /dashboard/summary`
-and `/dashboard/health` over PostgreSQL only, with metric sections returning
-`data_state: "not_configured"` until Phase 2, plus the dashboard page and
-`StatusBadge`.
+This was deliberately excluded from M1.6 and the reason still holds: §14.4, §14.6 and
+§14.7 are implemented, audited and tested on the backend with no UI at all, and
+M1.7's first E2E suite would otherwise be written around that gap and lock it into
+Phase 1. M1.6 built the components it needs — `StatusBadge`, `ErrorState` and the
+shared `Result` handling — so it is now a page, not a foundation.
 
-**What M1.6 can build on, and should take over:**
+**Then M1.7 — Phase 1 consolidation**
+([`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md#m17--phase-1-consolidation)).
+Its dependency is satisfied: M1.6 is complete.
 
-- `frontend/src/pages/inventory/states.tsx` holds the minimum M1.5 needed —
-  `Loading`, `Empty`, `Failure`, `NotCollected`, `Status`. M1.6's task list names
-  `StatusBadge`, `DataStateBanner`, `EmptyState` and `ErrorState` as the shared
-  components; **they should replace that file**, not sit beside it. `Status` in
-  particular is a placeholder for `StatusBadge` and says so.
-- The routing shell, nav and session gate in `App.tsx` — M1.6 adds a dashboard route
-  and makes it the landing page in place of the current redirect to `/servers`.
-- `app/inventory/queries.py` for the per-environment and per-status counts the
-  summary needs; `ix_servers_environment_status` exists for exactly that.
+**What M1.7 can build on:**
 
-**Decisions M1.6 should not have to take, but will inherit:**
+- `frontend/src/api/schema.ts` and `npm run generate:api` — the E2E suite should use
+  the generated types rather than hand-writing fixtures.
+- `useCursorPaging` / `Pager`, already used in three places.
+- The dashboard as the landing route, which is the natural first step of the E2E
+  path "login → dashboard → server list → register server → unauthorised action
+  rejected".
 
-1. **`OPEN-27`** (see [§3](#3-in-progress-milestone)) — whether applications are
-   scope-filtered, and how. **Corrected 2026-10-14:** an earlier draft of this entry
-   said the dashboard counts applications and so meets the question immediately.
-   It does not. [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §13.1 counts
-   servers, failed services, alerts and recent activity — `application_id` appears
-   only as a *filter*, and that filter resolves through `application_servers` to
-   servers, which **are** scope-filtered. So M1.6 is not blocked by `OPEN-27`; the
-   first milestone that genuinely is will be one that lists or counts applications
-   in their own right. It remains a product question, just not an urgent one.
-2. **Issue 42** — the idempotency replay comparison. Not M1.6's problem, but it is
-   the oldest unresolved contract divergence from this milestone.
+**What M1.7 should clear first, in roughly this order:**
 
-**Cheap and worth clearing, in roughly this order:**
-
-- **Issue 43 — generate the TypeScript API types.** Self-contained, closes a standing
-  CLAUDE.md §5 and [`docs/TECH_STACK.md`](docs/TECH_STACK.md) §11 requirement, and
-  gets cheaper the sooner it happens: `inventory.ts` is the first file it deletes and
-  M1.6 would otherwise add a second hand-written client beside it.
-- **Issues 44 and 46** — the server edit form, association management and paging
-  controls. Natural alongside M1.6's list components.
+- **Issue 51 — the flaky audit-row assertions.** Do this *before* adding an E2E
+  suite. Two one-line fixes (`ORDER BY occurred_at DESC, id DESC`, or filter to the
+  row the test created). Building a new suite on top of one that is red about one run
+  in five makes every future failure ambiguous.
+- **Issues 20 and 49 together** — `scripts/smoke-test.sh` has never run, and `worker`
+  and `beat` have reported `unhealthy` since before M1.5. M1.7's own task list
+  includes a Compose smoke test asserting the stack is healthy, so it has to resolve
+  49 to pass 20 honestly.
+- **Issue 21** — images are tag- not digest-pinned (`scripts/pin-digests.sh`).
+- **Issue 26** — the secret scanner has never been shown to fail on a planted secret.
 - **Issue 40** — the CSRF error code, still a one-word fix in an M1.3 module.
-- **Issues 20, 21, 26** — `scripts/smoke-test.sh` has never run, images are tag- not
-  digest-pinned, and the secret scanner has never been shown to fail on a planted
-  secret. All three are unblocked; the Docker daemon is available.
+
+**Decisions M1.7 will inherit:**
+
+1. **`OPEN-27`** — unchanged and still not urgent. M1.6 confirmed in code what
+   PROGRESS §9 was corrected to say on 2026-10-14: §13.1 counts servers, failed
+   services, alerts and recent activity, and `application_id` is only a filter that
+   resolves through `application_servers` to servers, which *are* scope-filtered. The
+   stale copy of the old claim in
+   [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) was corrected in this
+   change.
+2. **`TS-01`** (charting library) is still unselected, and M1.6 deliberately selected
+   nothing. It gates M2.2, not M1.7.
+3. **Issue 42** — the idempotency replay comparison, still the oldest unresolved
+   contract divergence.
+4. **Issue 50** — the dashboard lags a write by up to the cache TTL. Accepted; worth
+   knowing before writing an E2E test that registers a server and asserts the
+   dashboard total.
 
 ## 10. Scope confirmation
+
+**M1.6 implementation session (2026-10-15).** Scope was milestone M1.6. Added the
+dashboard module (`app/dashboard/router.py`, `service.py`, `schemas.py`),
+`app/openapi.py`, `scripts/generate-api-types.sh`, the `contracts` CI job, the
+frontend components `StatusBadge`, `DataStateBanner`, `EmptyState`, `ErrorState`,
+`Pager` and `useCursorPaging`, `src/api/dashboard.ts`, the generated
+`src/api/schema.ts`, `src/pages/dashboard/Dashboard.tsx`, and four test modules
+(`tests/dashboard/test_summary.py`, `tests/integration/test_dashboard_api.py`,
+`Dashboard.test.tsx`, `StatusBadge.test.tsx`, `Pager.test.tsx`).
+
+**Deleted:** `frontend/src/pages/inventory/states.tsx`, as its own docstring
+instructed and as [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) M1.6
+requires — replaced, not left beside the new components.
+
+Changes touching code outside the dashboard module, each forced by this milestone
+rather than opportunistic:
+
+- **`app/inventory/queries.py`** — the six shared server filters were extracted into
+  `server_filter_conditions`, which `servers_query` now calls. Without it §13.1,
+  §13.2 and §14.1 would hold three copies of "how does `provider` resolve through
+  `cloud_accounts`". Behaviour unchanged; the existing inventory suites pass
+  untouched.
+- **`frontend/src/api/inventory.ts`** — hand-written response interfaces deleted and
+  replaced by aliases onto the generated schema (issue 43, agreed before the
+  milestone). `call` and `queryString` were exported so the dashboard client reuses
+  the one status-code ladder instead of copying it.
+- **The five existing frontend pages** — rewired from `states.tsx` to the shared
+  components. Mechanical, and required by the deletion above.
+- **`frontend/src/pages/servers/ServerDetail.tsx`** — two `=== null` comparisons
+  became `== null`. The generated types are correct that a Pydantic field with a
+  default is *optional*, so those fields can be `undefined`; the hand-written types
+  had claimed otherwise and `tsc` caught it.
+- **`frontend/tsconfig.json`** — `"vite/client"` added to `types`, so
+  `import.meta.env` typechecks for the configurable refresh interval.
+- **`backend/app/main.py`, `app/core/config.py`** — router mounted, one setting added.
+- **`backend/tests/integration/test_auth_flow.py`** — `_clear_namespace` now also
+  clears `dcp:dashboard:*`. Without it a 15-second cache entry outlives the test that
+  wrote it and the next test reads another caller's totals, which would surface as a
+  flake rather than as the failure the cache-key tests are designed to show.
+- **`frontend/src/auth/SessionProvider.test.tsx`, `ServerList.test.tsx`** — updated
+  for the new landing route and for `StatusBadge` rendering a human label. Not
+  weakened: the `ServerList` assertion is now stronger, checking the badge label
+  *and* the filter option separately.
+
+**Deliberately not touched:** issue 44 (server edit form and association
+management), `TS-01`, anything Prometheus, and the two flaky M1.3/M1.4 test modules
+in issue 51 — diagnosed and recorded, not fixed, because they belong to those
+milestones (CLAUDE.md §3).
+
+**No migration.** The schema is still at `0004`; M1.6 only reads existing tables.
 
 **M1.5 implementation session (2026-10-14).** Scope was milestone M1.5. Added
 migration `0004`, the inventory module (`app/inventory/router_servers.py`,
@@ -1264,6 +1544,31 @@ Performed 2026-10-13 across `PRD.md` and the eight documents.
 | Relative links | All inter-document links verified as existing files with matching heading anchors |
 
 Re-run this review whenever a contract document changes.
+
+### M1.6 code-vs-documentation review (2026-10-15)
+
+| Claim | Verified how |
+|---|---|
+| Endpoints 13.1 and 13.2 exist and require `dashboard:read` | `GET /openapi.json` on the running stack lists both paths; the route-coverage gate (`tests/authz/test_route_coverage.py`) passes, so neither escapes a permission dependency |
+| Counts respect scope | `test_counts_are_scope_filtered` and `test_the_health_list_is_scope_filtered`; the predicate is `app/authz/queries.readable_servers`, the same one §14.1 uses, so `tests/integration/test_scope_filtering.py` still guards the matcher/SQL agreement |
+| The cache key includes scope | Four unit cases plus one end-to-end test, **all confirmed to fail** against a deliberately scope-blind fingerprint before being relied on ([§7](#7-tests-executed-and-their-actual-results)) |
+| No section substitutes `0` for unknown | `test_every_section_without_a_source_is_null_and_says_why` over the wire; `renders an unavailable metric as unavailable, never as 0` in the browser suite, confirmed to fail against a `?? 0` regression; and read off the rendered page by hand |
+| `health_state` is never defaulted to healthy | `test_the_health_list_never_defaults_a_server_to_healthy`, `StatusBadge` unit test, and observed as `? Unknown` on all six seeded servers in a real browser |
+| Status is never conveyed by colour alone (PRD §8) | `StatusBadge` renders glyph + word + colour; two unit tests pin it; observed on the page as `✕ Unreachable`, `◐ Stale`, `◌ Pending`, `● Managed` |
+| `collected_at` displayed for every data section | `CollectedAt` on the summary and the status table; `displays collected_at for the data sections`; observed on the page |
+| Summary cards link to the relevant detail view | `links summary cards to the relevant detail view`; observed as `/servers`, `/servers?status=MANAGED`, `…=STALE`, `…=UNREACHABLE` |
+| Selecting a filter updates the server list (PRD §4.2) | `an environment filter updates the health list` over HTTP, `sends the chosen filter to the backend rather than filtering locally` in the browser suite, and done by hand in a real browser (6 → 3 servers) |
+| `axe` reports no violations | `has no axe violations`, wcag2a + wcag2aa. **`color-contrast` is explicitly disabled** and says why: jsdom has no layout, so that rule returns "incomplete" rather than a verdict. Contrast is unverified and belongs to M1.7's E2E suite |
+| TypeScript types are generated, committed, and gated on drift | `scripts/generate-api-types.sh` is idempotent (verified by hash across two runs); the `contracts` check regenerates and diffs in both CI and `check-all.sh`; `src/api/inventory.ts` holds no hand-written response shape |
+| The documented divergences are documented | Both are written into [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) §13 in this change, not only here |
+| §13 example payload matches what the code returns | Replaced in this change with the real shape, including `server_health`, `items: null` and `cache_ttl_seconds` |
+
+**Corrected while passing through:** the `OPEN-27` row in
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)'s gating table still said
+"M1.6 — the dashboard counts applications, so it meets the question immediately".
+That claim was corrected in PROGRESS §9 on 2026-10-14 but the plan's copy was missed.
+M1.6 is now built and the correction is confirmed by the code: §13.1 counts servers,
+failed services, alerts and recent activity, and nothing counts applications.
 
 ### M1.5 code-vs-documentation review (2026-10-14)
 

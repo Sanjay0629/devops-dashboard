@@ -17,7 +17,10 @@ import {
   type AssociatedServer,
   type Result,
 } from '@/api/inventory';
-import { Failure, Loading, NotCollected, Status } from '@/pages/inventory/states';
+import { DataStateBanner } from '@/components/DataStateBanner';
+import { LoadingState } from '@/components/EmptyState';
+import { ErrorState } from '@/components/ErrorState';
+import { StatusBadge } from '@/components/StatusBadge';
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -51,8 +54,8 @@ export function ApplicationDetail(): React.JSX.Element {
     void load();
   }, [load]);
 
-  if (result === null) return <Loading what="this application" />;
-  if (result.kind !== 'ok') return <Failure result={result} />;
+  if (result === null) return <LoadingState what="this application" />;
+  if (result.kind !== 'ok') return <ErrorState result={result} />;
 
   const application = result.value;
 
@@ -67,7 +70,7 @@ export function ApplicationDetail(): React.JSX.Element {
             {application.slug}
           </p>
         </div>
-        <Status value={application.status} />
+        <StatusBadge value={application.status} />
       </header>
 
       <dl className="text-sm">
@@ -89,7 +92,7 @@ export function ApplicationDetail(): React.JSX.Element {
         <Row label="Registered health checks">{application.health_check_config.checks.length}</Row>
         <Row label="Registered services">{application.registered_service_count}</Row>
         <Row label="Deployment targets">
-          <NotCollected section={application.deployment_targets} />
+          <DataStateBanner section={application.deployment_targets} />
         </Row>
       </dl>
 
@@ -114,7 +117,7 @@ export function ApplicationDetail(): React.JSX.Element {
                   <Link to={`/servers/${server.id}`} className="underline">
                     {server.display_name}
                   </Link>
-                  <Status value={server.status} />
+                  <StatusBadge value={server.status} />
                 </li>
               ))}
             </ul>
