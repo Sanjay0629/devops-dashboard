@@ -21,6 +21,7 @@ from __future__ import annotations
 import functools
 import os
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -100,6 +101,26 @@ class Settings(BaseSettings):
     read_rate_limit_max: int = Field(default=600, ge=1, le=100_000)
     read_rate_limit_window_seconds: int = Field(default=60, ge=1, le=86_400)
 
+    # --- Prometheus (M2.1, AD-04, docs/SECURITY.md §19) ---------------------
+    #: Base URL of the Prometheus **read** API, e.g. ``http://prometheus:9090``.
+    #: Optional: unset, every metrics read reports ``not_configured`` rather
+    #: than pretending to have a source (PRD §11, CLAUDE.md §7).
+    #:
+    #: This is **deployment configuration, not a registered destination**, so
+    #: it deliberately does not pass through
+    #: ``app/core/ssrf.validate_registered_url``. The reasoning is written out
+    #: in ``app/metrics/client.py`` — in short, the host allowlist and the
+    #: denied-range check exist to constrain destinations that a *user*
+    #: supplies through the API, and applying them here would both
+    #: self-authorise (whoever sets this variable sets the allowlist too) and
+    #: deny the only addresses an internal monitoring host can have.
+    prometheus_url: str | None = None
+    #: Upstream deadline for one Prometheus call (docs/API_CONTRACTS.md §15.2,
+    #: docs/ARCHITECTURE.md §4.4 "default 10 s"). Also sent to Prometheus as
+    #: its own ``timeout`` parameter, so a slow query is abandoned at both
+    #: ends rather than only at ours.
+    prometheus_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+
     # --- SSRF (docs/SECURITY.md §19) ----------------------------------------
     #: Hosts a registered URL may name. **Empty means none**, so an
     #: unconfigured deployment registers no outbound destination at all rather
@@ -146,19 +167,37 @@ class Settings(BaseSettings):
             return tuple(part for part in value.replace(",", " ").split() if part)
         return value
 
-    @field_validator("oidc_issuer", "oidc_redirect_url")
+    @field_validator("oidc_issuer", "oidc_redirect_url", "prometheus_url")
     @classmethod
     def _check_absolute_http_url(cls, value: str | None) -> str | None:
-        """Reject anything that is not an absolute http(s) URL.
+        """Reject anything that is not a plain absolute http(s) URL.
 
         A relative or non-HTTP value here would be fetched or redirected to
         later; rejecting it at load time keeps that out of the request path.
+
+        The credential, fragment and whitespace checks are the same three
+        ``app/core/ssrf.py`` applies to a registered URL, for the same
+        reasons: an embedded credential ends up in whatever logs the URL, a
+        fragment is never sent and so means the value was pasted from a
+        browser, and an embedded newline is header injection waiting for a
+        client that splits on it. They are enforced here rather than only
+        there because these three settings are fetched (or redirected to) and
+        do **not** go through the registered-URL path.
         """
         if value is None:
             return None
+        if any(character in value for character in "\r\n\t "):
+            raise ValueError("must be a single-line URL with no whitespace")
         value = value.rstrip("/") or value
         if not value.startswith(("http://", "https://")):
             raise ValueError("must be an absolute http:// or https:// URL")
+        parts = urlsplit(value)
+        if parts.username or parts.password:
+            raise ValueError("must not embed credentials")
+        if parts.fragment:
+            raise ValueError("must not carry a fragment")
+        if not parts.hostname:
+            raise ValueError("must name a host")
         return value
 
     @field_validator("api_base_path")
@@ -190,7 +229,13 @@ class Settings(BaseSettings):
                 "absolute one can never be reached"
             )
         if self.environment != "local":
-            for name in ("oidc_issuer", "oidc_redirect_url"):
+            # ``prometheus_url`` is included deliberately. docs/SECURITY.md
+            # §19.3 allows plain http only for an explicitly allowlisted
+            # internal host, and this setting is not allowlist-gated (see the
+            # field comment), so the remaining honest rule is: https outside
+            # 'local'. An internal Prometheus without TLS has to be fronted
+            # by something that has it.
+            for name in ("oidc_issuer", "oidc_redirect_url", "prometheus_url"):
                 url = getattr(self, name)
                 if url is not None and not url.startswith("https://"):
                     raise ValueError(f"{name} must use https outside the 'local' environment")
@@ -218,6 +263,10 @@ class Settings(BaseSettings):
                 self.oidc_redirect_url,
             )
         )
+
+    @property
+    def prometheus_configured(self) -> bool:
+        return self.prometheus_url is not None
 
     @property
     def cookie_secure(self) -> bool:

@@ -68,6 +68,39 @@ def is_measured(path: str) -> bool:
     return not EXCLUDED_NAMES.search(Path(path).name)
 
 
+def untracked_lines() -> dict[str, set[int]]:
+    """Every line of every measurable file git has not been told about yet.
+
+    `git diff` cannot report an untracked file, so without this the gate
+    measures **nothing at all** for a brand-new module — which is the shape
+    an untested addition usually takes, and therefore the one case where the
+    gate most needs to work.
+
+    Found by M2.1, the first backend change this gate ever judged: a new
+    six-file `app/metrics/` package was skipped in silence while the run
+    printed a pass for the twenty-one lines of an *existing* file the same
+    branch happened to touch. The floor was not lowered to accommodate it;
+    the blind spot was closed.
+
+    Staged additions already appear in `git diff` against the merge base, so
+    this covers exactly the pre-`git add` case the module docstring promises
+    to measure, and nothing else.
+    """
+    changed: dict[str, set[int]] = {}
+    for line in git("ls-files", "--others", "--exclude-standard").splitlines():
+        path = line.strip()
+        if not path or not is_measured(path):
+            continue
+        try:
+            text = (ROOT / path).read_text(encoding="utf-8")
+        except OSError:
+            # Deleted between the listing and now, or unreadable. Not a
+            # coverage gap; skip it rather than failing the gate on it.
+            continue
+        changed[path] = set(range(1, len(text.splitlines()) + 1))
+    return changed
+
+
 def changed_lines(base: str) -> dict[str, set[int]]:
     """New-side line numbers added or modified since the merge base.
 
@@ -78,6 +111,9 @@ def changed_lines(base: str) -> dict[str, set[int]]:
     are the same thing — but `base...HEAD` would have silently measured
     nothing at all for an uncommitted change, which is exactly when a
     contributor runs it.
+
+    Untracked files are folded in by :func:`untracked_lines`, for the same
+    reason and against the same failure.
     """
     merge_base = git("merge-base", base, "HEAD").strip()
     diff = git("diff", "--unified=0", "--no-color", "--diff-filter=d", merge_base)
@@ -97,6 +133,8 @@ def changed_lines(base: str) -> dict[str, set[int]]:
         count = 1 if match.group(2) is None else int(match.group(2))
         # count 0 marks a pure deletion: there is no new line to cover.
         changed[current].update(range(start, start + count))
+    for path, lines in untracked_lines().items():
+        changed[path].update(lines)
     return dict(changed)
 
 

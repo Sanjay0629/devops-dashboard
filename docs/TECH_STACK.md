@@ -74,7 +74,39 @@
 4. React bindings, TypeScript types, dark/light theming via CSS variables.
 5. Bundle size proportionate to use.
 
-Recharts and uPlot (with a thin React wrapper) both plausibly qualify; `visx` if more control is needed. **Not yet chosen** — the gap-rendering criterion must be tested, not assumed.
+**Decision: `d3-shape` + `d3-scale`, used directly with no React wrapper. Selected 2026-10-16 (`TS-01` resolved).** Integrated as `frontend/src/components/chart/linePath.ts` — two functions, not a chart component. M2.2 builds the components.
+
+*Need (§10 rung 1).* Real now: M2.2 ships metric cards, range charts with selectable ranges, and server/environment comparison (IMPLEMENTATION_PLAN M2.2).
+
+*The rung that failed: 3 — "is it a few lines?" — and only half of it.* Measured rather than argued. A zero-dependency hand-rolled line generator (a linear interpolation and a loop emitting `M`/`L`, breaking at each `null`) builds to **348 B gzipped** and is genuinely a few lines; that part was written and measured. What it does **not** do is choose tick positions over an arbitrary time domain, and "range charts with selectable ranges" is exactly the requirement that needs it — picking readable intervals across a 15-minute window and a 30-day one, which `Intl` cannot do (it *formats* a tick, it does not *choose* one). So the few lines were written for the geometry and the dependency was taken for the scales.
+
+*Why nothing wraps it.* `@visx/shape`'s `LinePath` and `@visx/scale`'s `scaleLinear` are React/object-API wrappers over precisely these two packages. The component `LinePath` contributes is one `<path>` element, which is three lines to write, and the wrapper measured **18,480 B gzipped against 14,926 B** for the same capability — 3.5 kB and two more packages for an element we can emit ourselves. §10 rung 7 also prefers it: d3 micro-packages bring no component system at all.
+
+**The gap criterion (criterion 2 above) was tested, not assumed**, which is what this decision was blocked on. `frontend/src/components/chart/linePath.test.ts` is that test and is kept as a standing regression test. It asserts on the *geometry of the rendered path* rather than on a snapshot, so it would judge a different library unchanged, and it catches **two** defects where a naive test catches one:
+
+| Defect | Signature | Operator reads |
+|---|---|---|
+| Coercion (`null` → `0`) | line stays continuous, **gains** a vertex on the baseline | a silent host as an idle one |
+| Bridging (`connectNulls`, `spanGaps`) | line stays continuous, **loses** a vertex | invented data as measured data |
+
+So the gate checks subpath count *and* vertex count, and `describe('the gate itself')` proves it can fail — the same reason [`TESTING.md §8`](TESTING.md#8-security-tests)'s planted-bypass test exists. Stronger than that: removing `.defined()` from the product code was run as a mutation, and **6 of the 12 tests failed** with `the gap was coerced to a value (PRD §4.2)` and the real coerced path `M0,100L100,100L200,200L300,100L400,100`. The gap rule therefore lives in one function of ours rather than in a library default — which matters, because Recharts' correctness here rests on `connectNulls` continuing to default to `false`.
+
+*Evaluation (§10 rung 4).* **ISC licensed**, all ten packages — verified by reading each `package.json`, not assumed from the top two. Transitive tree **measured** (`d3-shape`, `d3-scale` plus `d3-array`, `d3-color`, `d3-format`, `d3-interpolate`, `d3-path`, `d3-time`, `d3-time-format`, `internmap`): **ten runtime packages**, every one a single-purpose d3 micro-package from the same maintainer with a decade of release history and no CVE history, plus four dev-only `@types` packages (`@types/d3-shape`, `@types/d3-scale` and their transitive `@types/d3-path`, `@types/d3-time`). `npm audit --audit-level=high` reports 0 vulnerabilities. **Bundle impact today is zero** — the production build is byte-identical (`index-CeSHwmyG.js`, 313,223 B raw / 94,583 B gzipped, same content hash) because nothing imports `linePath` yet; the cost arrives with M2.2 and is **+14,926 B gzipped**, measured by building the import in isolation with React externalised. Against the precedent this document already set, `react-router-dom`'s **+18 kB gzipped** recorded as "modest", that is below the bar. Easy to remove: two functions in one file.
+
+*Alternatives considered, each measured rather than ranked by popularity.*
+
+- **Recharts 3.10.1 — rejected on size and on accessibility defaults.** It passes the gap gate out of the box (`connectNulls` defaults to false; the probe rendered `M5,36.67L102.5,36.67M297.5,36.67L395,36.67`, two runs and four vertices) and it would have supplied axes, tooltips and a responsive container. But a line chart with axes and a tooltip measured **129,306 B gzipped** — it would take the app's bundle from 94.6 kB to roughly 224 kB, **more than doubling it**, and more than seven times the increase this document calls modest. On criterion 3 it is actively unhelpful: the probe showed it sets `role="application"` on the `<svg>` and makes **13 elements tabbable** for a five-point chart. `role="application"` tells a screen reader to stop interpreting the content and forward keystrokes, which for a chart with no keyboard model of its own is worse than no role at all — so both defaults would have to be overridden, and the data-table fallback criterion 3 asks for would still have to be written by hand.
+- **uPlot 1.6.32 — rejected because the criterion cannot be tested against it.** It is the smallest and fastest of the candidates and is the right tool for tens of thousands of points, which is not this dashboard (§15.2 caps a series at 11,000 and comparisons at 20 servers). Two findings ended it: it renders to **`<canvas>`**, so there is no path geometry to assert and criterion 2 could only be checked by eye; and it could not even be **imported** in this project's test environment — `TypeError: matchMedia is not a function`, thrown at module scope under jsdom. A charting choice whose one functional requirement is untestable fails the rule this section sets for itself.
+- **visx 4.0.0 — rejected as a wrapper we do not need**, above. It passed the gate with `defined` (`M0,100L100,100M300,100L400,100`) and failed it without (`continuous line with 5 vertices for 4 real points`), which is the same result our own 40 lines get for 3.5 kB less.
+- **Hand-rolled, zero dependencies — adopted for the geometry, rejected for the scales**, above. 348 B gzipped, and no tick selection.
+
+*Criterion 4's "React bindings" is not met, and does not need to be.* `linePath` returns a string; the React binding is `<path d={linePath(samples, scales)} />`, which is the JSX element itself. The same criterion's **theming is better served this way**: a bare `<path>` takes `stroke="var(--chart-line)"` and inherits the page's dark/light tokens with nothing to configure, where a charting library's theming API generally has to be talked into CSS variables and often resolves colours in JavaScript at render time — which breaks under a `prefers-color-scheme` change without a re-render.
+
+*The one place this choice is weaker than the alternatives: criterion 4's TypeScript types.* Recharts and visx ship their own; the d3 micro-packages do not, so the types come from DefinitelyTyped and can in principle lag a release. Accepted deliberately — the surface actually used is three functions (`line`, `scaleUtc`, `scaleLinear`) whose signatures have not changed in years, it is confined to one file, and `tsc --noEmit` runs under `strict` with `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess` in `scripts/check-all.sh` and in CI, so a types drift fails the build rather than going unnoticed.
+
+*Version.* Pinned exactly: `d3-shape@3.2.0`, `d3-scale@4.0.2`, and `@types/d3-shape@3.1.7` / `@types/d3-scale@4.0.9` as dev dependencies (neither package ships its own types). Exact pins for the same reason as `react-router-dom`: `npm audit --audit-level=high` is a gate in `scripts/check-all.sh` and in CI, and an upgrade should be checked against it rather than against a changelog.
+
+*What is deliberately still unbuilt.* Axes, ticks, tooltips, responsive sizing, keyboard focus and criterion 3's data-table fallback. Those are M2.2's, and this decision deliberately does not pre-empt them — it settles the one question M2.2 could not safely answer under its own deadline. Criterion 1 (24 h range without jank on a dashboard of several charts) is **not yet verified**: there is no chart on a page to measure, and it will be measured in M2.2 against real series rather than asserted here.
 
 ### 2.6 Supporting frontend libraries (keep the list short)
 
@@ -392,7 +424,7 @@ The frontend and backend contract is kept aligned mechanically, not by disciplin
 | OPEN-09 | Windows service management | Out of scope; metrics only |
 | OPEN-13 | Notification channel config storage | DB table in Phase 3 |
 | OPEN-14 | Prometheus target discovery | DCP-generated `file_sd` |
-| TS-01 | Charting library | Undecided; must pass the gap-rendering test in §2.5 |
+| ~~TS-01~~ | Charting library | **RESOLVED 2026-10-16: `d3-shape` + `d3-scale`, used directly, no React wrapper** ([§2.5](#25-charting-library)). The gap criterion was tested rather than assumed, and the test is kept as a standing regression test. Recharts rejected on bundle size (+129 kB gzipped, more than doubling the app) and on its `role="application"` default; uPlot rejected because a canvas renderer makes the criterion untestable — and it cannot be imported under jsdom at all |
 | TS-02 | systemd metrics source (systemd_exporter vs node_exporter collector vs agent) | Undecided; Phase 2 |
 | TS-03 | Python package manager (uv vs Poetry vs pip-tools) | Undecided; any one of them, with a committed lockfile |
 | TS-04 | Component primitive library | Undecided; must be headless and accessible |

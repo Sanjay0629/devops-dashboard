@@ -344,6 +344,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/integrations/status': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Health of every integration
+     * @description §26.1. Prometheus is probed live; the rest report their real state.
+     */
+    get: operations['integrations_status_api_v1_integrations_status_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/metrics/templates': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Available metric templates
+     * @description §15.4. The allowlisted catalogue, with the OS families each supports.
+     */
+    get: operations['metric_templates_api_v1_metrics_templates_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/servers': {
     parameters: {
       query?: never;
@@ -945,6 +985,36 @@ export interface components {
       /** Unavailable Reason */
       unavailable_reason?: string | null;
     };
+    /**
+     * IntegrationStatus
+     * @description §26.1's per-integration row.
+     */
+    IntegrationStatus: {
+      /** Circuit State */
+      circuit_state?: ('closed' | 'open' | 'half_open') | null;
+      /** Demo Mode */
+      demo_mode: boolean;
+      /** Last Error At */
+      last_error_at?: string | null;
+      /** Last Error Message */
+      last_error_message?: string | null;
+      /** Last Success At */
+      last_success_at?: string | null;
+      /** Name */
+      name: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'ok' | 'degraded' | 'unavailable' | 'not_configured';
+      /** Type */
+      type: string;
+    };
+    /** IntegrationStatusList */
+    IntegrationStatusList: {
+      /** Integrations */
+      integrations: components['schemas']['IntegrationStatus'][];
+    };
     /** LogoutResponse */
     LogoutResponse: {
       /**
@@ -980,6 +1050,44 @@ export interface components {
       stale_after_seconds?: number | null;
       /** Unavailable Reason */
       unavailable_reason?: string | null;
+    };
+    /**
+     * MetricTemplateInfo
+     * @description One catalogue entry (§15.4).
+     *
+     *     ``applies_to_os`` is the honest list, not a parity assumption: a template
+     *     absent for an OS family is ``unsupported`` on that family, and the client
+     *     is told so here rather than discovering it as an empty chart (``OPEN-09``).
+     */
+    MetricTemplateInfo: {
+      /** Applies To Os */
+      applies_to_os: ('LINUX' | 'WINDOWS' | 'OTHER')[];
+      /** Default Thresholds */
+      default_thresholds?: {
+        [key: string]: number;
+      } | null;
+      /** Description */
+      description: string;
+      /** Template */
+      template: string;
+      /** Unit */
+      unit: string;
+    };
+    /**
+     * MetricTemplateList
+     * @description §15.4. A static catalogue, so no paging and no cursor.
+     */
+    MetricTemplateList: {
+      /** Demo Mode */
+      demo_mode: boolean;
+      /**
+       * Source
+       * @default prometheus
+       * @constant
+       */
+      source: 'prometheus';
+      /** Templates */
+      templates: components['schemas']['MetricTemplateInfo'][];
     };
     /**
      * OffsetPage
@@ -2403,6 +2511,46 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  integrations_status_api_v1_integrations_status_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['IntegrationStatusList'];
+        };
+      };
+    };
+  };
+  metric_templates_api_v1_metrics_templates_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MetricTemplateList'];
         };
       };
     };

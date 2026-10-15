@@ -5,9 +5,14 @@
 # that cannot be covered yet say which milestone brings them rather than being
 # quietly dropped:
 #
-#   §11.8  observability profile (Prometheus/Loki) — M2.1 / M3.1. The services
-#          are placeholders today; asserting anything about them would be
-#          asserting a mocked integration (CLAUDE.md §7).
+#   §11.8  observability profile. The **Prometheus half is covered** as of
+#          M2.1, by step 18: the exporter target is asserted `up` and a
+#          templated query is asserted to return a number — both through the
+#          backend's own client, so what passes is the code the API uses and
+#          not a hand-written curl that happens to work. The **Loki half**
+#          ("accepts a push and returns it") is still uncovered: Loki ingests
+#          nothing until M3.1, so asserting it would be asserting a
+#          placeholder (CLAUDE.md §7).
 #   §11.12 "resource limits present in the production overlay" — there is no
 #          production overlay in infra/compose yet. What exists is checked:
 #          non-root, no privileged flags, no added capabilities, and limits
@@ -25,6 +30,14 @@ COMPOSE_FILE="${COMPOSE_FILE:-infra/compose/docker-compose.yml}"
 # completes end to end", and §11.5 reads inventory through an authenticated
 # request, so there has to be an identity provider to authenticate against.
 COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks)
+# M2.1: §11.8's Prometheus half. A separate invocation rather than a third
+# `--profile` on COMPOSE, because `loki` and `grafana` live in the same profile
+# and are still placeholders — starting them would add two minutes to every
+# run and assert nothing (CLAUDE.md §7).
+OBSERVABILITY=(docker compose -f "$COMPOSE_FILE" --profile observability)
+# Everything, for teardown: `down` only reaches services in the profiles it is
+# given, so the core-and-mocks invocation would leave Prometheus running.
+ALL_PROFILES=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks --profile observability)
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-240}"
 FRONTEND="http://localhost:${FRONTEND_HOST_PORT:-5173}"
 BACKEND="http://localhost:${BACKEND_HOST_PORT:-8000}"
@@ -39,7 +52,7 @@ cleanup() {
   rm -f "$JAR"
   if [[ "${KEEP_STACK:-0}" != "1" ]]; then
     log "Tearing down"
-    "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+    "${ALL_PROFILES[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -206,7 +219,118 @@ grep -q '\[DEMO\]' <<<"$servers" \
 count="$(grep -o '"hostname"' <<<"$servers" | wc -l | tr -d ' ')"
 printf 'server list returned %s rows, visibly synthetic\n' "$count"
 
-log "18. A database outage degrades honestly, with no zeros (§11.10)"
+log "18. Prometheus scrapes the host exporter and the templates query it (§11.8)"
+# M2.1. The assertion runs *inside the backend container*, through
+# app/metrics/client.py and app/metrics/templates.py, so what passes here is
+# the code path the API will use — not a curl that happens to produce the same
+# JSON. It also proves DCP_PROMETHEUS_URL is reaching the backend, which is
+# the half scripts/check_env_example.py structurally cannot check (issue 54).
+"${OBSERVABILITY[@]}" up -d --wait --wait-timeout "$TIMEOUT_SECONDS" prometheus node-exporter \
+  || { "${OBSERVABILITY[@]}" logs --tail=50 prometheus node-exporter
+       fail "prometheus/node-exporter did not become healthy"; }
+
+"${COMPOSE[@]}" exec -T backend python - <<'PYTHON' || fail "prometheus assertions failed"
+import asyncio
+import time
+
+from app.metrics import templates
+from app.metrics.client import PrometheusClient, PrometheusUnavailableError
+
+INSTANCE = "node-exporter:9100"
+# Generous: at a 15s scrape interval the target is DOWN for a moment after
+# Prometheus starts, and rate() needs two samples in its window, so the first
+# usable CPU reading is up to ~35s away on a cold stack and longer on a
+# two-core CI runner. Polling, never sleeping blindly.
+DEADLINE = 150
+
+
+async def await_value(client, template_id, predicate, label):
+    query = templates.render(template_id, "LINUX", [INSTANCE])
+    end = time.monotonic() + DEADLINE
+    last = "no sample yet"
+    while time.monotonic() < end:
+        try:
+            samples = await client.query(query)
+        except PrometheusUnavailableError as error:
+            last = f"unavailable: {error.reason}"
+        else:
+            if samples and samples[0].value is not None and predicate(samples[0].value):
+                print(f"  {label}: {samples[0].value} at {samples[0].timestamp.isoformat()}")
+                return samples[0]
+            last = f"got {samples[0].value if samples else None!r}"
+        await asyncio.sleep(5)
+    raise SystemExit(f"FAIL: {label} never arrived within {DEADLINE}s ({last})")
+
+
+async def main():
+    client = PrometheusClient()
+    print(f"  querying {client.settings.prometheus_url}")
+
+    # §11.8, first half: "Prometheus has the bundled exporter target up".
+    # Read through the agent_up template, which is up{job="node",instance=...}
+    # -- so this also proves the job label in prometheus.yml and the one in
+    # templates.NODE_JOB still agree.
+    await await_value(client, "agent_up", lambda value: value == 1.0, "agent_up")
+
+    # §11.8, second half: "a metric query returns data". Four more templates, so
+    # that one series existing does not pass for the catalogue working: a ratio,
+    # a clock expression, a plain gauge and a counter-derived rate.
+    await await_value(client, "memory_utilisation", lambda v: 0.0 < v <= 100.0, "memory_utilisation")
+    await await_value(client, "uptime_seconds", lambda v: v > 0.0, "uptime_seconds")
+    await await_value(client, "load_average", lambda v: v >= 0.0, "load_average")
+    await await_value(client, "cpu_utilisation", lambda v: 0.0 <= v <= 100.0, "cpu_utilisation")
+
+    # The remaining five are asserted to be VALID PromQL but not to return a
+    # value, and the split is deliberate. node-exporter runs in a container with
+    # no host mounts, so which filesystems, disks and interfaces it sees is an
+    # environment detail: on the development machine all five answer (disk from
+    # three ext4 bind mounts, network from eth0 once `lo` is filtered out), but
+    # a runner with a different storage driver could legitimately expose none of
+    # them, and a smoke test that failed there would be wrong about the code.
+    #
+    # Prometheus answers a syntactically invalid query with 400, which the client
+    # maps to provider_error — so "no exception" IS the syntax assertion, and it
+    # is the real risk for these five: they are the templates with label filters
+    # and `without` clauses in them. The value is printed either way, so the run
+    # records what this environment actually produced.
+    for template_id in (
+        "memory_available_bytes",
+        "disk_utilisation",
+        "disk_available_bytes",
+        "disk_io",
+        "network_throughput",
+    ):
+        query = templates.render(template_id, "LINUX", [INSTANCE])
+        try:
+            samples = await client.query(query)
+        except PrometheusUnavailableError as error:
+            raise SystemExit(f"FAIL: {template_id} is not a valid query ({error.reason})")
+        if samples:
+            print(f"  {template_id}: {samples[0].value}")
+        else:
+            print(f"  {template_id}: valid, no series in this environment")
+
+    # An instance nobody scrapes returns NOTHING, which is what makes the
+    # unavailable path honest: no series, so no number, so no zero.
+    absent = await client.query(templates.render("cpu_utilisation", "LINUX", ["nowhere.invalid:9100"]))
+    if absent:
+        raise SystemExit(f"FAIL: an unscraped instance returned {absent!r}")
+    print("  an unscraped instance returns no series, not a zero")
+
+    # A WINDOWS server is unsupported, not empty (OPEN-09).
+    try:
+        templates.render("cpu_utilisation", "WINDOWS", [INSTANCE])
+    except templates.UnsupportedOsFamilyError:
+        print("  WINDOWS resolves to unsupported, not to a Linux query")
+    else:
+        raise SystemExit("FAIL: a WINDOWS render produced a query")
+
+
+asyncio.run(main())
+print("  prometheus: exporter up and templated queries return data")
+PYTHON
+
+log "19. A database outage degrades honestly, with no zeros (§11.10)"
 "${COMPOSE[@]}" stop postgres >/dev/null
 # Poll rather than sleep: the readiness probe has its own per-check deadline,
 # so the transition is quick but not instant.
@@ -232,10 +356,13 @@ until [ "$(docker inspect --format '{{.State.Health.Status}}' "$("${COMPOSE[@]}"
 done
 printf 'postgres is healthy again\n'
 
-log "19. down -v then up reaches the same healthy state (§11.11)"
+log "20. down -v then up reaches the same healthy state (§11.11)"
 # No hidden local state: the volumes are destroyed, so migrations have to run
-# from nothing and every service has to come back healthy on its own.
-"${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1
+# from nothing and every service has to come back healthy on its own. Every
+# profile, so step 18's Prometheus and its TSDB volume go too — a `down` scoped
+# to core-and-mocks would leave them behind and `--remove-orphans` would then
+# remove the containers while keeping the volume.
+"${ALL_PROFILES[@]}" down -v --remove-orphans >/dev/null 2>&1
 bring_up
 current="$("${COMPOSE[@]}" exec -T backend alembic current 2>&1 | tr -d '\r')"
 grep -q '(head)' <<<"$current" || fail "migrations are not at head after a volume wipe"
@@ -246,5 +373,5 @@ grep -q '"migrations":true' <<<"$readyz" || fail "migrations not applied after r
 printf 'stack returned to the same healthy state from empty volumes\n'
 
 printf '\nSMOKE TEST PASSED\n'
-printf 'Covered docs/TESTING.md §11 steps 1-7 and 9-12.\n'
-printf 'Step 8 (observability profile) belongs to M2.1/M3.1 and is not asserted here.\n'
+printf 'Covered docs/TESTING.md §11 steps 1-12, with step 8 partial:\n'
+printf '  its Prometheus half is asserted (step 18); its Loki half needs M3.1.\n'

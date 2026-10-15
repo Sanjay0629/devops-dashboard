@@ -444,6 +444,8 @@ Validation: `cloud_account_id` must reference an `ACTIVE`, non-deleted account (
 
 **15.4** Static catalogue: `{template, unit, description, applies_to_os: ["LINUX"], default_thresholds}`. Linux and Windows have different templates because the exporters expose different series — a parity assumption here would produce wrong numbers instead of an error.
 
+**Implemented in M2.1.** The response is `{templates: [...], source: "prometheus", demo_mode}` and the endpoint accepts **no query parameter at all** — including one that looks like a filter, which is a `422` rather than the full catalogue pretending the filter applied (§6). `applies_to_os` is `["LINUX"]` for all ten templates: there are **no Windows queries**, so a Windows server resolves to the `unsupported` data state (`OPEN-09`'s recorded default). `default_thresholds` is `null` for seven of the ten — present only on `cpu_utilisation`, `memory_utilisation` and `disk_utilisation`, because no default is universally meaningful for a byte count, a throughput or a load average. **An absent threshold is not a zero threshold.**
+
 ---
 
 ## 16. systemd services
@@ -881,6 +883,13 @@ Response: `{ "read_only_mode": true }`. `reason` is **required when enabling** (
 | 26.7 | GET | `/api/v1/cloud-accounts/{id}/capabilities` | Adapter capability set | `admin:integrations` |
 
 **26.1** Per-integration `{name, type, status, last_success_at, last_error_at, last_error_message (redacted), circuit_state, demo_mode}` for the IdP, each cloud account, Jenkins, Prometheus, Loki, the secret store and each notification channel. This is the page that answers "is the portal broken, or is the thing it monitors broken?" (PRD §4.11).
+
+**Implemented in M2.1, with two divergences recorded rather than taken silently.** `status` is one of `ok | degraded | unavailable | not_configured`, and `not_configured` is a first-class answer: an integration nobody has configured is not "unavailable", and conflating the two sends an operator to debug a host that was never configured. Only **Prometheus** is probed live (a `vector(1)` query, which touches no series); the IdP reports configured-or-not, because a discovery fetch on every poll of a status page would be a request to the IdP per poll. The rest report `not_configured` with the milestone that brings them, which is deliberate rather than an omission — a page listing only the integrations that exist reads as "this is everything", and an operator could not tell a missing integration from a healthy one. The divergences:
+
+1. **One `Cloud accounts` row, not one row per account.** There is no provider adapter to probe until M4.1, so N rows would carry one fact N times, and enumerating them would mean a database session on an endpoint that otherwise needs none. It becomes per-account when there is a per-account answer.
+2. **`degraded` is never emitted.** Nothing persisted today can decide it honestly — a successful probe resets the circuit breaker's consecutive-failure count, so a flap verdict built on that count is always false. The row carries `last_success_at`, `last_error_at` and the previous failure's reason instead, so a caller can see that an `ok` Prometheus failed a minute ago. The value stays in the enum for the integrations that will be able to answer it.
+
+`circuit_state` is **per-process** (`PROGRESS.md` issue 58): with more than one backend replica it describes whichever replica answered.
 
 **26.3** Body:
 

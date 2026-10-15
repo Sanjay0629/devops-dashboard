@@ -3,8 +3,8 @@
 The modular monolith's composition root (AD-01). Domain routers are mounted here
 as they arrive; M1.1 had only the health router.
 
-As of M1.6 this mounts health, authentication, administration, the dashboard
-and inventory.
+As of M2.1 this mounts health, authentication, administration, the dashboard,
+inventory and metrics.
 Every route those routers add carries a ``require_permission`` dependency, and
 ``tests/authz/test_route_coverage.py`` walks this application's routing table
 to prove that no route anywhere escapes one — so a future router added here
@@ -35,6 +35,7 @@ from app.db.session import dispose_engine
 from app.health.router import router as health_router
 from app.inventory.router_applications import router as applications_router
 from app.inventory.router_servers import router as servers_router
+from app.metrics.router import router as metrics_router
 
 logger = get_logger(__name__)
 
@@ -95,6 +96,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(dashboard_router, prefix=settings.api_base_path)
     app.include_router(servers_router, prefix=settings.api_base_path)
     app.include_router(applications_router, prefix=settings.api_base_path)
+    # §15.4 and §26.1 (M2.1). Mounted even with no Prometheus configured: the
+    # catalogue is static, and §26.1's job is to say that nothing is
+    # configured rather than to disappear when nothing is.
+    app.include_router(metrics_router, prefix=settings.api_base_path)
 
     return app
 
