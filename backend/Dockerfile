@@ -30,7 +30,13 @@ FROM base AS development
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project --all-groups
 COPY . .
-RUN useradd --create-home --uid 10001 dcp && chown -R dcp:dcp /app /opt/venv
+# /var/lib/dcp/targets is where the worker writes the Prometheus target file (M2.3).
+# Created and owned here so the named volume mounted over it inherits that
+# ownership on first use; otherwise it is root-owned and the non-root worker
+# cannot write to it.
+RUN useradd --create-home --uid 10001 dcp \
+    && mkdir -p /var/lib/dcp/targets \
+    && chown -R dcp:dcp /app /opt/venv /var/lib/dcp
 USER dcp
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
@@ -47,7 +53,9 @@ COPY app ./app
 # revision from here.
 COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
-RUN useradd --create-home --uid 10001 dcp && chown -R dcp:dcp /app
+RUN useradd --create-home --uid 10001 dcp \
+    && mkdir -p /var/lib/dcp/targets \
+    && chown -R dcp:dcp /app /var/lib/dcp
 USER dcp
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

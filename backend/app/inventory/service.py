@@ -76,6 +76,7 @@ from app.inventory.schemas import (
     ServerSummary,
     ServerUpdateRequest,
 )
+from app.metrics import discovery
 
 logger = get_logger(__name__)
 
@@ -217,7 +218,7 @@ async def server_detail(db: AsyncSession, server: Server) -> ServerDetail:
             state=None,
             data_state="not_configured",
             stale_after_seconds=get_settings().server_stale_after_seconds,
-            unavailable_reason="Metrics collection is not implemented yet (M2).",
+            unavailable_reason="Server health evaluation is not implemented yet (M2.5).",
         ),
         applications=[
             AssociatedApplication(
@@ -276,6 +277,36 @@ def _check_provider_rules(account: CloudAccount, request: ServerCreateRequest) -
             f"Not supported by a {account.provider} account.",
             allowed=sorted(allowed),
         )
+
+
+def _check_metrics_target(value: str | None) -> None:
+    """A ``metrics_instance`` becomes a scrape target, so it must be a permitted one.
+
+    The policy is ``app/metrics/discovery.target_problem``: the exporter port,
+    and not loopback, link-local, a reserved domain or a non-unicast address.
+    Applied here so an administrator gets a field error; applied *again* when
+    the target file is built, so a row that arrived any other way cannot widen
+    it. The rejected value is not echoed (§8).
+    """
+    if value is None:
+        return
+    ports = get_settings().metrics_target_ports
+    problem = discovery.target_problem(value, ports)
+    if problem is None:
+        return
+    messages = {
+        "port_not_allowed": "That port is not one Prometheus may scrape.",
+        "address_not_allowed": "That address cannot be a scrape target.",
+        "reserved_domain": "That domain is reserved and can never resolve.",
+        "not_host_port": "Must be host:port, matching the Prometheus instance label.",
+    }
+    extra = {"allowed": [str(port) for port in ports]} if problem == "port_not_allowed" else {}
+    raise field_error(
+        ["body", "metrics_instance"],
+        "not_permitted",
+        messages.get(problem, "Not permitted."),
+        **extra,
+    )
 
 
 async def _check_metrics_instance_free(
@@ -348,6 +379,7 @@ async def create_server(
 
     account = await _load_active_account(db, request.cloud_account_id)
     _check_provider_rules(account, request)
+    _check_metrics_target(request.metrics_instance)
     await _check_metrics_instance_free(db, request.metrics_instance)
 
     # Minted here so the scope check below has a complete target. See the
@@ -411,6 +443,11 @@ async def update_server(
     """
     fields = request.model_dump(exclude_unset=True)
     if "metrics_instance" in fields:
+        # Only a *changed* value is checked: an edit form that resubmits the
+        # current one must not be refused over a row it did not touch (a seeded
+        # `.invalid` instance, for one).
+        if fields["metrics_instance"] != server.metrics_instance:
+            _check_metrics_target(fields["metrics_instance"])
         await _check_metrics_instance_free(db, fields["metrics_instance"], exclude=server.id)
 
     changes: dict[str, Any] = {}

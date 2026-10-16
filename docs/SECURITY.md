@@ -426,6 +426,15 @@ The portal makes outbound requests on behalf of users (health checks, webhooks, 
 6. Response size and timeout are bounded; response bodies from health checks are not echoed verbatim to users beyond a bounded, escaped excerpt.
 7. Configuring a destination is an Administrator action, validated and audited — the configuration surface is itself a privileged boundary.
 
+**Prometheus scrape targets (M2.3).** A server's `metrics_instance` becomes a line in the target file, so Prometheus will *connect* to it from the monitoring network. That is an administrator-supplied outbound destination, and it is policed as one (`app/metrics/discovery.target_problem`), at the write boundary (a field error) **and again when the file is built** (so a seeded row or a direct `UPDATE` cannot widen it):
+
+- the port must be one of `DCP_METRICS_TARGET_PORTS` (default `9100`), so the setting cannot be used to probe other ports;
+- IP literals that are loopback, link-local (which includes the `169.254.169.254` metadata endpoint, **also in its IPv4-mapped IPv6 spelling**), unspecified, multicast or reserved are refused;
+- the reserved `.invalid` TLD is refused — it can never resolve, and the seeded `[DEMO]` servers use it so they stay `UNKNOWN` rather than being reported `UNREACHABLE`;
+- a rejected value is never echoed back.
+
+**What this does not do, stated rather than implied:** a *DNS name* can still resolve to an address the rules above would have refused, and Prometheus resolves it at scrape time. The real control for that is the monitoring network's egress policy (§7, `OPEN-12`); the application-level rules narrow the surface and give an administrator a clear error, they do not replace it. The target file itself carries no secret and no free text (only `host:port`, an environment name and a server id), is written atomically by the worker only, and is mounted read-only into Prometheus, which cannot alter what it is told to scrape. DCP never calls a Prometheus reload or admin endpoint: the lifecycle API is not enabled.
+
 ---
 
 ## 20. API authorization requirements

@@ -54,6 +54,7 @@ from app.inventory.schemas import (
     ServerStatus,
     ServerUpdateRequest,
 )
+from app.metrics import discovery
 
 logger = get_logger(__name__)
 
@@ -65,6 +66,10 @@ ReadServers = Annotated[Authorized, require_permission("server", "read")]
 WriteServers = Annotated[Authorized, require_permission("server", "write")]
 
 ServerSort = Literal["display_name", "hostname", "last_seen_at", "created_at", "environment"]
+
+#: A PATCH touching any of these can add, remove or relabel a Prometheus target
+#: (``app/metrics/discovery.select_targets``), so only these enqueue a rebuild.
+TARGET_FIELDS = frozenset({"metrics_instance", "monitoring_enabled", "environment", "status"})
 Order = Literal["asc", "desc"]
 
 #: §7: absent ⇒ 422. Declared as a required header so FastAPI produces the
@@ -218,6 +223,7 @@ async def register_server(
     )
     await db.commit()
     await db.refresh(server)
+    await discovery.request_regeneration()
     logger.info("server_registered", server_id=str(server.id), environment=server.environment)
     detail = await service.server_detail(db, server)
     return ServerCreated(**detail.model_dump(), idempotent_replay=False)
@@ -315,6 +321,8 @@ async def update_server(
         )
     await db.commit()
     await db.refresh(server)
+    if TARGET_FIELDS & changes.keys():
+        await discovery.request_regeneration()
     return await service.server_detail(db, server)
 
 
@@ -346,6 +354,7 @@ async def retire_server(
         metadata={"hostname": server.hostname},
     )
     await db.commit()
+    await discovery.request_regeneration()
     logger.info("server_retired", server_id=str(server.id))
 
 

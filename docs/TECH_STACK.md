@@ -235,7 +235,7 @@ done unmet and makes M1.6 large.
 
 **Responsibility:** scrape exporters, store time series, evaluate alert rules, serve queries to DCP.
 **Why:** PRD §4.4. The exporter ecosystem already covers every metric the PRD lists.
-**Boundary:** DCP is a **read-only client** and renders PromQL from allowlisted templates (AD-04). DCP also writes a target-discovery file from inventory (OPEN-14).
+**Boundary:** DCP is a **read-only client** and renders PromQL from allowlisted templates (AD-04). DCP also writes a target-discovery file from inventory (`OPEN-14`, resolved in M2.3): a `file_sd` JSON file on a volume Prometheus mounts read-only. Prometheus watches it, so nothing calls a reload and the lifecycle API is not enabled.
 
 ### 5.2 Node Exporter / windows_exporter
 
@@ -423,7 +423,7 @@ The frontend and backend contract is kept aligned mechanically, not by disciplin
 | OPEN-08 | Prometheus/Loki retention and storage budget | 30 d / 14 d placeholders |
 | OPEN-09 | Windows service management | Out of scope; metrics only |
 | OPEN-13 | Notification channel config storage | DB table in Phase 3 |
-| OPEN-14 | Prometheus target discovery | DCP-generated `file_sd` |
+| ~~OPEN-14~~ | Prometheus target discovery | **Resolved 2026-10-16 (M2.3):** DCP-generated `file_sd`, no reload call |
 | ~~TS-01~~ | Charting library | **RESOLVED 2026-10-16: `d3-shape` + `d3-scale`, used directly, no React wrapper** ([§2.5](#25-charting-library)). The gap criterion was tested rather than assumed, and the test is kept as a standing regression test. Recharts rejected on bundle size (+129 kB gzipped, more than doubling the app) and on its `role="application"` default; uPlot rejected because a canvas renderer makes the criterion untestable — and it cannot be imported under jsdom at all |
 | TS-02 | systemd metrics source (systemd_exporter vs node_exporter collector vs agent) | Undecided; Phase 2 |
 | TS-03 | Python package manager (uv vs Poetry vs pip-tools) | Undecided; any one of them, with a committed lockfile |

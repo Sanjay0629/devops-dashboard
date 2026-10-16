@@ -39,6 +39,13 @@ OBSERVABILITY=(docker compose -f "$COMPOSE_FILE" --profile observability)
 # given, so the core-and-mocks invocation would leave Prometheus running.
 ALL_PROFILES=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks --profile observability)
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-240}"
+# M2.3, step 18: tight agent-health timing for this run only, so "a stopped
+# exporter becomes UNREACHABLE within the configured window" is asserted in
+# about a minute instead of about three. They also prove the compose
+# passthrough works — with the defaults (30 s / 60 s) the assertions below
+# about the worker's settings would fail.
+export DCP_AGENT_PROBE_INTERVAL_SECONDS=10
+export DCP_AGENT_UNREACHABLE_AFTER_SECONDS=30
 FRONTEND="http://localhost:${FRONTEND_HOST_PORT:-5173}"
 BACKEND="http://localhost:${BACKEND_HOST_PORT:-8000}"
 IDP="http://localhost:${MOCK_IDP_HOST_PORT:-9000}"
@@ -229,6 +236,57 @@ log "18. Prometheus scrapes the host exporter and the templates query it (§11.8
   || { "${OBSERVABILITY[@]}" logs --tail=50 prometheus node-exporter
        fail "prometheus/node-exporter did not become healthy"; }
 
+# M2.3 (OPEN-14). The exporter is NOT in prometheus.yml any more: a target gets
+# there only because a server was registered, which is the acceptance criterion
+# ("registering a server with monitoring enabled results in a scraped target
+# without hand-editing Prometheus config") and is why this step registers one
+# through the API rather than assuming it.
+printf '  registering node-exporter:9100 through the API\n'
+account_id="$("${COMPOSE[@]}" exec -T postgres psql -U dcp -d dcp -tAc \
+  "SELECT id FROM cloud_accounts WHERE provider = 'ON_PREM' AND deleted_at IS NULL LIMIT 1" \
+  | tr -d '\r[:space:]')"
+[[ -n "$account_id" ]] || fail "no ON_PREM cloud account to register against"
+csrf="$(grep dcp_csrf "$JAR" | awk '{print $NF}')"
+[[ -n "$csrf" ]] || fail "no CSRF cookie in the session jar"
+registered="$(curl -sS -c "$JAR" -b "$JAR" --max-time 20 -X POST \
+  -H 'Content-Type: application/json' -H "X-CSRF-Token: $csrf" -H "Origin: $FRONTEND" \
+  -H "Idempotency-Key: smoke-m23-$RANDOM$RANDOM" \
+  --data "{\"cloud_account_id\":\"$account_id\",\"provider_resource_id\":\"smoke-node-exporter\",\"hostname\":\"smoke-exporter.internal.example\",\"display_name\":\"Smoke exporter\",\"operating_system\":\"LINUX\",\"environment\":\"staging\",\"management_method\":\"RESTRICTED_AGENT\",\"monitoring_enabled\":true,\"metrics_instance\":\"node-exporter:9100\"}" \
+  "$FRONTEND/api/v1/servers")"
+grep -q '"metrics_instance":"node-exporter:9100"' <<<"$registered" \
+  || fail "registering the exporter failed: $registered"
+smoke_server="$(grep -o '"id":"[^"]*"' <<<"$registered" | head -1 | cut -d'"' -f4)"
+[[ -n "$smoke_server" ]] || fail "could not read the new server's id"
+
+# The worker writes the file, Prometheus watches it. Polling, with a deadline.
+deadline=$((SECONDS + 90))
+# `sh -c '...'` because Git Bash on Windows rewrites a bare /var/... argument
+# into a Windows path before docker sees it; a quoted command string is left alone.
+# Captured, then grepped: under `set -o pipefail`, `grep -q` closing the pipe
+# early makes `cat` exit non-zero, and a *successful* match reads as a failure.
+until file="$("${COMPOSE[@]}" exec -T worker sh -c 'cat /var/lib/dcp/targets/node.json' 2>/dev/null)" \
+        && grep -q 'node-exporter:9100' <<<"$file"; do
+  (( SECONDS < deadline )) || { "${COMPOSE[@]}" logs --tail=30 worker; fail "the target file never listed the registered server"; }
+  sleep 3
+done
+printf '  target file lists the registered server\n'
+# What the file must not contain: the seeded demo servers (their .invalid
+# instances can never resolve) and anything a person typed.
+file="$("${COMPOSE[@]}" exec -T worker sh -c 'cat /var/lib/dcp/targets/node.json' | tr -d '\r')"
+grep -q 'demo.invalid' <<<"$file" && fail "a demo.invalid server leaked into the target file"
+grep -q 'Smoke exporter' <<<"$file" && fail "a display name leaked into the target file"
+printf '  demo servers and free text are absent from it\n'
+
+# The configured intervals must actually reach the worker (PROGRESS issue 54:
+# a setting missing from the compose passthrough silently keeps its default).
+"${COMPOSE[@]}" exec -T worker python -c "
+from app.core.config import get_settings
+s = get_settings()
+assert s.agent_unreachable_after_seconds == 30, s.agent_unreachable_after_seconds
+assert s.agent_probe_interval_seconds == 10, s.agent_probe_interval_seconds
+print('  worker sees the configured probe interval and unreachable window')
+" || fail "the agent timing settings did not reach the worker"
+
 "${COMPOSE[@]}" exec -T backend python - <<'PYTHON' || fail "prometheus assertions failed"
 import asyncio
 import time
@@ -348,16 +406,23 @@ async def main():
     # so a genuine series with LEADING HOLES is what comes back -- the case the
     # chart must draw as a gap, produced by a real Prometheus rather than by a
     # fixture. Holes must be null, and at least one point must be a number.
-    end = datetime.now(UTC).replace(microsecond=0)
-    end = end.replace(second=end.second - end.second % 15)
-    start = end - timedelta(minutes=10)
-    history = await readings.history(
-        server, readings.template_ids_or_error(["cpu_utilisation"]),
-        start=start, end=end, step_seconds=15, client=client,
-    )
-    [series] = history.series
-    if series.data_state != "ok" or series.points is None:
-        raise SystemExit(f"FAIL: cpu history is {series.data_state} ({series.unavailable_reason})")
+    # Polled, like every other reading here: since M2.3 the series begin when the
+    # server is *registered* (the target is no longer static), and `rate()` needs
+    # two samples in its window, so the first usable point is a little way off.
+    chosen = readings.template_ids_or_error(["cpu_utilisation"])
+    deadline = time.monotonic() + DEADLINE
+    while True:
+        end = datetime.now(UTC).replace(microsecond=0)
+        end = end.replace(second=end.second - end.second % 15)
+        history = await readings.history(
+            server, chosen, start=end - timedelta(minutes=10), end=end, step_seconds=15, client=client
+        )
+        [series] = history.series
+        if series.data_state == "ok" and series.points is not None:
+            break
+        if time.monotonic() > deadline:
+            raise SystemExit(f"FAIL: cpu history is {series.data_state} ({series.unavailable_reason})")
+        await asyncio.sleep(5)
     values = [value for _, value in series.points]
     if len(values) != 41 or all(value is None for value in values):
         raise SystemExit(f"FAIL: expected 41 grid points with data, got {len(values)} / {values!r}")
@@ -382,6 +447,53 @@ async def main():
 asyncio.run(main())
 print("  prometheus: exporter up and templated queries return data")
 PYTHON
+
+# M2.3: agent health, observed rather than assumed. The registered server goes
+# HEALTHY; stopping the exporter makes it UNREACHABLE within the configured
+# window; starting it again recovers. The window is 30 s and the probe runs
+# every 10 s for this run (exported at the top), so each transition is bounded
+# by about a minute and the deadlines below are generous multiples of that.
+agent_status() {
+  api "/servers/$smoke_server" | grep -o '"agent_status":"[^"]*"' | cut -d'"' -f4
+}
+await_agent_status() {
+  local want="$1" limit="$2" got=""
+  local deadline=$((SECONDS + limit))
+  while (( SECONDS < deadline )); do
+    got="$(agent_status)"
+    [[ "$got" == "$want" ]] && return 0
+    sleep 3
+  done
+  fail "agent_status never became $want within ${limit}s (last: ${got:-<none>})"
+}
+
+printf '  waiting for the probe to mark the registered server HEALTHY\n'
+await_agent_status HEALTHY 120
+seen="$(api "/servers/$smoke_server" | grep -o '"last_seen_at":"[^"]*"' | cut -d'"' -f4)"
+[[ -n "$seen" ]] || fail "a HEALTHY server has no last_seen_at"
+printf '  HEALTHY, last seen %s\n' "$seen"
+
+# Parsed rather than grepped: this needs "every [DEMO] row", which a pipeline of
+# grep cannot say, and under `set -e` a grep with no match ends the script with
+# no message at all.
+api "/servers?limit=200" | "${COMPOSE[@]}" exec -T backend python -c "
+import json, sys
+rows = json.load(sys.stdin)['items']
+demo = [r for r in rows if r['display_name'].startswith('[DEMO]')]
+assert demo, 'no seeded demo servers were listed'
+bad = {r['agent_status'] for r in demo} - {'UNKNOWN'}
+assert not bad, f'seeded demo servers reported {bad}'
+print(f'  {len(demo)} seeded demo servers stay UNKNOWN (never scraped, never asserted)')
+" || fail "seeded demo servers should stay UNKNOWN"
+
+printf '  stopping the exporter\n'
+"${OBSERVABILITY[@]}" stop node-exporter >/dev/null
+await_agent_status UNREACHABLE 150
+printf '  UNREACHABLE after the configured window\n'
+
+"${OBSERVABILITY[@]}" start node-exporter >/dev/null
+await_agent_status HEALTHY 150
+printf '  HEALTHY again once the exporter returned\n'
 
 log "19. A database outage degrades honestly, with no zeros (§11.10)"
 "${COMPOSE[@]}" stop postgres >/dev/null

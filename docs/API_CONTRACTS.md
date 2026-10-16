@@ -297,7 +297,7 @@ Also `403` + `LOGIN_DENIED` (M1.3, assumption A-05): a **new** identity whose em
   "server_health": {
     "healthy": null, "warning": null, "critical": null, "unknown": null,
     "data_state": "not_configured", "collected_at": null, "source": "prometheus",
-    "unavailable_reason": "Server health evaluation is not implemented yet (M2.1)."
+    "unavailable_reason": "Server health evaluation is not implemented yet (M2.5)."
   },
   "utilisation": {
     "cpu_percent_avg": null, "memory_percent_avg": null,
@@ -342,7 +342,7 @@ The `utilisation` block illustrates the required behaviour: Prometheus is down, 
     }
   ],
   "page": { "limit": 50, "next_cursor": null, "has_more": false, "total": null },
-  "health": { "data_state": "not_configured", "unavailable_reason": "Server health evaluation is not implemented yet (M2.1)." },
+  "health": { "data_state": "not_configured", "unavailable_reason": "Server health evaluation is not implemented yet (M2.5)." },
   "alerts": { "data_state": "not_configured", "unavailable_reason": "Alerting is not implemented yet (M3.3)." },
   "collected_at": "2026-01-15T09:30:00Z",
   "filters_applied": {},
@@ -396,6 +396,8 @@ Errors: `401`, `403`, `422` (unknown filter value), `503` (database unavailable)
 ```
 
 Validation: `cloud_account_id` must reference an `ACTIVE`, non-deleted account (`422 not_registered`); `provider_resource_id` 1–256 chars matching the provider's expected pattern; `hostname` a valid DNS name ≤ 253 chars; `environment`, `operating_system`, `management_method` closed enums; `private_ip` a valid IP; `metrics_instance` unique across servers; `management_method` must be supported by the account's provider (`AZURE_RUN_COMMAND` on an AWS account ⇒ `422`). Created with `status: "PENDING"` — **registration grants no operational permission** (PRD §4.3). Errors: `409 duplicate_resource` on `(cloud_account_id, provider_resource_id)` (PRD §4.3 acceptance criterion), `422`, `403`. Audit `SERVER_REGISTERED`. Response `201`.
+
+**Implemented in M2.3 — `metrics_instance` is policed (§14.2, §14.4).** Because the value becomes a scrape target, a *new or changed* `metrics_instance` is refused with `422 not_permitted` (field `body.metrics_instance`) unless its port is one of `DCP_METRICS_TARGET_PORTS` (default `9100`, listed in `allowed` when that is the problem) and it is not a loopback, link-local, unspecified, multicast or reserved address, nor in the `.invalid` TLD. A `PATCH` that resubmits the row's *current* value is not refused, so a seeded row stays editable. The value is never echoed. Registering, or editing `metrics_instance`, `monitoring_enabled`, `environment` or `status`, enqueues a rebuild of the target file (best effort; a periodic rebuild heals a missed one).
 
 **14.3** Returns the full row plus `health_state`, `agent_status`, computed `stale`, associated applications, registered service count, open alert count and `management_capabilities` (from the provider's capability set — an explicit statement of what this provider can and cannot do, [ARCHITECTURE.md §7.2](ARCHITECTURE.md#72-capability-matrix--providers-are-not-interchangeable)). Out of scope ⇒ `404`.
 

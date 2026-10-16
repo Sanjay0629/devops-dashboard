@@ -465,6 +465,28 @@ backend/tests/dashboard/test_summary.py
 
 ## M2.3 — Target discovery and agent health
 
+**Status: complete (2026-10-16).** Evidence beside each item. Five decisions were closed with the user before any code: `OPEN-14` resolved to a DCP-generated `file_sd` with **no reload call**; what a target may point at is a policy; registration-time verification became **asynchronous**; the probe reads Prometheus's own `up` and owns `last_seen_at`; and the static dev target was removed in favour of registering it. One more was found *while* designing and taken without a round trip because the alternative was a broken contract: migration 0005 (see below).
+
+**Tasks**
+
+- [x] Generate the Prometheus target file from inventory (`OPEN-14`). `backend/app/metrics/discovery.py`: one predicate selects targets for both the file and the probe; the file is deterministic, atomic and unchanged-skipping, holds only `host:port`, `environment` and `server_id`, and is written under a Postgres advisory lock so an older snapshot cannot overwrite a newer one. **No reload is requested anywhere**; `--web.enable-lifecycle` was removed from the Prometheus container.
+- [x] Target policy. Port allowlist (`DCP_METRICS_TARGET_PORTS`, default `9100`), refused loopback / link-local (including the metadata endpoint **and its IPv4-mapped IPv6 spelling**) / unspecified / multicast / reserved addresses, and the `.invalid` TLD — applied at the write boundary *and* again when the file is built.
+- [x] Agent-health probe and `agent_status` / `last_seen_at` maintenance. `backend/app/metrics/agents.py` + `app/workers/tasks/monitoring.py`: `HEALTHY` / `UNREACHABLE` / `UNKNOWN` from `max_over_time(up[window])`; `DEGRADED` and `NOT_INSTALLED` deliberately not emitted. When Prometheus cannot be asked every monitored server becomes `UNKNOWN` — a status never outlives its evidence.
+- [x] Triggers. After every inventory write that can change a target (register, retire, and a PATCH touching `metrics_instance`, `monitoring_enabled`, `environment` or `status`), best effort and argument-free; a 5-minute beat heals a missed enqueue; the probe runs every `DCP_AGENT_PROBE_INTERVAL_SECONDS` (30).
+- [x] **Migration 0005 — `servers.updated_at` ignores observations.** Found while designing the probe: the generic `updated_at` trigger fires on every UPDATE, so a probe writing every 30 s would have made every `If-Unmodified-Since` edit a spurious `409`. The new trigger advances `updated_at` only when something other than `agent_status` / `last_seen_at` changed. Asserted end to end, and the test fails if the trigger ignores nothing.
+- [x] Frontend: the server detail page shows the agent as a word and says *why* it is unknown (monitoring disabled / no metrics instance / waiting for the first scrape).
+- [ ] Alerting on exporter absence — rules land in M3.3, as the plan said.
+
+**Acceptance: met, against real systems.** `scripts/smoke-test.sh` step 18 now registers the bundled `node-exporter` **through the API** (it is no longer in `prometheus.yml`), watches the target file list it, waits for `HEALTHY` with a real `last_seen_at`, asserts the seeded `[DEMO]` servers stay `UNKNOWN`, **stops the exporter and waits for `UNREACHABLE`**, and starts it again and waits for `HEALTHY`. The intervals are tightened for that run (10 s probe, 30 s window), and the step asserts the worker actually *sees* them, which also proves the Compose passthrough works.
+
+**Tests:** 47 new backend unit tests (`test_discovery`), 24 new integration tests (`test_monitoring`), 6 new frontend tests. Mutation-checked: the trigger ignoring nothing fails 2, removing the reserved-domain rule fails 2, and defaulting unobserved hosts to `HEALTHY` fails 1.
+
+**Security: met.** The file holds no secret and no free text (asserted with hostile `display_name` and `owner_team`); the lifecycle API is not enabled, so there is no reload endpoint to reach; the file is written only by the worker and mounted read-only into Prometheus; a rejected target is never echoed. **Limitation, stated:** a DNS name can still resolve somewhere the policy would refuse, and Prometheus resolves it at scrape time — the real control is the monitoring network's egress policy (`OPEN-12`).
+
+**Known limitations, recorded rather than hidden:** the shared volume is a single-host arrangement (`OPEN-12`); the probe flips every monitored server to `UNKNOWN` during a Prometheus outage; `DEGRADED` and `NOT_INSTALLED` are never emitted; the Windows exporter is out of scope (`OPEN-09`); no E2E path.
+
+**Original scope (kept for reference).**
+
 **Tasks:** generate the Prometheus target file from inventory (OPEN-14) and trigger a reload; connectivity/agent-health probe task; `agent_status` maintenance; alerting on exporter absence (rules land in M3.3).
 
 **Acceptance:** registering a server with monitoring enabled results in a scraped target without hand-editing Prometheus config; a stopped exporter sets `agent_status` to `UNREACHABLE` within the configured interval.
@@ -837,7 +859,7 @@ backend/tests/dashboard/test_summary.py
 | OPEN-11 teams model | M6.6 |
 | OPEN-12 production topology | M6.5 |
 | OPEN-13 notification config | M3.4 |
-| OPEN-14 target discovery | M2.3 |
+| ~~OPEN-14 target discovery~~ | M2.3 — **resolved 2026-10-16**: DCP-generated `file_sd`, no reload call |
 | OPEN-15 audit export | M6.2 |
 | **OPEN-27 scoping a dimension-less resource** (new in M1.5) | **Not M1.6.** Corrected 2026-10-15 after M1.6 was built: §13.1 counts servers, failed services, alerts and recent activity — `application_id` appears only as a *filter*, and it resolves through `application_servers` to servers, which are already scope-filtered. The first milestone genuinely blocked is one that lists or counts applications in their own right. Working default in place: applications are not scope-filtered ([API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions)) |
 | ~~TS-01 charting library~~ | ~~M2.2~~ — **resolved 2026-10-16**, before M2.2 began |
