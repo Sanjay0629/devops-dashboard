@@ -37,6 +37,15 @@ const APPEARANCE: Record<string, { glyph: string; label: string; colour: string 
   UNREACHABLE: { glyph: '✕', label: 'Unreachable', colour: 'var(--c-critical)' },
   RETIRED: { glyph: '—', label: 'Retired', colour: 'var(--c-unknown)' },
 
+  // Monitoring agent (`servers.agent_status`, M2.3). `UNKNOWN` is "nobody has
+  // observed it", never "fine"; `DEGRADED` and `NOT_INSTALLED` are permitted by
+  // the schema and not emitted by anything yet, but a badge must not render
+  // them as their raw enum name if one ever arrives.
+  HEALTHY: { glyph: '●', label: 'Healthy', colour: 'var(--c-healthy)' },
+  DEGRADED: { glyph: '▲', label: 'Degraded', colour: 'var(--c-warning)' },
+  UNKNOWN: { glyph: '?', label: 'Unknown', colour: 'var(--c-unknown)' },
+  NOT_INSTALLED: { glyph: '—', label: 'Not installed', colour: 'var(--c-unknown)' },
+
   // Application status.
   ACTIVE: { glyph: '●', label: 'Active', colour: 'var(--c-healthy)' },
   ARCHIVED: { glyph: '—', label: 'Archived', colour: 'var(--c-unknown)' },

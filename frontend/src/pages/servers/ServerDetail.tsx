@@ -313,6 +313,20 @@ export function ServerDetail(): React.JSX.Element {
           <Optional value={server.metrics_instance} />
         </Row>
         <Row label="Registered">{server.registered_at}</Row>
+        <Row label="Monitoring agent">
+          <StatusBadge value={server.agent_status} />
+          {server.agent_status === 'UNKNOWN' && (
+            // Why nothing has been observed, which is the useful half of
+            // "unknown": three different things an operator can act on.
+            <p className="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              {!server.monitoring_enabled
+                ? 'Monitoring is disabled for this server.'
+                : server.metrics_instance === null
+                  ? 'No metrics instance is registered, so nothing is scraped.'
+                  : 'Not observed yet — waiting for the first scrape.'}
+            </p>
+          )}
+        </Row>
         <Row label="Last seen">
           {/* Never seen is not the same as stale, and neither is a zero. */}
           {server.last_seen_at ?? <span style={{ color: 'var(--c-text-muted)' }}>Never seen</span>}

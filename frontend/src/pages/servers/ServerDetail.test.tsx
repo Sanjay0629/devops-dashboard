@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import axe from 'axe-core';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -84,11 +84,14 @@ const authenticated = (permissions: string[], readOnly = false): SessionState =>
 });
 
 /** Reads answer the row or the candidate page; writes answer `onWrite`. */
-function mockApi(onWrite: { status: number; body?: unknown } = { status: 200 }) {
+function mockApi(
+  onWrite: { status: number; body?: unknown } = { status: 200 },
+  server: Record<string, unknown> = SERVER,
+) {
   const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     if (init?.method === undefined) {
       const body =
-        url.includes('/applications') && !url.includes('/servers/') ? CANDIDATES : SERVER;
+        url.includes('/applications') && !url.includes('/servers/') ? CANDIDATES : server;
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
     }
     return Promise.resolve({
@@ -313,5 +316,55 @@ describe('ServerDetail metrics link', () => {
 
     await screen.findByRole('heading', { name: 'Web 01' });
     expect(screen.queryByRole('link', { name: 'Metrics' })).not.toBeInTheDocument();
+  });
+});
+
+describe('ServerDetail monitoring agent', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const agentRow = async () => {
+    const label = await screen.findByText('Monitoring agent');
+    const row = label.closest('div');
+    if (row === null) throw new Error('row not found');
+    return within(row);
+  };
+
+  it('says nothing is scraped when there is no metrics instance, rather than "Unknown" alone', async () => {
+    mockApi({ status: 200 }, { ...SERVER, agent_status: 'UNKNOWN', metrics_instance: null });
+    renderDetail();
+
+    const row = await agentRow();
+    expect(row.getByText('Unknown')).toBeInTheDocument();
+    expect(row.getByText(/No metrics instance is registered/)).toBeInTheDocument();
+  });
+
+  it('distinguishes a disabled server from one still waiting for its first scrape', async () => {
+    mockApi({ status: 200 }, { ...SERVER, monitoring_enabled: false });
+    const { unmount } = renderDetail();
+    expect((await agentRow()).getByText(/Monitoring is disabled/)).toBeInTheDocument();
+    unmount();
+
+    vi.unstubAllGlobals();
+    mockApi({ status: 200 }, { ...SERVER, metrics_instance: 'web-01:9100' });
+    renderDetail();
+    expect((await agentRow()).getByText(/waiting for the first scrape/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['HEALTHY', 'Healthy'],
+    ['UNREACHABLE', 'Unreachable'],
+    ['DEGRADED', 'Degraded'],
+    ['NOT_INSTALLED', 'Not installed'],
+  ])('shows %s as a word, not as the raw enum', async (status, word) => {
+    mockApi({ status: 200 }, { ...SERVER, agent_status: status, metrics_instance: 'web-01:9100' });
+    renderDetail();
+
+    const row = await agentRow();
+    expect(row.getByText(word)).toBeInTheDocument();
+    expect(row.queryByText(status)).not.toBeInTheDocument();
+    // A known state carries no "why nothing was observed" hint.
+    expect(row.queryByText(/Not observed yet/)).not.toBeInTheDocument();
   });
 });

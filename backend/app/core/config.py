@@ -121,6 +121,24 @@ class Settings(BaseSettings):
     #: ends rather than only at ours.
     prometheus_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
 
+    # --- Target discovery and agent health (M2.3, OPEN-14) -------------------
+    #: Where DCP writes the Prometheus ``file_sd`` target file. Unset means
+    #: discovery is **off**: nothing is written and the regeneration task says
+    #: so, rather than pretending a file exists. In Compose this is a path on a
+    #: volume the worker writes and Prometheus reads read-only.
+    metrics_targets_file: str | None = None
+    #: Ports a ``metrics_instance`` may name. Prometheus connects to whatever is
+    #: in the target file, so an administrator-supplied ``host:port`` is an
+    #: outbound connection to an arbitrary port; restricting it to the exporter
+    #: port(s) keeps that from being a port scanner. Comma-separated.
+    metrics_target_ports: Annotated[tuple[int, ...], NoDecode] = (9100,)
+    #: How often the agent probe reads ``up`` from Prometheus.
+    agent_probe_interval_seconds: int = Field(default=30, ge=10, le=3_600)
+    #: An exporter whose every scrape failed for this long is ``UNREACHABLE``
+    #: (``servers.agent_status``). Must span at least two scrapes at the
+    #: stack's 15 s interval, or one lost scrape would flip a healthy host.
+    agent_unreachable_after_seconds: int = Field(default=60, ge=30, le=3_600)
+
     # --- SSRF (docs/SECURITY.md §19) ----------------------------------------
     #: Hosts a registered URL may name. **Empty means none**, so an
     #: unconfigured deployment registers no outbound destination at all rather
@@ -157,6 +175,18 @@ class Settings(BaseSettings):
         """Accept a comma-separated string, because that is what env vars carry."""
         if isinstance(value, str):
             return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
+
+    @field_validator("metrics_target_ports", mode="before")
+    @classmethod
+    def _split_ports(cls, value: object) -> object:
+        """Comma-separated ports, each a valid TCP port; at least one."""
+        if isinstance(value, str):
+            value = tuple(int(part) for part in value.split(",") if part.strip())
+        if not isinstance(value, tuple) or not value:
+            raise ValueError("must name at least one port")
+        if any(not 1 <= port <= 65_535 for port in value):
+            raise ValueError("every port must be between 1 and 65535")
         return value
 
     @field_validator("oidc_scopes", mode="before")

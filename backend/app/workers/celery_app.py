@@ -13,7 +13,7 @@ privileged operations happen:
 * Queues separated by blast radius, so a throttled cloud API cannot starve
   notifications (docs/ARCHITECTURE.md §2.3).
 
-M1.1 registers exactly one task: ``ping``. Real tasks arrive from M2 onward.
+M1.1 registered exactly one task: ``ping``. M2.3 adds the monitoring tasks.
 """
 
 from __future__ import annotations
@@ -56,6 +56,20 @@ def create_celery_app() -> Celery:
         task_default_queue="maintenance",
         task_queues=tuple(Queue(name) for name in QUEUES),
         beat_schedule={
+            # M2.3. The first heals a lost enqueue (the API enqueues on every
+            # inventory write, best effort); the second is the agent probe,
+            # whose cadence is what "UNREACHABLE within the configured
+            # interval" is measured against.
+            "regenerate-prometheus-targets": {
+                "task": "dcp.monitoring.regenerate_targets",
+                "schedule": 300.0,
+                "options": {"queue": "integrations"},
+            },
+            "probe-agent-health": {
+                "task": "dcp.monitoring.probe_agents",
+                "schedule": float(settings.agent_probe_interval_seconds),
+                "options": {"queue": "integrations"},
+            },
             # Daily is ample for a three-month runway, and the task is
             # idempotent so a missed run costs nothing (M1.2).
             "ensure-audit-partitions": {
@@ -67,6 +81,7 @@ def create_celery_app() -> Celery:
         imports=(
             "app.workers.tasks.ping",
             "app.workers.tasks.maintenance",
+            "app.workers.tasks.monitoring",
         ),
     )
     return celery_app

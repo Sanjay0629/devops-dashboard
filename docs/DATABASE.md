@@ -213,9 +213,9 @@ Central inventory (PRD §4.3). Columns marked **†** are additions that PRD §4
 | `management_method` | `text` | NOT NULL, CHECK in (`AWS_SSM`,`AZURE_RUN_COMMAND`,`AZURE_ARC`,`RESTRICTED_AGENT`,`NONE`) | `NONE` = monitoring only, no operations |
 | `monitoring_enabled` **†** | `boolean` | NOT NULL DEFAULT `true` | PRD §4.3 "enable or disable monitoring" |
 | `metrics_instance` **†** | `text` | NULL | Must equal the Prometheus `instance` label (AD-04). Without it metrics cannot be attributed to this server |
-| `agent_status` **†** | `text` | NOT NULL DEFAULT `'UNKNOWN'`, CHECK in (`HEALTHY`,`DEGRADED`,`UNREACHABLE`,`UNKNOWN`,`NOT_INSTALLED`) | PRD §4.3 "monitoring-agent status" |
+| `agent_status` **†** | `text` | NOT NULL DEFAULT `'UNKNOWN'`, CHECK in (`HEALTHY`,`DEGRADED`,`UNREACHABLE`,`UNKNOWN`,`NOT_INSTALLED`) | PRD §4.3 "monitoring-agent status". **Owned by the agent probe since M2.3** (`app/metrics/agents.py`), which emits only `HEALTHY` (a scrape succeeded within the window), `UNREACHABLE` (every scrape in the window failed) and `UNKNOWN` (no series, or Prometheus could not be asked). `DEGRADED` and `NOT_INSTALLED` are permitted and **not emitted**: nothing can decide them honestly. Never settable through the API |
 | `status` | `text` | NOT NULL, CHECK in (`PENDING`,`MANAGED`,`STALE`,`UNREACHABLE`,`RETIRED`) | PRD §4.3 acceptance: managed / pending / stale / unavailable are distinct |
-| `last_seen_at` | `timestamptz` | NULL | `NULL` means *never seen*, which is not the same as stale |
+| `last_seen_at` | `timestamptz` | NULL | `NULL` means *never seen*, which is not the same as stale. **Written by the agent probe since M2.3**: the host's latest *successful* scrape, only ever moving forward (`GREATEST`) |
 | `registered_at` **†** | `timestamptz` | NOT NULL DEFAULT `now()` | PRD §4.3 "registration timestamp" |
 | `provider_metadata` | `jsonb` | NOT NULL DEFAULT `'{}'` | Tags, instance type, zone |
 | `idempotency_key` **†** | `text` | NULL | Migration 0004. The `Idempotency-Key` of the request that created the row ([API_CONTRACTS.md §7](API_CONTRACTS.md#7-idempotency)); see [§14](#14-idempotency-at-the-data-layer) |
@@ -245,6 +245,8 @@ constrain nothing for the rows that have neither value, which is every row
 predating migration 0004 and every seeded one.
 
 Other indexes: `(environment, status)` for dashboard counts; `(status) WHERE deleted_at IS NULL`; `(last_seen_at)` for the stale sweep; `(cloud_account_id)`; `UNIQUE (metrics_instance) WHERE metrics_instance IS NOT NULL AND deleted_at IS NULL` (two servers claiming one Prometheus instance would cross-attribute metrics); trigram or `lower(hostname)` index for search.
+
+**`updated_at` does not move for an observation (migration 0005).** `agent_status` and `last_seen_at` are written by a system every 30 s per monitored host, and the generic `updated_at` trigger would bump it each time — making every `If-Unmodified-Since` edit ([API_CONTRACTS.md §14.4](API_CONTRACTS.md#14-server-inventory)) a spurious `409`. `trg_servers_updated_at` therefore uses `set_servers_updated_at()`, which advances `updated_at` only when something other than those two columns changed. It compares the whole row as `to_jsonb` minus those columns, so a column added later is *included* by default: forgetting to update the function makes `updated_at` move too often (a loud `409`), not too rarely (a silent lost update). `status` is deliberately not excluded — administrators edit it too, and the trigger cannot tell who wrote it; M2.5 owns that.
 
 **`status` is derived, not entered.** It is recomputed by the stale sweep from `last_seen_at`, exporter `up` and per-environment thresholds (AD-14). Administrators set `PENDING`/`RETIRED`; the system owns `MANAGED`/`STALE`/`UNREACHABLE`.
 

@@ -43,8 +43,10 @@ from app.inventory.schemas import CursorPage, DataSection, HealthState
 #: Which milestone each absent source is waiting for. Named here rather than
 #: written at each call site so the dashboard cannot tell an operator two
 #: different stories about the same missing integration.
-UTILISATION_REASON = "Metrics collection is not implemented yet (M2.1)."
-HEALTH_REASON = "Server health evaluation is not implemented yet (M2.1)."
+UTILISATION_REASON = (
+    "Fleet-wide utilisation is not aggregated yet; per-server metrics are on each server's page."
+)
+HEALTH_REASON = "Server health evaluation is not implemented yet (M2.5)."
 ALERTS_REASON = "Alerting is not implemented yet (M3.3)."
 DEPLOYMENTS_REASON = "Deployments are not implemented yet (M5.1)."
 OPERATIONS_REASON = "Service operations are not implemented yet (M4.2)."

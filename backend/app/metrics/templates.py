@@ -330,3 +330,19 @@ def render_scrape_timestamp(os_family: str, instances: Sequence[str]) -> str:
     unsupported, exactly as for any template.
     """
     return f"timestamp({render('agent_up', os_family, instances)})"
+
+
+def render_agent_window(os_family: str, instances: Sequence[str], window_seconds: int) -> str:
+    """Did any scrape of each host succeed in the last ``window_seconds``?
+
+    ``max_over_time`` over ``up`` is 1 if at least one scrape succeeded in the
+    window and 0 only if every one failed — which is exactly "unreachable for
+    this long", with no state kept on our side. A host Prometheus has no
+    series for at all is simply absent from the result.
+
+    Derived from ``agent_up`` like :func:`render_scrape_timestamp`, so the
+    allowlist still holds (AD-04).
+    """
+    if window_seconds <= 0:
+        raise InvalidInstanceError("window_seconds must be positive")
+    return f"max_over_time({render('agent_up', os_family, instances)}[{window_seconds}s])"

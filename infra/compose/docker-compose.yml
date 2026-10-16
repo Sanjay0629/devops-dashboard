@@ -49,6 +49,15 @@ x-backend-env: &backend-env
   # why that is deliberate rather than an omission.
   DCP_PROMETHEUS_URL: ${DCP_PROMETHEUS_URL:-http://prometheus:9090}
   DCP_PROMETHEUS_TIMEOUT_SECONDS: ${DCP_PROMETHEUS_TIMEOUT_SECONDS:-10.0}
+  # M2.3 (OPEN-14). The worker writes this file to a volume Prometheus mounts
+  # read-only; the other services carry the same value because they share this
+  # block, and only the worker has the volume. Both timing settings are
+  # passed through for the reason above: without the line here, .env cannot
+  # change them.
+  DCP_METRICS_TARGETS_FILE: ${DCP_METRICS_TARGETS_FILE:-/var/lib/dcp/targets/node.json}
+  DCP_METRICS_TARGET_PORTS: ${DCP_METRICS_TARGET_PORTS:-9100}
+  DCP_AGENT_PROBE_INTERVAL_SECONDS: ${DCP_AGENT_PROBE_INTERVAL_SECONDS:-30}
+  DCP_AGENT_UNREACHABLE_AFTER_SECONDS: ${DCP_AGENT_UNREACHABLE_AFTER_SECONDS:-60}
   #
   # NOTE: this block enumerates the settings the stack passes through, so a
   # setting that exists on the Settings model but is absent here keeps its
@@ -212,6 +221,12 @@ services:
     command: ["celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "-Q", "operations,deployments,integrations,notifications,maintenance"]
     volumes:
       - ../../backend/app:/app/app:ro
+      # The only writer of the Prometheus target file. A named volume, not a
+      # bind mount: file watching through a Windows bind mount is unreliable
+      # (PROGRESS issue 53 met the same problem with Vite), and the volume
+      # inherits the image's ownership of this directory, so the non-root
+      # worker can write it.
+      - prometheus-targets:/var/lib/dcp/targets
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -324,9 +339,10 @@ services:
       # a range the store cannot answer has to come back as a gap, which it
       # does: Prometheus returns no points and nothing invents any.
       - --storage.tsdb.retention.time=30d
-      # For M2.3's config reload after regenerating the target list from
-      # inventory (OPEN-14). Reachable only inside the project network.
-      - --web.enable-lifecycle
+      # Deliberately NOT --web.enable-lifecycle (M2.3, OPEN-14). The targets
+      # arrive through `file_sd`, which Prometheus watches itself, so no reload
+      # is ever requested — and that flag also enables an unauthenticated
+      # /-/quit. A reload endpoint nobody calls is attack surface for nothing.
     ports:
       # Loopback only. The browser never talks to Prometheus — the backend
       # renders every query (AD-04) — so this is published for `promtool` and
@@ -335,6 +351,9 @@ services:
     volumes:
       - ../prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
+      # Written by the worker, read-only here: Prometheus cannot alter the list
+      # of what it is told to scrape.
+      - prometheus-targets:/prometheus-targets:ro
     healthcheck:
       # `-/healthy` rather than a query: this answers "is the server up",
       # which is what `--wait` should block on. Whether anything is being
@@ -452,5 +471,6 @@ volumes:
   postgres-data:
   redis-data:
   prometheus-data:
+  prometheus-targets:
   loki-data:
   grafana-data:

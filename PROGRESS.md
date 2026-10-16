@@ -2,7 +2,23 @@
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
 **Last updated:** 2026-10-16
-**Updated by:** the **M2.2 implementation session (host metrics endpoints and
+**Updated by:** the **M2.3 implementation session (target discovery and agent
+health)**. Read [§3](#3-in-progress-milestone) first. The shortest version: registering
+a server now makes it a scraped Prometheus target with no config edit, and
+`agent_status` / `last_seen_at` are maintained from Prometheus's own `up` — proven
+against real systems by the smoke test, which registers the exporter through the API,
+stops it, watches the server go `UNREACHABLE`, restarts it and watches it recover.
+Five decisions were closed with the user before code (`OPEN-14` → `file_sd` with **no
+reload call**; a target policy; asynchronous registration-time verification; probe
+source and who writes `last_seen_at`; the static dev target removed). The things most
+worth knowing: **migration 0005** exists because a probe writing every 30 s would have
+made every `If-Unmodified-Since` edit a spurious `409`; the smoke test took
+seven runs and six failed — one a Dockerfile bug of mine, the rest the *script's* (Git
+Bash rewriting `/var/…`, a silent `set -e`, a race, a leftover row) — each recorded in
+[§7](#7-tests-executed-and-their-actual-results); and the changed-line coverage gate
+crashed on a Windows decoding error (issue **65**, fixed, floor untouched).
+
+Before it, the **M2.2 implementation session (host metrics endpoints and
 charts)**. Read [§3](#3-in-progress-milestone) first. The shortest version: the
 product now shows real per-server CPU, memory, disk, load, network and agent state
 from a real Prometheus, with a value-or-a-reason rule enforced at every layer, and
@@ -94,8 +110,7 @@ enforcement) and M1.3
 
 ## 1. Current project stage
 
-**Stage: Phase 2 — Monitoring. M1.1 – M1.7, M2.1 and M2.2 complete. M2.3 is next, and `OPEN-14` (target
-discovery) gates it. As of M2.2 a server with a registered `metrics_instance` shows
+**Stage: Phase 2 — Monitoring. M1.1 – M1.7 and M2.1 – M2.3 complete. M2.4 (systemd, `TS-02`) is next. As of M2.2 a server with a registered `metrics_instance` shows
 real current values and history; the dashboard's `utilisation` section is still
 `not_configured`.**
 
@@ -218,6 +233,7 @@ writing.
 
 | **M2.1** — Prometheus client, metric template catalogue, query guards, `GET /metrics/templates`, §26.1 integration status | **Complete** | 2026-10-16 | 496 unit + 237 integration + 115 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks with nothing skipped; `scripts/smoke-test.sh` passes with **§11 step 8's Prometheus half now asserted** — the exporter target `up` and **all ten templates executed**, read **through the backend's own client against a real Prometheus and a real `node_exporter`** ([§7](#7-tests-executed-and-their-actual-results)). Changed-line coverage **388/388 (100 %)** after the gate's own blind spot was fixed (issue 56) |
 | **M2.2** — host metrics endpoints §15.1–§15.3, threshold classification, metric cards, range charts, server/environment comparison | **Complete** | 2026-10-16 | 539 unit + 272 integration + 170 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks; `scripts/smoke-test.sh` passes with step 18 extended to read **current values and a real range series through the new service against a real Prometheus and `node_exporter`**, with the scrape-timestamp assumption verified; both pages were then looked at in a real browser on the running stack ([§7](#7-tests-executed-and-their-actual-results)). Changed-line coverage 316/324 backend, 249/268 frontend |
+| **M2.3** — Prometheus target discovery (`OPEN-14`), agent-health probe, `agent_status` / `last_seen_at`, migration 0005 | **Complete** | 2026-10-16 | 586 unit + 296 integration + 176 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks; `scripts/smoke-test.sh` passes with step 18 **registering the exporter through the API, watching it become `HEALTHY`, stopping it until `UNREACHABLE`, and restarting it** — all read from a real Prometheus and `node_exporter`; the new UI row was viewed in a real browser through both transitions ([§7](#7-tests-executed-and-their-actual-results)). Changed-line coverage 213/215 backend |
 
 **M1.3 caveat — the honest limit of what was verified.** Everything was tested
 against the **mock** OIDC provider in `infra/compose/mock-idp/`, which checks no
@@ -245,7 +261,117 @@ development aid and is labelled as one in its own README, in the Compose file an
 
 ## 3. In-progress milestone
 
-**None.** M2.2 is finished. M2.3 has not begun. See [§9](#9-next-recommended-task).
+**None.** M2.3 is finished. M2.4 has not begun. See [§9](#9-next-recommended-task).
+
+### What M2.3 implemented (2026-10-16)
+
+Discovery, an agent probe, one migration, four new settings, a volume, and one row in the UI.
+
+#### The five decisions closed before code
+
+1. **`OPEN-14` → DCP-generated `file_sd`, and no reload call.** The plan said "trigger a
+   reload"; `file_sd` watches its files, so none is needed, and the flag that would
+   provide one (`--web.enable-lifecycle`) also enables an unauthenticated `/-/quit`. It
+   was **removed** from the Prometheus container. The file lives on a named volume the
+   worker writes and Prometheus mounts read-only, with `refresh_interval: 15s` as the
+   fallback for filesystems without change events.
+2. **What a target may point at is a policy** (`discovery.target_problem`), applied at
+   the write boundary and again when the file is built: port allowlist (default
+   `9100`), no loopback / link-local / unspecified / multicast / reserved IP literals
+   — including the IPv4-mapped IPv6 spelling of the metadata address — and no
+   `.invalid`. The last one matters for the seeded `[DEMO]` servers, whose
+   `*.demo.invalid:9100` would otherwise be scraped, fail, and be reported
+   `UNREACHABLE`. **A DNS name can still resolve somewhere it should not**; that is the
+   monitoring network's egress policy, recorded in SECURITY §19 as a limitation.
+3. **Registration-time verification is asynchronous.** ARCHITECTURE §4 point 1 said
+   registration validates that the label resolves to a series; a new target needs a file
+   write plus a scrape (15–30 s), so a synchronous check would always fail. The point
+   was **amended** and the reason written there. Corollary worth knowing: because DCP
+   now writes `targets: [metrics_instance]`, the `instance` label *is* the stored value
+   and cannot mismatch — so M2.2's blunt `no_data` now means "not loaded yet" or
+   "Prometheus is unavailable", never "wrong label".
+4. **The probe reads Prometheus's own `up`**, not a connection DCP opens to the host,
+   and **writes `last_seen_at`** (the latest *successful* scrape, only ever forward) —
+   the field M2.5's stale sweep reads. It emits `HEALTHY`, `UNREACHABLE` and `UNKNOWN`;
+   `DEGRADED` and `NOT_INSTALLED` are **not emitted**, for the reason M2.1 declined
+   `degraded`: nothing can decide them honestly.
+5. **The static dev target is gone.** `prometheus.yml` no longer lists
+   `node-exporter:9100`; a developer registers it like any host, and the smoke test
+   does exactly that — which makes it a test of the acceptance criterion rather than of
+   a hand-edited config.
+
+#### The thing nobody asked about: migration 0005
+
+The `updated_at` trigger from 0001 fires on every UPDATE of every row. A probe writing
+`agent_status` / `last_seen_at` every 30 s would therefore have bumped `updated_at`
+continuously, and §14.4 makes `PATCH /servers/{id}` conditional on
+`If-Unmodified-Since`: an administrator opening the edit form and saving 30 s later
+would have been refused with `409` because *Prometheus had been scraped*. Found while
+reading the trigger, **before** it bit. The replacement trigger compares the row with
+everything except those two columns (as `to_jsonb`, so a column added later is included
+by default — the failure mode is a loud `409`, not a silent lost update) and only then
+advances `updated_at`. Taken without a round trip because the alternative was shipping a
+broken contract; it is easy to reverse (the downgrade restores the generic trigger) and
+documented in DATABASE.md. `status` is deliberately *not* excluded: administrators edit
+it too, and the trigger cannot tell who wrote it. **M2.5 owns that.**
+
+#### What the code does
+
+- **One predicate for the file and the probe** (`discovery.select_targets`: monitored,
+  not retired or deleted, Linux, permitted). If they could disagree, `agent_status`
+  would describe a host nothing scrapes. A server that stops being a target has its
+  `HEALTHY` / `UNREACHABLE` reset to `UNKNOWN`; a status the probe does not own is never
+  overwritten.
+- **The file** is deterministic (same inventory, same bytes), written atomically (temp
+  file in the same directory, then rename), skipped when unchanged, and built under a
+  Postgres advisory lock so two regenerations cannot leave the older snapshot on disk.
+  A failure while writing keeps the previous file — an empty one would drop every
+  target at once. It holds `host:port`, `environment` and `server_id`; **never** a
+  display name or owner team, which are operator-typed text (asserted with hostile
+  values).
+- **The probe** asks `max_over_time(up[W])`, which is 1 if any scrape in the last `W`
+  seconds worked: that window *is* the hysteresis, and no state is kept between probes.
+  It never asserts what it could not observe — if Prometheus cannot be asked, every
+  monitored server becomes `UNKNOWN` rather than keeping a `HEALTHY` it can no longer
+  vouch for.
+- **Triggers.** After the inventory write has committed, best effort, with no arguments
+  (CLAUDE.md §5) and `retry=False` so a dead broker cannot stall the request; a 5-minute
+  beat entry heals a missed enqueue. Only edits touching `metrics_instance`,
+  `monitoring_enabled`, `environment` or `status` enqueue anything, and an idempotent
+  replay enqueues nothing.
+- **A seeded row stays editable.** Only a *changed* `metrics_instance` is policed, so
+  resubmitting a demo server's `.invalid` instance is not refused.
+
+#### What was verified against the real thing
+
+`scripts/smoke-test.sh` step 18, from a clean volume, after the exporter is registered
+through the API: the target file lists it and lists neither a demo server nor free text;
+the worker sees the tightened intervals (the Compose-passthrough half of issue 54);
+`agent_up`, the scrape timestamp (**3.9 s before evaluation**, again confirming
+`timestamp()` returns the sample's time), current values and a real range series all
+come back through the new service; the probe marks it `HEALTHY` with a real
+`last_seen_at`; **6 seeded demo servers stay `UNKNOWN`**; stopping the exporter makes it
+`UNREACHABLE`; starting it makes it `HEALTHY` again. Then, in a real browser: the new
+row read *"Unknown — waiting for the first scrape"*, then *Healthy* with a real last-seen
+and `Stale: false`, then — about 34 s after stopping the exporter — *Unreachable* with
+the last-seen time kept; and a registration naming the metadata address or port 22 was
+refused with a field error that did not echo the value.
+
+#### What was not done
+
+- **No E2E path** (issue 60 still stands; the new row is covered by component tests and
+  by the manual browser check, which is not a regression test).
+- **The Windows exporter** (`OPEN-09`): Windows servers are not targets.
+- **Alert rules for exporter absence** — M3.3, as the plan said.
+- **A multi-host delivery mechanism** for the target file. A shared volume is a
+  single-host arrangement (`OPEN-12`).
+
+#### Two stale pieces of copy found by looking, again
+
+The server detail's Health row said "Metrics collection is not implemented yet (M2)" —
+false since M2.1 — and the dashboard's utilisation reason said the same, labelled
+`(M2.1)`. Both now say what is actually missing (health *evaluation*, M2.5; a fleet
+aggregate). Copy only; no behaviour changed.
 
 ### What M2.2 implemented (2026-10-16)
 
@@ -1222,7 +1348,7 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 | Phase | Milestones | Status |
 |---|---|---|
 | 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · ~~M1.7 consolidation~~ **done** | **Phase 1 COMPLETE** 2026-10-15 |
-| 2 — Monitoring | ~~M2.1 Prometheus client~~ **done** · ~~M2.2 host metrics + charts~~ **done** · M2.3 target discovery · M2.4 systemd monitoring · M2.5 stale detection | **In progress.** M2.1 and M2.2 complete 2026-10-16; M2.3 ([§9](#9-next-recommended-task)) is next and is gated by `OPEN-14` |
+| 2 — Monitoring | ~~M2.1 Prometheus client~~ **done** · ~~M2.2 host metrics + charts~~ **done** · ~~M2.3 target discovery~~ **done** · M2.4 systemd monitoring · M2.5 stale detection | **In progress.** M2.1 – M2.3 complete 2026-10-16; M2.4 ([§9](#9-next-recommended-task)) is next and is gated by `TS-02` |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
 | 5 — Deployments | M5.1 targets + Jenkins client · M5.2 lifecycle · M5.3 build logs · M5.4 production approvals · M5.5 health checks + rollback | Pending |
@@ -1403,6 +1529,15 @@ Once a decision is reviewed, record the date and the outcome here.
 | 58 | **The circuit-breaker state that §26.1 reports is per-process, so with more than one backend replica the page reports whichever replica answered.** `app/metrics/client._BREAKER` is a module-level instance. `last_success_at`, `last_error_at` and `circuit_state` are therefore that worker's view, and two polls of `/api/v1/integrations/status` can legitimately disagree. In the local stack there is exactly one backend container, so it is currently invisible. | Accepted for now, and marked in code with a `ponytail:` comment naming the ceiling. It is also not concurrency-exact *within* a process: two coroutines can both pass `allow()` in the half-open state, which costs one extra probe against a monitoring server | A Redis-backed breaker, which the project already has the client for, shared per integration. Worth doing when there is more than one replica or when §26.1 gets a UI — a status page that flickers between `ok` and `open` depending on which worker answered is worse than one that is occasionally stale. Related: §26.1's `degraded` state is **not emitted at all** today, because deciding it honestly needs failure-rate history over a window that nobody has specified (see [§3](#3-in-progress-milestone)) |
 | 59 | **MITIGATED 2026-10-16 (M2.2) — it recurred, was reproduced and was fixed the way this row predicted; see the end of this row.** **One frontend vitest test failed once, under load, and was not identified.** Observed during M2.1's verification: a `scripts/check-all.sh` run reported `Test Files 1 failed | 12 passed (13)` / `Tests 1 failed | 114 passed (115)`, which also failed the frontend changed-line coverage gate as a **consequence** (a failed vitest run leaves no usable Cobertura report, so the gate exits 2). **The test's name was not captured** — the run's output was filtered to the per-check summary lines, and by the time that was noticed the output was gone. It did not reproduce: five subsequent runs were clean (one plain `vitest run`, three `vitest run --coverage`, and one more full `check-all.sh`, all 115 passed). The run that failed was the most loaded of the set — it followed a two-minute backend integration suite with the whole Compose stack running, on a Windows machine — and the frontend suite sets no `testTimeout`, so vitest's 5 s default and Testing Library's 1 s `waitFor` default both apply to nine test files that use `waitFor`. A contention-induced timeout is the plausible mechanism, which is a hypothesis and not a diagnosis. | **Unknown, and deliberately recorded as unknown.** M2.1 changed no frontend source — the only frontend file in its diff is the regenerated `src/api/schema.ts` — so a new defect introduced by this milestone is the least likely explanation; but "probably a flake" is exactly the conclusion that let issue 51 live for five milestones | **Capture the output next time rather than hunting for it now.** Concretely: run `check-all.sh` with its full output kept (it is already one stream; the mistake was filtering it at the call site), and if it recurs, the file and assertion will be in it. If it recurs more than once, the candidates are the nine `waitFor` files, and the fix is an explicit `testTimeout` in `frontend/vite.config.ts` rather than a retry — a retried flake is a flake that still fails in CI. Worth noting for M2.2, which adds chart tests to the same suite. **Update, M2.2:** it recurred — three of five full parallel runs failed, with a *different* test each time. `ServerForm.test.tsx` (about 45 characters typed per test through `userEvent`; 18–23 s as a file under load) hit vitest's 5 s limit, and once that was raised, `findBy*`/`waitFor` hit Testing Library's separate 1 s default in two more tests (one this milestone's own). Each passes alone, which confirms contention. Fixed as predicted, with no retry: `testTimeout: 15_000` in `frontend/vite.config.ts` and `configure({ asyncUtilTimeout: 5_000 })` in `frontend/src/test/setup.ts`; four consecutive full runs then passed 170/170. A passing assertion is not slowed; a failing one takes 5 s to fail. **Mitigated, not eliminated** — pasting rather than typing in `ServerForm.test.tsx` is the real cure and touches tests M2.2 did not own |
 
+### Implementation issues (found during M2.3, 2026-10-16)
+
+| # | Issue | Severity | Handling |
+|---|---|---|---|
+| 65 | **RESOLVED 2026-10-16 (found and fixed by M2.3). `scripts/check_coverage_diff.py` crashed on Windows instead of giving a verdict.** It ran `git diff` with `text=True` and no encoding, so the output was decoded with the locale code page (cp1252), which cannot decode some bytes of a perfectly good UTF-8 diff; the reader thread died, `stdout` came back as `None`, and the script ended with `AttributeError: 'NoneType' object has no attribute 'splitlines'`. Both coverage gates failed in `check-all.sh` for a reason unrelated to coverage. It had not appeared before because earlier diffs happened not to contain the offending byte. | Medium: a gate that crashes is not a gate, and the failure looks like a coverage failure | **Fixed:** `encoding="utf-8", errors="replace"` (only line *numbers* are read from the diff). The floor was not touched. |
+| 66 | **The frontend changed-line gate cannot see a JSX-only edit inside an existing component.** This milestone's `ServerDetail.tsx` and `StatusBadge.tsx` changes were reported as "no coverable line changed", because v8 coverage attributes those lines to a block already counted. They *are* tested (`ServerDetail.test.tsx`, six new cases). | Low | Open, understood. The gate remains useful for new files and new logic; it should not be read as saying a JSX change is covered. |
+| 67 | **During a Prometheus outage every monitored server is reported `UNKNOWN`.** Deliberate (a status must not outlive its evidence), but a 30-second Prometheus restart makes the whole fleet flap to `UNKNOWN` and back. | Low | Accepted, recorded in `app/metrics/agents.py`. Revisit when M2.5 decides how long a status may be trusted. |
+| 68 | **The target file is delivered over a shared Docker volume**, which only works when the worker and Prometheus share a host. | Medium for production | Open, tied to `OPEN-12` (production topology). |
+
 ### Implementation issues (found during M2.2, 2026-10-16)
 
 | # | Issue | Severity | Handling |
@@ -1419,6 +1554,103 @@ Once a decision is reviewed, record the date and the outcome here.
 
 All results below were produced by running the commands and reading the output.
 Nothing here is inferred.
+
+### Executed — M2.3 (2026-10-16)
+
+On Windows 11 against the Compose stack (PostgreSQL 17.2 on `127.0.0.1:5433`, Redis on
+`127.0.0.1:6380`).
+
+#### 1. `./scripts/check-all.sh` — ALL CHECKS PASSED (18/18), final run
+
+```
+backend: unit tests         586 passed, 296 deselected in 70.31s
+backend: integration        296 passed, 586 deselected in 230.29s
+frontend: vitest            Test Files 18 passed (18) · Tests 176 passed (176)
+coverage: backend diff      213/215 changed lines covered (99.1%), floor 80%
+coverage: frontend diff     no coverable line changed against origin/main  (issue 66)
+docs: link check            438 relative links, 0 problems
+(ruff, mypy, bandit, pip-audit, eslint, prettier, tsc, build, npm audit,
+ api types, .env.example)                                            all ok
+```
+
+Versus M2.2: unit 539 → 586 (+47), integration 272 → 296 (+24), frontend 170 → 176 (+6).
+**An earlier run in the same session failed three checks**: both coverage gates (issue
+65, a decoding crash in the gate itself) and the docs link check (a wrong anchor,
+`API_CONTRACTS.md#14-servers`, which is `#14-server-inventory`). The two uncovered
+backend lines the gate names are `await discovery.request_regeneration()` and
+`_check_metrics_target(...)`, both executed by the integration suite.
+
+#### 2. Mutations that were caught
+
+| Mutation | Result |
+|---|---|
+| trigger no longer excludes `agent_status` / `last_seen_at` | `test_a_probe_does_not_move_updated_at_but_a_person_does` and `test_an_edit_survives_a_probe_that_landed_after_the_form_loaded` fail |
+| reserved-domain (`.invalid`) rule removed | `test_only_eligible_servers_become_targets` and the `demo.demo.invalid` write-boundary case fail |
+| unobserved hosts default to `HEALTHY` | `test_when_prometheus_cannot_be_asked_nothing_stays_healthy` fails |
+
+Each file was restored and compared byte for byte with a backup before the suite was
+rerun; the `.invalid` and trigger mutations were both reverted and grepped.
+
+#### 3. `./scripts/smoke-test.sh` — SMOKE TEST PASSED
+
+```
+18. Prometheus scrapes the host exporter and the templates query it (§11.8)
+  registering node-exporter:9100 through the API
+  target file lists the registered server
+  demo servers and free text are absent from it
+  worker sees the configured probe interval and unreachable window
+  scrape timestamp: … (3.9s before evaluation)
+  current: cpu_utilisation=91.24, load_average=0.96, agent_up=1.00
+  history: 41 points, 40 holes, none zero-filled
+  waiting for the probe to mark the registered server HEALTHY
+  HEALTHY, last seen 2026-10-16T07:54:53.905000Z
+  6 seeded demo servers stay UNKNOWN (never scraped, never asserted)
+  stopping the exporter
+  UNREACHABLE after the configured window
+  HEALTHY again once the exporter returned
+SMOKE TEST PASSED
+```
+
+**It took seven runs to get here; six failed, and all but the first were the script's
+rather than the product's** — which is why each is written down:
+
+1. `useradd … \n && mkdir …` — a Dockerfile edit that wrote a literal `\n` instead of a
+   line continuation; the image did not build. Caught because the smoke test builds.
+2. The target-file poll never saw the file. I first suspected `cat … | grep -q` under
+   `set -o pipefail` (`grep -q` closing the pipe early makes `cat` exit non-zero, so a
+   match reads as a failure) and fixed that — a real hazard, but **not the cause**, and
+   the run failed identically.
+3. The cause: **Git Bash on Windows rewrites a bare `/var/lib/…` argument into
+   `C:/Program Files/Git/var/lib/…`** before docker sees it. Found by reproducing the
+   exact command by hand against a live stack. Fixed with `sh -c '…'`, which a quoted
+   command string escapes.
+4. A leftover row of my own in a reused volume (`metrics_instance` already claimed) —
+   not a bug; the previous failed run's teardown had not yet removed my manual stack.
+5. A `grep -o` with no match under `set -e`, which ended the script **with no message at
+   all**; replaced with a JSON assertion that says what it saw.
+6. The M2.2 history assertion raced the new world: series now begin when the server is
+   *registered*, so the first `rate()` point is a little way off; it now polls like the
+   other readings.
+
+#### 4. In a real browser, on the running stack
+
+Logged in as the bootstrap administrator and registered `node-exporter:9100`. The new
+"Monitoring agent" row read, in order: *Unknown — "Not observed yet — waiting for the
+first scrape"*; *Healthy*, with a real `Last seen` and `Stale: false`; and, about **34 s
+after stopping the exporter**, *Unreachable* with the last-seen time kept. A registration
+naming `169.254.169.254:9100` and one naming port 22 were each refused with a field
+error (`That address cannot be a scrape target.` / `That port is not one Prometheus may
+scrape.` + `allowed: ["9100"]`) and neither echoed the value. **Manual, not a regression
+test (issue 60).**
+
+### Not executed in M2.3, and therefore not claimed
+
+- **The Playwright E2E suite.** Not run; no path covers the new row.
+- **GitHub Actions.** Nothing is pushed. The compose job now runs the longer step 18
+  (registration, two exporter state changes) and its CI duration is **unmeasured**; the
+  `promtool check config` step now prints a `WARNING` that `/prometheus-targets/node.json`
+  does not exist (exit 0), which is expected — the file is generated at runtime.
+- **A real `DEGRADED` / `NOT_INSTALLED`**, which nothing emits, and **a Windows host**.
 
 ### Executed — M2.2 (2026-10-16)
 
@@ -2383,6 +2615,35 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
+**After M2.3 (2026-10-16), in this order:**
+
+1. **Push, open the PR, and watch CI** — this is now overdue by two milestones. The
+   `compose` job runs step 18, which has grown (registration, a stop and a start of the
+   exporter); its duration on a two-core runner is unmeasured, and the step budgets
+   (120 s to `HEALTHY`, 150 s to each transition) were tuned on a fast machine.
+2. **M2.4 — systemd service monitoring**, gated by **`TS-02`** (the systemd metrics
+   source). M2.3's discovery is the pattern to follow: a second target kind means a
+   second job and a second file, selected by the same kind of single predicate.
+3. **`OPEN-28` before M3.3**, unchanged.
+4. **`agent_status` is now real, so M2.5 can build on it** — and should decide issue 67
+   (how long a status may be trusted) and whether `status` joins the 0005 exclusion.
+5. **E2E path 3** (issue 60), which now has two real things to assert: a registered
+   server becomes `HEALTHY`, and a stopped exporter becomes `UNREACHABLE`.
+
+**What M2.4 should not re-litigate:** `file_sd` with no reload call; the lifecycle API
+stays off; the target policy is applied at *both* the write boundary and the file
+build; the probe never asserts what it could not observe; and `readings.py` and
+`agents.py` are the only places a Prometheus result becomes a state.
+
+**Traps this milestone paid for, for the next smoke-test edit:** `grep -q` at the end of
+a pipe under `pipefail` (a hazard fixed pre-emptively); Git Bash rewriting a bare `/path` argument (use `sh -c '…'`);
+a `grep -o` with no match silently ending the script under `set -e`; and the fact that
+`smoke-test.sh` ends in `down -v`, so Postgres and Redis must be brought back before
+`check-all.sh`. **Also:** writing a Dockerfile `RUN` with `\n` in a Python string
+produces a literal backslash-n; use the Edit tool and look at the bytes.
+
+**The M2.2 hand-over, kept because it is still true:**
+
 **After M2.2 (2026-10-16), in this order:**
 
 1. **Push, open the PR, and watch CI.** Nothing from M2.2 has been pushed, and the
@@ -2555,6 +2816,39 @@ re-litigate:**
    dashboard total.
 
 ## 10. Scope confirmation
+
+**M2.3 implementation session (2026-10-16).** Scope was milestone M2.3 exactly, plus
+what its verification forced (issue 65's decoding fix in the coverage gate, the two
+stale copy strings, and a handful of smoke-test fixes recorded in §7).
+
+**Added (backend):** `app/metrics/discovery.py`, `app/metrics/agents.py`,
+`app/workers/tasks/monitoring.py`,
+`alembic/versions/0005_servers_updated_at_ignores_observations.py`;
+`tests/metrics/test_discovery.py`, `tests/integration/test_monitoring.py`.
+**Modified (backend):** `app/core/config.py` (four settings, one validator),
+`app/metrics/templates.py` (`render_agent_window`), `app/inventory/service.py` and
+`router_servers.py` (target policy, regeneration triggers), `app/workers/celery_app.py`
+(two beat entries, one import), `app/dashboard/schemas.py` and `app/inventory/service.py`
+(two stale strings), `Dockerfile` (a directory the worker's volume inherits ownership of).
+**Modified (frontend):** `StatusBadge.tsx` (four agent states), `ServerDetail.tsx` (the
+row) and its test.
+**Modified (infrastructure):** `infra/compose/docker-compose.yml` (passthrough, a named
+volume, the lifecycle flag **removed**), `infra/prometheus/prometheus.yml` (`file_sd`,
+static target removed), `.env.example`, `scripts/smoke-test.sh` (step 18),
+`scripts/check_coverage_diff.py` (issue 65).
+**Modified (docs):** `ARCHITECTURE.md` §4 (point 1 amended, point 3 and `OPEN-14`
+resolved), `TECH_STACK.md`, `DATABASE.md`, `SECURITY.md` §19, `API_CONTRACTS.md` §14,
+`IMPLEMENTATION_PLAN.md`, `TESTING.md`, `README.md`, `PROGRESS.md`.
+
+**One migration** (0005, a trigger replacement; no column added or dropped, no data
+touched; the schema is now at `0005`). **No new dependency.** **Four new settings**, each
+with its `.env.example` entry and Compose passthrough, because issue 54's trap applies.
+
+**Deliberately not done:** Windows scrape targets (`OPEN-09`), `DEGRADED` /
+`NOT_INSTALLED`, exporter-absence alert rules (M3.3), a multi-host delivery mechanism
+(`OPEN-12`), an E2E path (issue 60), and `status` in the trigger exclusion (M2.5).
+
+---
 
 **M2.2 implementation session (2026-10-16).** Scope was milestone M2.2 exactly, plus
 the three things its own verification forced (the `bandit` finding, issue 59's

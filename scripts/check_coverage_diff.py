@@ -50,8 +50,19 @@ EXCLUDED_NAMES = re.compile(r"\.(test|spec)\.(ts|tsx)$|^conftest\.py$|^test_.*\.
 
 
 def git(*args: str) -> str:
+    # UTF-8, stated: `text=True` alone decodes with the locale's code page, which
+    # on Windows is cp1252 and cannot decode some bytes of a perfectly good UTF-8
+    # diff. That killed the reader thread, left stdout as None, and the gate died
+    # with an AttributeError instead of a verdict (PROGRESS issue 65). `replace`
+    # because only line *numbers* are read from the diff, never its text.
     result = subprocess.run(
-        ["git", *args], cwd=ROOT, capture_output=True, text=True, check=False
+        ["git", *args],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
     )
     if result.returncode != 0:
         print(f"git {' '.join(args)} failed: {result.stderr.strip()}", file=sys.stderr)

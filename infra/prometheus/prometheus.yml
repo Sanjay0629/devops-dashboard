@@ -40,14 +40,24 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  # The host exporter the metric templates target. `instance` defaults to the
-  # target address, so `node-exporter:9100` is the value a `servers` row's
-  # `metrics_instance` has to carry to join against it (AD-04).
+  # The host exporters the metric templates target. As of M2.3 this list is
+  # NOT written here: DCP generates it from inventory (OPEN-14) and the worker
+  # puts it on a volume mounted read-only at /prometheus-targets. `instance`
+  # defaults to the target address, so a server's `metrics_instance` IS the
+  # label the templates join on (AD-04) — it cannot mismatch, because it is the
+  # target. Each entry also carries `environment` and `server_id` labels.
+  #
+  # Prometheus watches the file itself, so there is no reload call anywhere.
+  # `refresh_interval` is the fallback for a filesystem that does not deliver
+  # change events (a Windows bind mount; PROGRESS issue 53's cousin).
+  #
+  # To scrape the bundled `node-exporter` in development, register it as a
+  # server with metrics_instance `node-exporter:9100` — the same path any host
+  # takes. That is also what scripts/smoke-test.sh step 18 does.
   - job_name: node
-    static_configs:
-      - targets: ['node-exporter:9100']
-        labels:
-          environment: local
+    file_sd_configs:
+      - files: ['/prometheus-targets/node.json']
+        refresh_interval: 15s
 
   # The `dcp-backend` job that used to be here has been removed. The backend
   # exposes no `/metrics` endpoint yet (docs/ARCHITECTURE.md §11 describes the
