@@ -41,6 +41,12 @@ export default defineConfig({
     // runners fighting over one glob, which reads as a broken suite rather
     // than as a configuration problem (M1.7).
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // Raised from vitest's 5 s. `ServerForm.test.tsx` types ~45 characters per test
+    // through userEvent, which is timing-sensitive under the CPU contention of a
+    // full parallel run: it started timing out intermittently once M2.2 added
+    // five more test files to that contention (PROGRESS issue 59). A bound that
+    // only a quiet machine meets is a flake, not a check.
+    testTimeout: 15_000,
     coverage: {
       provider: 'v8',
       // `cobertura` as well as lcov, so scripts/check_coverage_diff.py reads

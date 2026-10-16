@@ -293,3 +293,25 @@ describe('ServerDetail associations', () => {
     expect(results.violations.map((violation) => violation.id)).toEqual([]);
   });
 });
+
+describe('ServerDetail metrics link', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('is offered with metrics:read and points at the metrics page', async () => {
+    mockApi();
+    renderDetail(authenticated(['server:read', 'metrics:read']));
+
+    const link = await screen.findByRole('link', { name: 'Metrics' });
+    expect(link).toHaveAttribute('href', '/servers/s1/metrics');
+  });
+
+  it('is hidden without it (advisory only; the backend decides)', async () => {
+    mockApi();
+    renderDetail(authenticated(['server:read']));
+
+    await screen.findByRole('heading', { name: 'Web 01' });
+    expect(screen.queryByRole('link', { name: 'Metrics' })).not.toBeInTheDocument();
+  });
+});

@@ -314,3 +314,19 @@ def render(
         selector=instance_selector(instances),
         window=f"{window_seconds}s",
     )
+
+
+def render_scrape_timestamp(os_family: str, instances: Sequence[str]) -> str:
+    """The time of each host's latest scrape, as a query on ``agent_up``.
+
+    ``timestamp()`` over a plain instant selector returns the **sample's** own
+    time, not the evaluation time — which is the only way to learn how old a
+    reading is, because an instant query stamps every result it returns with
+    the moment it was evaluated. ``up`` is written on every scrape attempt,
+    so it dates the scrape that produced the host's ``node_*`` series.
+
+    Not a template a client can name: it is derived from ``agent_up`` here, so
+    the allowlist still holds (AD-04). A family without ``agent_up`` is
+    unsupported, exactly as for any template.
+    """
+    return f"timestamp({render('agent_up', os_family, instances)})"

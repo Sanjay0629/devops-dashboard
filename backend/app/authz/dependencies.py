@@ -105,8 +105,8 @@ def require_permission(
     """Build the dependency enforcing ``resource_type:action`` on a route.
 
     ``allow_in_read_only`` is for the endpoints that must work *while* the
-    portal is contained. Exactly one uses it today: the toggle that turns
-    read-only mode back off.
+    portal is contained: the toggle that turns read-only mode back off, and
+    reads that happen to need a ``POST`` body (§15.3's metric comparison).
     """
     permission = f"{resource_type}:{action}"
 

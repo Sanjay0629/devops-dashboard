@@ -432,6 +432,25 @@ backend/tests/dashboard/test_summary.py
 
 ## M2.2 — Host metrics endpoints and charts
 
+**Status: complete (2026-10-16).** Evidence beside each item. Four decisions were closed before any code, with the user's agreement: thresholds are the catalogue defaults only (`OPEN-28`); `stale` is a sample-age bound below Prometheus's lookback; an environment comparison is one series per server and refuses over 20 rather than truncating; the dashboard's `utilisation` section was **not** flipped.
+
+**Tasks**
+
+- [x] Endpoints §15.1–§15.3. `backend/app/metrics/{readings,router,schemas}.py`. A reading is a value or a reason (`not_configured` / `unsupported` / `unavailable` / `stale` stay distinct); §15.3 is allowed in read-only mode because it only reads. Contract text and the divergences it forced are in [API_CONTRACTS.md §15](API_CONTRACTS.md#15-server-metrics).
+- [x] Threshold evaluation. `backend/app/metrics/thresholds.py`: `>=` crosses, `None` classifies to `None`, never `normal`. Catalogue defaults only; configurable thresholds are `OPEN-28`.
+- [x] Frontend: metric cards, range charts with selectable ranges, server and environment comparison. `ServerMetrics.tsx`, `Compare.tsx`, `components/chart/LineChart.tsx` (+ `ticks.ts`, `format.ts`), eight `--series-*` tokens. No dependency added.
+- [x] Verified against a real Prometheus and `node_exporter`: `scripts/smoke-test.sh` step 18 now also asserts that `timestamp(up{…})` returns the **sample's** time (6.7 s before evaluation — if it returned evaluation time `stale` could never fire), runs `readings.current` and `readings.history` end to end, and gets a real series with 40 leading holes out of 41 points on a cold stack, none zero-filled. The pages were then looked at in a real browser against the running stack.
+
+**Acceptance: met.** Metrics are attributed by `metrics_instance` through an equality (single) or anchored alternation (comparison) selector, and a comparison maps each series back by its `instance` label; the window and a UTC timestamp are visible on every card and chart; gaps are `null` points at their own timestamps and are drawn as gaps; history is bounded by the same 30 days Prometheus retains (`--storage.tsdb.retention.time=30d`).
+
+**Tests:** 43 new backend unit tests (`test_thresholds`, `test_readings`), 35 new integration tests (`test_metrics_values`), 43 new frontend tests (12 `LineChart`, 11 `ServerMetrics`, 8 `Compare`, 10 `range`/`formatValue`, 2 on `ServerDetail`'s link). The scope tests were mutation-checked: removing the single-server scope check fails two, removing the comparison scope predicate fails two, and `>=`→`>` fails the boundary case. See [PROGRESS.md §7](../PROGRESS.md#7-tests-executed-and-their-actual-results).
+
+**Security: met.** Scope is `metrics:read` against the server target; out-of-scope reads as `404` indistinguishable from an unknown id; a comparison drops out-of-scope servers and reports `excluded_count` (never disclosing a count for an environment selection); no endpoint accepts PromQL and no response carries rendered PromQL.
+
+**Known limitations, recorded rather than hidden:** `no_data` cannot tell "nothing scraped" from "label matches no target" until M2.3; `stale` is only ever reached by a lagging Prometheus, host-level staleness being M2.5; an environment that resolves to more than 20 servers is refused rather than aggregated; no E2E path (§12 path 3) yet.
+
+**Original scope (kept for reference).**
+
 **Tasks:** endpoints 15.1–15.3; threshold evaluation; frontend metric cards, range charts with selectable ranges, and server/environment comparison.
 
 **Acceptance:** metrics attributed to the correct server (PRD §4.4 acceptance criterion); the displayed time range and timestamp are visible; **gaps render as gaps**; history respects retention.
