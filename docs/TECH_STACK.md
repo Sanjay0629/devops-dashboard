@@ -74,7 +74,7 @@
 4. React bindings, TypeScript types, dark/light theming via CSS variables.
 5. Bundle size proportionate to use.
 
-**Decision: `d3-shape` + `d3-scale`, used directly with no React wrapper. Selected 2026-10-16 (`TS-01` resolved).** Integrated as `frontend/src/components/chart/linePath.ts` — two functions, not a chart component. M2.2 builds the components.
+**Decision: `d3-shape` + `d3-scale`, used directly with no React wrapper. Selected 2026-10-16 (`TS-01` resolved).** Integrated as `frontend/src/components/chart/linePath.ts` — two functions, not a chart component. M2.2 built the components on top: `LineChart.tsx` (axes, tick selection in `ticks.ts`, a keyboard-readable crosshair, a lazily rendered table view, threshold lines with text labels) and the eight categorical `--series-*` tokens in `index.css`. No dependency was added by M2.2.
 
 *Need (§10 rung 1).* Real now: M2.2 ships metric cards, range charts with selectable ranges, and server/environment comparison (IMPLEMENTATION_PLAN M2.2).
 

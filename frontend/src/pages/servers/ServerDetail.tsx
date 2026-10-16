@@ -209,6 +209,7 @@ export function ServerDetail(): React.JSX.Element {
   const [retireError, setRetireError] = useState<Failed<null> | null>(null);
   const [associationError, setAssociationError] = useState<Failed<null> | null>(null);
   const mayWrite = useCanRender(PERMISSIONS.serverWrite);
+  const mayReadMetrics = useCanRender(PERMISSIONS.metricsRead);
   const readOnly = useIsReadOnly();
 
   const { value: result, reload: load } = useLatestResponse(() => readServer(serverId), [serverId]);
@@ -251,6 +252,15 @@ export function ServerDetail(): React.JSX.Element {
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge value={server.status} />
+          {mayReadMetrics && (
+            <Link
+              to={`/servers/${server.id}/metrics`}
+              className="rounded border px-3 py-1 text-sm"
+              style={{ borderColor: 'var(--c-border)' }}
+            >
+              Metrics
+            </Link>
+          )}
           {mayWrite && (
             <Link
               to={`/servers/${server.id}/edit`}

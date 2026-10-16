@@ -364,6 +364,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/metrics/compare': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Compare one metric across servers or environments
+     * @description §15.3. Out-of-scope servers are dropped and counted, never erroring.
+     */
+    post: operations['compare_metrics_api_v1_metrics_compare_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/metrics/templates': {
     parameters: {
       query?: never;
@@ -482,6 +502,46 @@ export interface paths {
      * @description §14.7.
      */
     delete: operations['remove_association_api_v1_servers__server_id__applications__application_id__delete'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/servers/{server_id}/metrics': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Current metric values for a server
+     * @description §15.1. A value, or the reason there is none — never a zero.
+     */
+    get: operations['current_metrics_api_v1_servers__server_id__metrics_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/servers/{server_id}/metrics/range': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Metric history for a server
+     * @description §15.2. Gaps are ``null`` points at their own timestamp.
+     */
+    get: operations['range_metrics_api_v1_servers__server_id__metrics_range_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
     options?: never;
     head?: never;
     patch?: never;
@@ -766,6 +826,69 @@ export interface components {
       status: string;
     };
     /**
+     * CompareRequest
+     * @description §15.3's body. Exactly one of ``server_ids`` / ``environments``.
+     */
+    CompareRequest: {
+      /** Environments */
+      environments?: ('development' | 'staging' | 'production' | 'other')[] | null;
+      /**
+       * From
+       * Format: date-time
+       */
+      from: string;
+      /** Metric */
+      metric: string;
+      /** Server Ids */
+      server_ids?: string[] | null;
+      /** Step Seconds */
+      step_seconds: number;
+      /**
+       * To
+       * Format: date-time
+       */
+      to: string;
+    };
+    /**
+     * ComparisonSeries
+     * @description One server's line in a comparison. Present even with no data.
+     */
+    ComparisonSeries: {
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
+      /** Display Name */
+      display_name: string;
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other';
+      /** Points */
+      points?: [string, number | null][] | null;
+      /**
+       * Server Id
+       * Format: uuid
+       */
+      server_id: string;
+      /** Unavailable Reason */
+      unavailable_reason?:
+        | (
+            | 'provider_timeout'
+            | 'provider_unreachable'
+            | 'provider_error'
+            | 'circuit_open'
+            | 'no_data'
+            | 'monitoring_disabled'
+            | 'no_metrics_instance'
+            | 'prometheus_not_configured'
+            | 'unsupported_os'
+          )
+        | null;
+    };
+    /**
      * CreateUserRequest
      * @description §25.2 — pre-create a user so roles can be granted before first login.
      *
@@ -787,6 +910,30 @@ export interface components {
       identity_provider_issuer?: string | null;
       /** Identity Provider Subject */
       identity_provider_subject: string;
+    };
+    /** CurrentMetrics */
+    CurrentMetrics: {
+      /** Demo Mode */
+      demo_mode: boolean;
+      /** Metrics */
+      metrics: components['schemas']['MetricReading'][];
+      /**
+       * Server Id
+       * Format: uuid
+       */
+      server_id: string;
+      /**
+       * Source
+       * @default prometheus
+       * @constant
+       */
+      source: 'prometheus';
+      /** Thresholds */
+      thresholds: {
+        [key: string]: {
+          [key: string]: number;
+        };
+      };
     };
     /**
      * CursorPage
@@ -1051,6 +1198,109 @@ export interface components {
       /** Unavailable Reason */
       unavailable_reason?: string | null;
     };
+    /** MetricComparison */
+    MetricComparison: {
+      /** Demo Mode */
+      demo_mode: boolean;
+      /**
+       * End
+       * Format: date-time
+       */
+      end: string;
+      /** Excluded Count */
+      excluded_count: number;
+      /** Metric */
+      metric: string;
+      /** Series */
+      series: components['schemas']['ComparisonSeries'][];
+      /**
+       * Source
+       * @default prometheus
+       * @constant
+       */
+      source: 'prometheus';
+      /**
+       * Start
+       * Format: date-time
+       */
+      start: string;
+      /** Step Seconds */
+      step_seconds: number;
+      /** Thresholds */
+      thresholds?: {
+        [key: string]: number;
+      } | null;
+      /** Unit */
+      unit: string;
+    };
+    /**
+     * MetricReading
+     * @description One current value (§15.1).
+     */
+    MetricReading: {
+      /** Collected At */
+      collected_at?: string | null;
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
+      /** Stale After Seconds */
+      stale_after_seconds?: number | null;
+      /** Template */
+      template: string;
+      /** Threshold State */
+      threshold_state?: ('normal' | 'warning' | 'critical') | null;
+      /** Unavailable Reason */
+      unavailable_reason?:
+        | (
+            | 'provider_timeout'
+            | 'provider_unreachable'
+            | 'provider_error'
+            | 'circuit_open'
+            | 'no_data'
+            | 'monitoring_disabled'
+            | 'no_metrics_instance'
+            | 'prometheus_not_configured'
+            | 'unsupported_os'
+          )
+        | null;
+      /** Unit */
+      unit: string;
+      /** Value */
+      value: number | null;
+    };
+    /**
+     * MetricSeries
+     * @description One template's history (§15.2). ``points`` is ``null`` unless ``ok``.
+     */
+    MetricSeries: {
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
+      /** Points */
+      points?: [string, number | null][] | null;
+      /** Template */
+      template: string;
+      /** Unavailable Reason */
+      unavailable_reason?:
+        | (
+            | 'provider_timeout'
+            | 'provider_unreachable'
+            | 'provider_error'
+            | 'circuit_open'
+            | 'no_data'
+            | 'monitoring_disabled'
+            | 'no_metrics_instance'
+            | 'prometheus_not_configured'
+            | 'unsupported_os'
+          )
+        | null;
+      /** Unit */
+      unit: string;
+    };
     /**
      * MetricTemplateInfo
      * @description One catalogue entry (§15.4).
@@ -1142,6 +1392,42 @@ export interface components {
     PermissionList: {
       /** Items */
       items: components['schemas']['PermissionEntry'][];
+    };
+    /** RangeMetrics */
+    RangeMetrics: {
+      /** Demo Mode */
+      demo_mode: boolean;
+      /**
+       * End
+       * Format: date-time
+       */
+      end: string;
+      /** Series */
+      series: components['schemas']['MetricSeries'][];
+      /**
+       * Server Id
+       * Format: uuid
+       */
+      server_id: string;
+      /**
+       * Source
+       * @default prometheus
+       * @constant
+       */
+      source: 'prometheus';
+      /**
+       * Start
+       * Format: date-time
+       */
+      start: string;
+      /** Step Seconds */
+      step_seconds: number;
+      /** Thresholds */
+      thresholds: {
+        [key: string]: {
+          [key: string]: number;
+        };
+      };
     };
     /**
      * ReadOnlyModeRequest
@@ -2535,6 +2821,39 @@ export interface operations {
       };
     };
   };
+  compare_metrics_api_v1_metrics_compare_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CompareRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MetricComparison'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   metric_templates_api_v1_metrics_templates_get: {
     parameters: {
       query?: never;
@@ -2791,6 +3110,75 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  current_metrics_api_v1_servers__server_id__metrics_get: {
+    parameters: {
+      query?: {
+        metrics?: string[] | null;
+      };
+      header?: never;
+      path: {
+        server_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CurrentMetrics'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  range_metrics_api_v1_servers__server_id__metrics_range_get: {
+    parameters: {
+      query: {
+        metrics: string[];
+        from: string;
+        to: string;
+        step_seconds: number;
+      };
+      header?: never;
+      path: {
+        server_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RangeMetrics'];
+        };
       };
       /** @description Validation Error */
       422: {

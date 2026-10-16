@@ -29,6 +29,8 @@ export const PERMISSIONS = {
   adminRoles: 'admin:roles',
   /** Change system settings, including read-only mode. */
   adminSettings: 'admin:manage',
+  /** Read host metrics (§15). Scope is checked by the backend per server. */
+  metricsRead: 'metrics:read',
   /** Read server and application inventory. Held by every role. */
   serverRead: 'server:read',
   /** Register, edit and retire servers. Administrator only. */

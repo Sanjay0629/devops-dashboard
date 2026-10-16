@@ -310,6 +310,59 @@ async def main():
         else:
             print(f"  {template_id}: valid, no series in this environment")
 
+    # M2.2. `collected_at` rests on `timestamp(up{...})` returning the SAMPLE's own
+    # time rather than the moment of evaluation -- an instant query stamps every
+    # result with its evaluation time, so if `timestamp()` did the same the age
+    # would always be 0 and `stale` could never fire. The scripted tests cannot
+    # settle that, only a real Prometheus can. A scrape time is never exactly the
+    # evaluation time, so a strictly positive age that stays under a scrape
+    # interval's worth of lookback is the signature of the real behaviour.
+    import uuid
+    from datetime import UTC, datetime, timedelta
+
+    from app.inventory.models import Server
+    from app.metrics import readings
+
+    scrape = await client.query(templates.render_scrape_timestamp("LINUX", [INSTANCE]))
+    if len(scrape) != 1 or scrape[0].value is None:
+        raise SystemExit(f"FAIL: expected one scrape timestamp, got {scrape!r}")
+    scraped_at = datetime.fromtimestamp(scrape[0].value, tz=UTC)
+    age = (scrape[0].timestamp - scraped_at).total_seconds()
+    if not 0.0 < age < 60.0:
+        raise SystemExit(f"FAIL: scrape age {age}s is not a sample time (evaluation time would be 0)")
+    print(f"  scrape timestamp: {scraped_at.isoformat()} ({age:.1f}s before evaluation)")
+
+    # The same path the API uses, end to end, against the real exporter.
+    server = Server(
+        id=uuid.uuid4(), hostname="smoke", display_name="smoke", operating_system="LINUX",
+        environment="staging", monitoring_enabled=True, metrics_instance=INSTANCE,
+    )
+    chosen = readings.template_ids_or_error(["cpu_utilisation", "load_average", "agent_up"])
+    current = await readings.current(server, chosen, client=client)
+    for reading in current.metrics:
+        if reading.data_state != "ok" or reading.value is None or reading.collected_at is None:
+            raise SystemExit(f"FAIL: {reading.template} is {reading.data_state} ({reading.unavailable_reason})")
+    print("  current: " + ", ".join(f"{r.template}={r.value:.2f}" for r in current.metrics))
+
+    # A real range query. The first minutes of a cold stack have no rate() window,
+    # so a genuine series with LEADING HOLES is what comes back -- the case the
+    # chart must draw as a gap, produced by a real Prometheus rather than by a
+    # fixture. Holes must be null, and at least one point must be a number.
+    end = datetime.now(UTC).replace(microsecond=0)
+    end = end.replace(second=end.second - end.second % 15)
+    start = end - timedelta(minutes=10)
+    history = await readings.history(
+        server, readings.template_ids_or_error(["cpu_utilisation"]),
+        start=start, end=end, step_seconds=15, client=client,
+    )
+    [series] = history.series
+    if series.data_state != "ok" or series.points is None:
+        raise SystemExit(f"FAIL: cpu history is {series.data_state} ({series.unavailable_reason})")
+    values = [value for _, value in series.points]
+    if len(values) != 41 or all(value is None for value in values):
+        raise SystemExit(f"FAIL: expected 41 grid points with data, got {len(values)} / {values!r}")
+    print(f"  history: {len(values)} points, {sum(v is None for v in values)} holes, none zero-filled")
+
     # An instance nobody scrapes returns NOTHING, which is what makes the
     # unavailable path honest: no series, so no number, so no zero.
     absent = await client.query(templates.render("cpu_utilisation", "LINUX", ["nowhere.invalid:9100"]))
