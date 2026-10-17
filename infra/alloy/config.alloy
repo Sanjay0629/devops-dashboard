@@ -1,16 +1,360 @@
-// Placeholder Alloy configuration. M3.1 implements real collection:
-// journald, Nginx, PHP-FPM, application and Docker sources; the bounded label
-// allowlist from docs/ARCHITECTURE.md §5; and the pre-push redaction stages.
+// Grafana Alloy: collect, normalise, redact, push (docs/ARCHITECTURE.md §5).
 //
-// Nothing is collected yet. This file exists so the `logs` profile starts.
+// OUTBOUND ONLY. The one listener is the admin port, bound to loopback by the
+// command line in Compose and not published (SECURITY.md §7).
+//
+// Shape: every source parses its own format and sets only RAW labels, then
+// everything meets in `loki.process "common"`, which is the single place that
+//   1. drops a line whose identity is missing or malformed   (fail closed)
+//   2. collapses `level` into its closed set                  (AD-21)
+//   3. collapses `service` into a bounded shape               (AD-21)
+//   4. redacts secret-shaped substrings                       (SECURITY.md §17)
+//   5. keeps ONLY the seven allowed labels                    (AD-21)
+// before the single `loki.write`. Add a source by pointing it at
+// `loki.process.common.receiver`; there is nothing else to remember.
+//
+// Identity comes from the environment, because on a real host it is rendered
+// per server from DCP's inventory. Nothing else here is host-specific:
+//   ALLOY_ENVIRONMENT      development | staging | production | other
+//   ALLOY_SERVER_ID        the server's DCP id (a UUID)
+//   ALLOY_HOSTNAME         its hostname
+//   ALLOY_APPLICATION_ID   a UUID; set only on the application source below
+//   ALLOY_APP_SERVICE      that application's service name
+//   ALLOY_LOG_ROOT         /var/log on a real host
+//   ALLOY_DOCKER_ROOT      /var/lib/docker/containers on a real host
+//
+// RE2 and per-line limits (the honest part, SECURITY.md §17): a regex runs on
+// ONE log entry. A PEM private key written across several lines is therefore
+// NOT redacted by this file, only a key on a single line is. The second layer
+// (DCP's own pass, M3.2) sees the same single lines, so it does not close this
+// either. The control is not emitting multi-line secrets.
 
 logging {
-  level  = "info"
-  format = "logfmt"
+	level  = "info"
+	format = "logfmt"
 }
 
+// ---------------------------------------------------------------- sources
+
+local.file_match "nginx_access" {
+	path_targets = [{
+		__path__    = sys.env("ALLOY_LOG_ROOT") + "/nginx/access.log",
+		source_type = "nginx",
+		service     = "nginx",
+	}]
+}
+
+local.file_match "nginx_error" {
+	path_targets = [{
+		__path__    = sys.env("ALLOY_LOG_ROOT") + "/nginx/error.log",
+		source_type = "nginx",
+		service     = "nginx",
+	}]
+}
+
+local.file_match "php_fpm" {
+	path_targets = [{
+		__path__    = sys.env("ALLOY_LOG_ROOT") + "/php-fpm/php-fpm.log",
+		source_type = "php_fpm",
+		service     = "php-fpm",
+	}]
+}
+
+local.file_match "syslog" {
+	path_targets = [{
+		__path__    = sys.env("ALLOY_LOG_ROOT") + "/syslog",
+		source_type = "syslog",
+	}]
+}
+
+// One block per application on the host. `application_id` is a label ONLY here:
+// a system log belongs to no application, and an absent label is not an empty one.
+local.file_match "application" {
+	path_targets = [{
+		__path__       = sys.env("ALLOY_LOG_ROOT") + "/app/*.log",
+		source_type    = "application",
+		service        = sys.env("ALLOY_APP_SERVICE"),
+		application_id = sys.env("ALLOY_APPLICATION_ID"),
+	}]
+}
+
+// The json-file driver's own files, read-only (AD-22). The Docker socket is
+// never mounted. `filename` (which carries the container id) is added by
+// loki.source.file and is exactly the unbounded label `label_keep` removes.
+local.file_match "docker" {
+	path_targets = [{
+		__path__    = sys.env("ALLOY_DOCKER_ROOT") + "/*/*-json.log",
+		source_type = "docker",
+	}]
+}
+
+loki.source.file "nginx_access" {
+	targets    = local.file_match.nginx_access.targets
+	forward_to = [loki.process.nginx_access.receiver]
+}
+
+loki.source.file "nginx_error" {
+	targets    = local.file_match.nginx_error.targets
+	forward_to = [loki.process.nginx_error.receiver]
+}
+
+loki.source.file "php_fpm" {
+	targets    = local.file_match.php_fpm.targets
+	forward_to = [loki.process.php_fpm.receiver]
+}
+
+loki.source.file "syslog" {
+	targets    = local.file_match.syslog.targets
+	forward_to = [loki.process.syslog.receiver]
+}
+
+loki.source.file "application" {
+	targets    = local.file_match.application.targets
+	forward_to = [loki.process.application.receiver]
+}
+
+loki.source.file "docker" {
+	targets    = local.file_match.docker.targets
+	forward_to = [loki.process.docker.receiver]
+}
+
+// ------------------------------------------------- per-source parsing (raw)
+// These set `level` (and, where the line names one, `service`) to whatever the
+// source said, in whatever spelling. They decide nothing: `common` does.
+
+// An access log has no severity. It stays `unknown` rather than being guessed
+// from the status code; "5xx" is a search preset (M3.2), not a level.
+loki.process "nginx_access" {
+	forward_to = [loki.process.common.receiver]
+}
+
+loki.process "nginx_error" {
+	forward_to = [loki.process.common.receiver]
+
+	stage.regex {
+		expression = `^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} \[(?P<level>\w+)\]`
+	}
+
+	stage.labels {
+		values = {level = ""}
+	}
+}
+
+loki.process "php_fpm" {
+	forward_to = [loki.process.common.receiver]
+
+	stage.regex {
+		expression = `^\[[^\]]+\] (?P<level>[A-Z]+):`
+	}
+
+	stage.labels {
+		values = {level = ""}
+	}
+}
+
+// The program name is the service. Its SHAPE is checked in `common`; how many
+// distinct programs a host runs is bounded by the host, and Loki's stream limit
+// is the backstop.
+loki.process "syslog" {
+	forward_to = [loki.process.common.receiver]
+
+	stage.regex {
+		expression = `^\w{3}\s+\d+ \d{2}:\d{2}:\d{2} \S+ (?P<service>[^\s\[:]+)`
+	}
+
+	stage.labels {
+		values = {service = ""}
+	}
+}
+
+loki.process "application" {
+	forward_to = [loki.process.common.receiver]
+
+	stage.json {
+		expressions = {level = "level"}
+	}
+
+	stage.labels {
+		values = {level = ""}
+	}
+}
+
+// attrs.service is the container label the operator exposes with the driver's
+// `labels` log option (AD-22). It is read BEFORE stage.docker, which replaces
+// the line with the container's own output.
+loki.process "docker" {
+	forward_to = [loki.process.common.receiver]
+
+	stage.json {
+		expressions = {service = "attrs.service"}
+	}
+
+	stage.labels {
+		values = {service = ""}
+	}
+
+	stage.docker { }
+}
+
+// ------------------------------------------------------------------ common
+
+loki.process "common" {
+	forward_to = [loki.write.default.receiver]
+
+	// Identity labels come from the environment as static labels. A server that
+	// starts Alloy with a missing or malformed identity stores NOTHING instead of
+	// storing unattributable lines that scope filtering could not place.
+	stage.static_labels {
+		values = {
+			environment = sys.env("ALLOY_ENVIRONMENT"),
+			server_id   = sys.env("ALLOY_SERVER_ID"),
+			hostname    = sys.env("ALLOY_HOSTNAME"),
+		}
+	}
+
+	stage.match {
+		selector            = `{environment!~"development|staging|production|other"}`
+		action              = "drop"
+		drop_counter_reason = "bad_environment"
+	}
+
+	stage.match {
+		selector            = `{server_id!~"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"}`
+		action              = "drop"
+		drop_counter_reason = "bad_server_id"
+	}
+
+	stage.match {
+		selector            = `{hostname!~"[A-Za-z0-9][A-Za-z0-9.-]{0,252}"}`
+		action              = "drop"
+		drop_counter_reason = "bad_hostname"
+	}
+	// Present on the application source only; if present it must be a UUID.
+	stage.match {
+		selector            = `{application_id!="", application_id!~"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"}`
+		action              = "drop"
+		drop_counter_reason = "bad_application_id"
+	}
+
+	// `level`: raw spelling in, closed set out. Anything not listed, including an
+	// absent level and a hostile one, ends as `unknown`: not guessed, not passed through.
+	stage.match {
+		selector = `{level=~"(?i:debug)"}`
+
+		stage.static_labels {
+			values = {level = "debug"}
+		}
+	}
+
+	stage.match {
+		selector = `{level=~"(?i:info|notice|informational)"}`
+
+		stage.static_labels {
+			values = {level = "info"}
+		}
+	}
+
+	stage.match {
+		selector = `{level=~"(?i:warn|warning)"}`
+
+		stage.static_labels {
+			values = {level = "warn"}
+		}
+	}
+
+	stage.match {
+		selector = `{level=~"(?i:error|err)"}`
+
+		stage.static_labels {
+			values = {level = "error"}
+		}
+	}
+
+	stage.match {
+		selector = `{level=~"(?i:critical|crit|fatal|alert|emerg|emergency|panic)"}`
+
+		stage.static_labels {
+			values = {level = "critical"}
+		}
+	}
+
+	stage.match {
+		selector = `{level!~"debug|info|warn|error|critical"}`
+
+		stage.static_labels {
+			values = {level = "unknown"}
+		}
+	}
+
+	// `service`: a plain name, or `other`. A container name with spaces, a unit
+	// instance (`foo@bar.service`) and a transient `run-*` unit all land in `other`.
+	stage.match {
+		selector = `{service!~"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}"}`
+
+		stage.static_labels {
+			values = {service = "other"}
+		}
+	}
+
+	stage.match {
+		selector = `{service=~"run-.*"}`
+
+		stage.static_labels {
+			values = {service = "other"}
+		}
+	}
+
+	// ---- redaction (SECURITY.md §17). Ported from backend/app/core/redaction.py
+	// to RE2: each expression captures ONLY the secret, and only the capture is
+	// replaced. The marker is fixed and carries nothing of the original. The same
+	// canaries (infra/compose/sample-logs/canaries.json) are asserted against both.
+	// Order matters as it does there: structural patterns before the generic one.
+
+	// PEM private key, one line only (see the header comment).
+	stage.replace {
+		expression = `(-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----)`
+		replace    = "[REDACTED]"
+	}
+	// JWT / JWS compact serialisation.
+	stage.replace {
+		expression = `\b(eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,})`
+		replace    = "[REDACTED]"
+	}
+	// scheme://user:PASSWORD@host
+	stage.replace {
+		expression = `\b[a-zA-Z][a-zA-Z0-9+.\-]*://[^:/\s@]+:([^@/\s]+)@`
+		replace    = "[REDACTED]"
+	}
+	// Bearer / Basic / Token credentials.
+	stage.replace {
+		expression = `(?i)\b(?:bearer|basic|token)\s+([A-Za-z0-9._\-+/=]{4,})`
+		replace    = "[REDACTED]"
+	}
+	// AWS access key ids.
+	stage.replace {
+		expression = `\b((?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16})\b`
+		replace    = "[REDACTED]"
+	}
+	// key=value and key: value, bare or quoted. `\\?` lets it see through a JSON
+	// line that carries a JSON string (`\"api_key\": \"...\"`), and the bare form
+	// stops at a quote or backslash so redaction cannot eat the closing quote of
+	// the JSON string around it and leave the line unparseable.
+	stage.replace {
+		expression = `(?i)\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|client[_-]?secret|authorization|auth[_-]?token|session[_-]?id|credential)\b\\?["']?\s*[:=]\s*(\\?"[^"\\]*\\?"|'[^']*'|[^\s,;}&\]"'\\]+)`
+		replace    = "[REDACTED]"
+	}
+
+	// The allowlist, last, so nothing a stage above set or left behind survives:
+	// not `filename` (a path, and for Docker a container id), not `job`, not a raw label.
+	stage.label_keep {
+		values = ["environment", "server_id", "hostname", "application_id", "service", "source_type", "level"]
+	}
+}
+
+// ------------------------------------------------------------------- sink
+
 loki.write "default" {
-  endpoint {
-    url = "http://loki:3100/loki/api/v1/push"
-  }
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
 }

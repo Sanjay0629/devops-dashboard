@@ -278,7 +278,7 @@ done unmet and makes M1.6 large.
 
 **Responsibility:** collect journald, Nginx, PHP-FPM, application and Docker logs; relabel to the bounded label set; apply best-effort redaction; push to Loki.
 **Why:** PRD §4.7.
-**Rules:** the label allowlist in [ARCHITECTURE.md §5](ARCHITECTURE.md#5-centralized-logging-architecture) is enforced in the Alloy config; outbound push only, no inbound port; config is version-controlled and templated per environment.
+**Rules:** the label allowlist in [ARCHITECTURE.md §5](ARCHITECTURE.md#5-centralized-logging-architecture) is enforced in the Alloy config (`stage.label_keep`, last, after every guard); outbound push only, no inbound port; config is version-controlled and parameterised per host by environment variables (`ALLOY_*`, listed in the file's header) — rendering them from inventory is later work. `alloy fmt` is the formatter (tabs); `config.alloy` and `journal.alloy` are `fmt`-clean. **Alloy 1.5.1 facts learned building this:** `stage.replace` replaces only its capture group; a `loki.process` receives labels but not the extracted map, so normalisation lives in one shared `common` stage rather than per source; a source whose path does not exist is an unhealthy component and fails `/-/ready`, which is why the journal source is its own file; the image has bash but no `wget`/`curl`, so the healthcheck uses `/dev/tcp`.
 
 ### 5.5 Grafana Loki
 
@@ -439,13 +439,13 @@ The frontend and backend contract is kept aligned mechanically, not by disciplin
 | ID | Decision | Default until resolved |
 |---|---|---|
 | OPEN-01 | OIDC provider; claim→role mapping | Generic OIDC; roles assigned in DCP |
-| OPEN-03 | Alert rules file-managed vs in-app | File-managed in git |
+| ~~OPEN-03~~ | Alert rules file-managed vs in-app | **RESOLVED 2026-10-17: file-managed in git**; utilisation numbers are generated from `DCP_UTILISATION_THRESHOLDS` (`OPEN-28`) |
 | ~~OPEN-04~~ | Redis-only sessions vs a durable session table | **RESOLVED 2026-10-13 (M1.3): Redis-only.** No `user_sessions` table; auth events still audited in PostgreSQL |
 | OPEN-05 | Restricted agent: adopt (SSM hybrid / Arc) vs build | Adopt |
 | OPEN-06 | Canonical secret store | Pluggable interface, one backend per deployment |
-| OPEN-08 | Prometheus/Loki retention and storage budget | 30 d / 14 d placeholders |
+| ~~OPEN-08~~ | Prometheus/Loki retention and storage budget | **RESOLVED 2026-10-17: Prometheus 30 d, Loki 14 d**, no disk quota in v1; limits in Loki config are the bound |
 | OPEN-09 | Windows service management | Out of scope; metrics only |
-| OPEN-13 | Notification channel config storage | DB table in Phase 3 |
+| ~~OPEN-13~~ | Notification channel config storage | **RESOLVED 2026-10-17: DB tables (M3.4)** |
 | ~~OPEN-14~~ | Prometheus target discovery | **Resolved 2026-10-16 (M2.3):** DCP-generated `file_sd`, no reload call |
 | ~~TS-01~~ | Charting library | **RESOLVED 2026-10-16: `d3-shape` + `d3-scale`, used directly, no React wrapper** ([§2.5](#25-charting-library)). The gap criterion was tested rather than assumed, and the test is kept as a standing regression test. Recharts rejected on bundle size (+129 kB gzipped, more than doubling the app) and on its `role="application"` default; uPlot rejected because a canvas renderer makes the criterion untestable — and it cannot be imported under jsdom at all |
 | ~~TS-02~~ | systemd metrics source (systemd_exporter vs node_exporter collector vs agent) | **RESOLVED 2026-10-17: `node_exporter`'s systemd collector with a unit allowlist** ([§5.3](#53-systemd-metrics-integration)). Tested against a real systemd. Gap: no `sub_state`/`load_state`/enabled/PID from any exporter — `OPEN-29`, agent is the later source |

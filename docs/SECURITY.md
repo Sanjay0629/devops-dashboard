@@ -165,7 +165,7 @@ The frontend hides controls the user cannot use for clarity only. Every action i
 - HTTPS only at the edge: TLS 1.2 minimum (1.3 preferred), HSTS, no mixed content. Plain HTTP redirects to HTTPS and serves nothing else.
 - PostgreSQL, Redis, Prometheus, Loki and Alertmanager are **not** publicly reachable and have no inbound path from the operator network.
 - The data tier has **no outbound internet route**.
-- Exporter ports on managed servers are restricted to the Prometheus source address only. Alloy pushes outbound; it exposes no inbound management port.
+- Exporter ports on managed servers are restricted to the Prometheus source address only. Alloy pushes outbound; it exposes no inbound management port. **Built that way in M3.1:** its admin port is bound to `127.0.0.1` inside the container and not published, it runs as its own `alloy` user (the image's default is root), and `--disable-reporting` stops it sending component usage to Grafana (Loki's `analytics.reporting_enabled` is off for the same reason). Docker logs are read from the `json-file` driver's files read-only; the Docker socket is never mounted into it (AD-22).
 - **No public SSH to managed servers is required by this design** (PRD §9). Management flows through provider-native channels or an outbound-connecting restricted agent.
 - Egress from the application tier is an allowlist of known hosts (IdP, AWS/Azure endpoints, Jenkins, secrets manager, notification endpoints). A destination not on the list is not reachable.
 - Container-to-container traffic uses explicit networks; nothing binds `0.0.0.0` on the host except the proxy.
@@ -391,6 +391,10 @@ Additional requirements:
 - Patterns covered at minimum: `Authorization` headers and bearer tokens, `password`/`passwd`/`secret`/`token`/`api_key`/`client_secret` key-value forms, AWS access key ids and secret-shaped base64 blobs, private key PEM blocks, connection strings with embedded credentials, JWT-shaped strings, and session cookie values.
 - Redaction replaces the value with a fixed marker and **never** logs the original length, prefix or hash in a way that aids reconstruction.
 - **Honest limitation:** regex redaction is best-effort and will miss novel formats. It is a mitigation, not a guarantee — the primary control is not emitting secrets in the first place. Secret-leakage tests use seeded canary values across logs, API responses and audit rows ([TESTING.md §8](TESTING.md#8-security-tests)), and a canary appearing anywhere is a release blocker.
+- **What the Alloy layer actually does and does not do (M3.1, tested against a real Alloy and Loki).** `infra/alloy/config.alloy` ports the patterns above to RE2, one `stage.replace` per class, each capturing only the secret. They were checked by hand (M3.1 commit 3) against `infra/compose/sample-logs/canaries.json` through a real Alloy into a real Loki, across every source (Nginx, PHP-FPM, syslog, JSON application log, Docker, journald): **every single-line canary was gone from Loki and the `[REDACTED]` marker was present.** The standing assertion in `scripts/smoke-test.sh` is M3.1 commit 4; until it lands this is a recorded observation, not a regression test. Three limits, none hidden:
+  - **A regex runs on one log entry.** A PEM private key written across several lines is **not** redacted; only one that arrives on a single line (or JSON-escaped inside one) is. The canary corpus carries a multi-line block marked `known_gap`, and it does leak (observed in commit 3); commit 4 makes the smoke test assert that, so the limit cannot be quietly forgotten or quietly "fixed" on paper. DCP's own pass (M3.2) sees the same single entries and does not close it either.
+  - **It over-redacts exactly as the backend does:** the word after `token`/`bearer`/`basic` is replaced whether or not it is a secret (`token presented: …` becomes `token [REDACTED]: [REDACTED]`). Accepted; the alternative is missing real ones.
+  - **Parity is by corpus, not by construction.** The Python patterns and the RE2 ones are two texts; a pattern added to one and not the other is caught only if its canary is added to the corpus. The corpus is the contract.
 - Access to system logs (`logs:read:system`) is separated from application logs (`logs:read:application`) because system logs leak more. Production log access is explicitly scoped (PRD §4.7).
 
 ---
@@ -492,7 +496,8 @@ An inbound path from a lower-trust component ([ARCHITECTURE.md §11](ARCHITECTUR
 - Base images pinned **by digest** and rebuilt on base-image security updates.
 - Images scanned (Trivy/Grype) in CI and before any production deploy; high/critical findings block with a documented, time-boxed exception process.
 - No secret in an image layer, `ENV`, or build arg. Secrets are injected at runtime.
-- The Docker socket is never mounted into an application container.
+- The Docker socket is never mounted into an application container, **nor into the log shipper** (AD-22).
+- **One documented exception to non-root (M3.1, tested against a real daemon):** Alloy reading Docker container logs. Docker keeps them `root:root` `0640` in a `0710` directory, so a non-root shipper sees *nothing and reports no error* (its file glob simply matches no files). On a host with Docker sources it runs as uid 0 with `cap_drop: ALL`, `no-new-privileges` and the directory mounted read-only. The reference Compose service stays non-root (uid 473) because it reads the sample producer's files, which is exactly why that stack cannot prove this path: the real-daemon run was made once, by hand, with `docker run`. The consequence worth planning for is the silent failure, not the uid: nothing in DCP can yet tell a quiet host from a blind shipper until log freshness is tracked (PROGRESS issue 93).
 - Only required ports exposed; `HEALTHCHECK` on every service.
 
 ---
@@ -594,7 +599,8 @@ Required runbooks (to be written in Phase 6, [IMPLEMENTATION_PLAN.md](IMPLEMENTA
 | OPEN-07 | RPO/RTO | Undefined — blocker for production rollout |
 | OPEN-10 | Approval granularity; may an Administrator ever self-approve? | Per environment + action; self-approval denied |
 | OPEN-15 | Is audit export to an independent store mandatory for v1 or Phase 6? | Phase 6, required before production rollout |
-| OPEN-16 | Data classification of log content, and whether production application logs need an additional approval to read | Scoped permission only |
+| ~~OPEN-16~~ | Data classification of log content, and whether production application logs need an additional approval to read | **RESOLVED 2026-10-17 (before M3.1): scoped permission only.** No additional approval to read logs in v1. Log content is treated as *potentially sensitive* (it is never assumed clean): `logs:read:system` is kept apart from `logs:read:application`, production access needs a grant scoped to `production`, both redaction layers apply, and every denial is audited. If the organisation's own data-classification policy later requires an approval step for production logs, it is added as an approval-policy row — no code path changes |
+| OPEN-31 | Log-push provenance: nothing authenticates which shipper may claim which `server_id` / `environment` | **Accepted for v1; closed by a gateway with per-environment Loki tenants in Phase 6, before production rollout.** Full text: [ARCHITECTURE.md §19](ARCHITECTURE.md#19-open-decisions) |
 
 ---
 

@@ -35,13 +35,13 @@ COMPOSE_FILE="${COMPOSE_FILE:-infra/compose/docker-compose.yml}"
 # request, so there has to be an identity provider to authenticate against.
 COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks)
 # M2.1: §11.8's Prometheus half. A separate invocation rather than a third
-# `--profile` on COMPOSE, because `loki` and `grafana` live in the same profile
-# and are still placeholders — starting them would add two minutes to every
-# run and assert nothing (CLAUDE.md §7).
+# `--profile` on COMPOSE, because `grafana` lives in the same profile and is still
+# a placeholder — starting it would add time to every run and assert nothing
+# (CLAUDE.md §7). `loki` is started by name in step 18c (M3.1).
 OBSERVABILITY=(docker compose -f "$COMPOSE_FILE" --profile observability)
 # Everything, for teardown: `down` only reaches services in the profiles it is
 # given, so the core-and-mocks invocation would leave Prometheus running.
-ALL_PROFILES=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks --profile observability --profile fixtures)
+ALL_PROFILES=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks --profile observability --profile logs --profile fixtures)
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-240}"
 # M2.3, step 18: tight agent-health timing for this run only, so "a stopped
 # exporter becomes UNREACHABLE within the configured window" is asserted in
@@ -830,6 +830,165 @@ case "$SMOKE_SYSTEMD" in
   *) fail "SMOKE_SYSTEMD must be auto, require or skip (got: $SMOKE_SYSTEMD)" ;;
 esac
 
+log "18c. Loki accepts a push, returns it, and enforces its limits (§11.8 Loki half, M3.1)"
+# Loki is started by name for the reason `OBSERVABILITY` says: `grafana` shares
+# its profile and is still a placeholder.
+"${OBSERVABILITY[@]}" up -d --wait --wait-timeout "$TIMEOUT_SECONDS" loki \
+  || { "${OBSERVABILITY[@]}" logs --tail=50 loki; fail "loki did not become healthy"; }
+loki_uid="$("${OBSERVABILITY[@]}" exec -T loki id -u | tr -d '\r')"
+[[ "$loki_uid" != "0" ]] || fail "loki runs as root"
+printf '  loki uid=%s\n' "$loki_uid"
+
+# From the backend container, over the project network: the same route the
+# M3.2 client will take, and nothing here depends on the published port.
+"${COMPOSE[@]}" exec -T backend python - <<'PYTHON' || fail "loki assertions failed"
+import json
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+LOKI = "http://loki:3100"
+# The seven labels of docs/ARCHITECTURE.md §5 point 1 (AD-21), and nothing else.
+ALLOWED = {"environment", "server_id", "hostname", "application_id",
+           "service", "source_type", "level"}
+MARKER = f"smoke-m31-{int(time.time())}"
+
+
+def push(stream: dict, line: str, ts_ns: int | None = None) -> tuple[int, str]:
+    body = json.dumps({"streams": [{"stream": stream,
+        "values": [[str(ts_ns or time.time_ns()), line]]}]}).encode()
+    request = urllib.request.Request(f"{LOKI}/loki/api/v1/push", data=body,
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, response.read().decode()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode()
+
+
+def get(path: str, **params: str) -> str:
+    query = ("?" + urllib.parse.urlencode(params)) if params else ""
+    with urllib.request.urlopen(f"{LOKI}{path}{query}", timeout=10) as response:
+        return response.read().decode()
+
+
+stream = {"environment": "staging", "server_id": "smoke", "hostname": "smoke.invalid",
+          "application_id": "smoke", "service": "smoke", "source_type": "application",
+          "level": "info"}
+
+status, _ = push(stream, MARKER)
+assert status == 204, f"a push with the seven allowed labels was refused: {status}"
+print("  a push with the seven allowed labels: 204")
+
+for _ in range(15):
+    result = json.loads(get("/loki/api/v1/query_range", query='{server_id="smoke"}'))["data"]["result"]
+    lines = [v[1] for s in result for v in s["values"]]
+    if MARKER in lines:
+        break
+    time.sleep(1)
+else:
+    raise AssertionError("the pushed line never came back from a query")
+assert result[0]["stream"] == stream, result[0]["stream"]
+print("  it comes back from a query, carrying exactly those seven labels")
+
+# An eighth label is how a request id or a path would arrive. Rejected here is
+# the backstop; the shipper drops such labels before they get this far.
+status, text = push({**stream, "request_id": "r-1"}, MARKER + "-eight")
+assert status == 400 and "label names" in text, (status, text)
+print("  an eighth label is rejected (400): the cardinality backstop holds")
+
+# Older than reject_old_samples_max_age (7 d): a flapping shipper cannot back-fill.
+status, text = push(stream, MARKER + "-old", time.time_ns() - 8 * 86400 * 10**9)
+assert status == 400 and "too old" in text, (status, text)
+print("  an 8-day-old sample is rejected (400)")
+
+labels = set(json.loads(get("/loki/api/v1/labels"))["data"])
+assert labels <= ALLOWED, f"labels outside the allowlist: {sorted(labels - ALLOWED)}"
+assert "service_name" not in labels
+print(f"  every label Loki holds is on the allowlist: {sorted(labels)}")
+
+config = get("/config")
+assert "retention_enabled: true" in config, "compactor retention is off"
+assert "retention_period: 2w" in config, "retention is not 14 days (OPEN-08)"
+assert "reporting_enabled: false" in config, "Loki would send usage statistics"
+print("  retention is 14 d with the compactor on; usage reporting is off")
+PYTHON
+
+log "18d. Alloy ships the sample logs: closed labels, redaction, fail-closed identity (M3.1)"
+# Started by name, like step 18c, for the same reason (grafana shares the profile).
+LOGS=(docker compose -f "$COMPOSE_FILE" --profile observability --profile logs)
+"${LOGS[@]}" up -d --build --wait --wait-timeout "$TIMEOUT_SECONDS" loki sample-logs alloy \
+  || { "${LOGS[@]}" logs --tail=60 alloy sample-logs; fail "alloy/sample-logs did not become healthy"; }
+
+# What SECURITY.md §7 and §23 say about the shipper, asserted on the running
+# container rather than on the file that was supposed to configure it.
+alloy_id="$("${LOGS[@]}" ps -q alloy)"
+[[ -n "$alloy_id" ]] || fail "alloy has no container"
+alloy_uid="$(docker exec "$alloy_id" id -u | tr -d '\r')"
+[[ "$alloy_uid" != "0" ]] || fail "alloy runs as root"
+[[ -z "$(docker port "$alloy_id")" ]] || fail "alloy publishes a port: $(docker port "$alloy_id")"
+[[ "$(docker inspect --format '{{.HostConfig.Privileged}}' "$alloy_id")" == "false" ]] || fail "alloy is privileged"
+if docker inspect --format '{{range .Mounts}}{{.Source}} {{end}}' "$alloy_id" | grep -q 'docker.sock'; then
+  fail "the Docker socket is mounted into alloy (AD-22)"
+fi
+printf '  alloy uid=%s, no published port, not privileged, no Docker socket (AD-22)\n' "$alloy_uid"
+
+"${LOGS[@]}" exec -T sample-logs python - ingestion < scripts/smoke_logs.py \
+  || { "${LOGS[@]}" logs --tail=40 alloy; fail "the Alloy ingestion assertions failed"; }
+
+# Fail closed: a shipper started with a bad identity must STORE NOTHING for it.
+# Each case is a throwaway Alloy with its own state and port. The assertion is
+# the drop COUNTER first (the lines were seen and refused) and Loki's silence
+# second -- silence alone is also what a container that never started looks like
+# (it did, once: Git Bash rewrote --storage.path, M3.1 commit 3).
+bad_alloy() {  # name reason hostname VAR=value
+  local name="$1" reason="$2" host="$3" override="$4"
+  MSYS_NO_PATHCONV=1 "${LOGS[@]}" run -d --no-deps --name "$name" \
+    -e "ALLOY_HOSTNAME=$host" -e "$override" alloy run \
+    --server.http.listen-addr=127.0.0.1:12346 --disable-reporting \
+    --storage.path=/tmp/alloy-bad /etc/alloy/config.alloy >/dev/null \
+    || fail "could not start the $reason case"
+  local deadline=$((SECONDS + 90)) metrics=""
+  until metrics="$(docker exec "$name" bash -c 'exec 3<>/dev/tcp/127.0.0.1/12346; printf "GET /metrics HTTP/1.0\r\n\r\n" >&3; cat <&3' 2>/dev/null)" \
+          && grep -Eq "loki_process_dropped_lines_total\{[^}]*reason=\"$reason\"\} [1-9]" <<<"$metrics"; do
+    (( SECONDS < deadline )) || { docker logs --tail=20 "$name" || true; docker rm -f "$name" >/dev/null; fail "no '$reason' drops counted"; }
+    sleep 3
+  done
+  printf '  %s: lines dropped and counted\n' "$reason"
+}
+bad_alloy smoke-alloy-bad-1 bad_server_id      bad-server.internal.example "ALLOY_SERVER_ID=not-a-uuid"
+bad_alloy smoke-alloy-bad-2 bad_environment    bad-env.internal.example    "ALLOY_ENVIRONMENT=prod"
+bad_alloy smoke-alloy-bad-3 bad_hostname       "bad host!"                 "ALLOY_SERVER_ID=00000000-0000-4000-8000-00000000a1b3"
+bad_alloy smoke-alloy-bad-4 bad_application_id bad-appid.internal.example  "ALLOY_APPLICATION_ID=not-a-uuid"
+for h in bad-server.internal.example bad-env.internal.example "bad host!"; do
+  "${LOGS[@]}" exec -T sample-logs python - absent "$h" < scripts/smoke_logs.py || fail "'$h' reached Loki"
+done
+"${LOGS[@]}" exec -T sample-logs python - appid-dropped bad-appid.internal.example < scripts/smoke_logs.py \
+  || fail "a malformed application_id was not dropped alone"
+docker rm -f smoke-alloy-bad-1 smoke-alloy-bad-2 smoke-alloy-bad-3 smoke-alloy-bad-4 >/dev/null
+
+log "18e. Alloy reads a REAL systemd journal (M3.1)"
+# The fixture from step 18b writes a persistent journal to a volume; alloy-journal
+# reads it through the same pipeline. Skipped, and listed as NOT RUN, wherever
+# 18b is: it needs the same SYS_ADMIN fixture.
+if [[ "$SMOKE_SYSTEMD" == "skip" ]]; then
+  NOT_RUN+=("18e journald (SMOKE_SYSTEMD=skip)")
+  printf 'NOT RUN: SMOKE_SYSTEMD=skip\n'
+elif "${FIXTURES[@]}" up -d --wait --wait-timeout 180 systemd-host alloy-journal; then
+  in_host sh -c 'logger -t dcp-fixture-app -p user.err "m31 journal test line err password=canary-journal-0009"; logger -t dcp-fixture-app -p user.info "m31 journal test line info"; journalctl --flush'
+  "${LOGS[@]}" exec -T sample-logs python - journal < scripts/smoke_logs.py \
+    || { "${FIXTURES[@]}" logs --tail=40 alloy-journal; fail "the journald assertions failed"; }
+elif [[ "$SMOKE_SYSTEMD" == "require" ]]; then
+  "${FIXTURES[@]}" logs --tail=40 systemd-host alloy-journal || true
+  fail "the journald fixture did not start and SMOKE_SYSTEMD=require"
+else
+  "${FIXTURES[@]}" logs --tail=40 systemd-host alloy-journal || true
+  NOT_RUN+=("18e journald (the systemd fixture, or alloy-journal, could not start here)")
+  printf '\n*** NOT RUN: journald ingestion needs the systemd fixture. The file sources are\n'
+  printf '*** covered by 18d; the journal source is configured but NOT observed this run.\n\n'
+fi
+
 log "19. A database outage degrades honestly, with no zeros (§11.10)"
 "${COMPOSE[@]}" stop postgres >/dev/null
 # Poll rather than sleep: the readiness probe has its own per-check deadline,
@@ -878,5 +1037,7 @@ if (( ${#NOT_RUN[@]} > 0 )); then
 else
   printf '\nSMOKE TEST PASSED\n'
 fi
-printf 'Covered docs/TESTING.md §11 steps 1-12, with step 8 partial:\n'
-printf '  its Prometheus half is asserted (step 18); its Loki half needs M3.1.\n'
+printf 'Covered docs/TESTING.md §11 steps 1-12. Step 8: the Prometheus half is\n'
+printf '  asserted (step 18), and so is Loki accepting a push and returning it\n'
+printf '  (step 18c). Alloy shipping the sample logs through to Loki is step 18d,\n'
+printf '  and a real systemd journal is step 18e.\n'

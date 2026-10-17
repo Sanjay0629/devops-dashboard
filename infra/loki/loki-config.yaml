@@ -1,10 +1,24 @@
-# Minimal single-process Loki for local development. M3.1 sets the real
-# limits and retention (OPEN-08 decides the durations).
+# Single-process Loki (docs/ARCHITECTURE.md §5, TECH_STACK.md §5.5).
+#
+# DCP builds every query server-side and enforces its own bounds (AD-05); the
+# limits here are the backstop, not the control. The label allowlist itself is
+# enforced at the shipper (AD-21, infra/alloy/config.alloy): Loki cannot
+# allowlist label *names*, only count them, so `max_label_names_per_series`
+# below is what makes an eighth label a rejected push instead of a silent one.
+#
+# Single tenant on purpose: environment separation is by label and by DCP's
+# scope filter. That means nothing authenticates which shipper may claim which
+# server_id / environment — OPEN-31, accepted for v1, closed in Phase 6.
 auth_enabled: false
 
 server:
   http_listen_port: 3100
   log_level: info
+
+# Loki sends usage statistics to Grafana by default. The data tier has no
+# outbound route (SECURITY.md §7), and a log store should not phone home.
+analytics:
+  reporting_enabled: false
 
 common:
   instance_addr: 127.0.0.1
@@ -28,10 +42,39 @@ schema_config:
         prefix: index_
         period: 24h
 
+# Retention only takes effect with the compactor's retention switch on
+# (OPEN-08: 14 days).
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
 limits_config:
-  # Bounds matter: DCP builds every query server-side and enforces its own
-  # limits (AD-05), but Loki is the backstop.
-  max_query_length: 168h    # 7 days, matching docs/API_CONTRACTS.md §19
+  retention_period: 336h          # 14 d, OPEN-08
+
+  # Reads.
+  max_query_length: 168h          # 7 days, docs/API_CONTRACTS.md §19
   max_entries_limit_per_query: 1000
+
+  # Writes. A sample older than this is rejected, so an outage longer than a
+  # week cannot back-fill history; that is the intent.
   reject_old_samples: true
   reject_old_samples_max_age: 168h
+
+  # Cardinality. The seven labels of ARCHITECTURE.md §5 point 1, and nothing
+  # else: Loki 3 would otherwise add `service_name` itself, which is an eighth.
+  max_label_names_per_series: 7
+  max_label_name_length: 64
+  max_label_value_length: 256
+  discover_service_name: []
+  discover_log_levels: false
+  max_global_streams_per_user: 5000
+
+  # Volume. Design budgets from the single-host topology (OPEN-12), not
+  # measurements; they exist so one noisy host is rejected rather than
+  # allowed to fill the volume (OPEN-08: no disk quota in v1).
+  max_line_size: 256KB
+  ingestion_rate_mb: 4
+  ingestion_burst_size_mb: 8
+  per_stream_rate_limit: 3MB
+  per_stream_rate_limit_burst: 6MB

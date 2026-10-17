@@ -537,9 +537,19 @@ backend/tests/dashboard/test_summary.py
 
 ## M3.1 — Alloy and Loki ingestion
 
-**Tasks:** Alloy config for journald, Nginx, PHP-FPM, application and Docker sources; the bounded label set; redaction stages; Loki config with limits and retention; sample log producers for local development.
+**Status: complete locally (2026-10-18); not pushed, not on hosted CI.** Evidence beside each item. Closed before any code, at the owner's instruction to take the recommended option: `OPEN-03`, `OPEN-08`, `OPEN-13`, `OPEN-16`, `OPEN-20`, `OPEN-28`; raised and decided: `AD-21`, `AD-22`, `OPEN-31`.
 
-**Acceptance:** logs from a sample server are queryable in Loki with exactly the allowed labels; a seeded secret pattern is redacted before storage.
+**Tasks**
+
+- [x] Loki config with limits and retention. `infra/loki/loki-config.yaml`: 14 d retention with the compactor on, at most seven label names, no auto-added `service_name`, 7-day old-sample rejection, ingestion and stream limits, usage reporting off. Asserted by smoke step 18c.
+- [x] Sample log producers. `infra/compose/sample-logs/` (`produce.py`, `canaries.json`), Compose `sample-logs` in the `logs` profile reusing the backend development image. `backend/tests/test_sample_logs.py` (6) asserts every canary is emitted — it failed on its first run.
+- [x] Alloy config for Nginx, PHP-FPM, syslog, application and Docker sources (`infra/alloy/config.alloy`) and journald (`journal.alloy`, separate so a host without a journal still reports ready). Admin port on loopback and unpublished, non-root, reporting off.
+- [x] The bounded label set (`AD-21`): `stage.label_keep` last; `level` and `service` collapsed to closed sets; a line with a missing or malformed identity is dropped. Smoke step 18d, including four fail-closed cases asserted by drop counter.
+- [x] Redaction stages: six RE2 `stage.replace` ports of `app/core/redaction.py`. `backend/tests/test_canary_corpus.py` (27) ties both layers to one corpus; smoke 18d proves it through a real Alloy into a real Loki. **Limit, pinned by a test:** a multi-line PEM key is not redacted.
+- [x] Journald against a real journal. Smoke step 18e (`SMOKE_SYSTEMD`-gated: NOT RUN where the fixture cannot start).
+- [~] Docker source against a real daemon: **run once by hand, not in the smoke test.** It works as uid 0 (read-only, no caps) and silently reads nothing as a non-root user — see `AD-22`.
+
+**Acceptance:** logs from a sample server are queryable in Loki with exactly the allowed labels; a seeded secret pattern is redacted before storage. **Met for the sample server**, and not for a registered one: nothing renders Alloy config per server from inventory yet, and the sample identity is not a registered server.
 
 **Tests:** *Integration* — produce a log line, assert it appears with expected labels; assert a high-cardinality label is dropped; assert a canary secret does not reach Loki.
 
@@ -852,17 +862,19 @@ backend/tests/dashboard/test_summary.py
 |---|---|
 | OPEN-01 IdP | M1.3 hardening |
 | ~~OPEN-02 application↔environment~~ | **Resolved 2026-10-14 — environment-agnostic** |
-| OPEN-03 alert rule authoring | M3.3 |
+| ~~OPEN-03 alert rule authoring~~ | **Resolved 2026-10-17** — file-managed in git; numbers generated from `DCP_UTILISATION_THRESHOLDS` |
 | OPEN-04 session durability | M1.3 |
 | OPEN-05 restricted agent | M4.1, M6.1 |
 | OPEN-06 secret store | M1.1 config |
 | OPEN-07 RPO/RTO | M6.4 |
-| OPEN-08 retention | M2.1, M3.1 |
+| ~~OPEN-08 retention~~ | **Resolved 2026-10-17** — Loki 14 d, Prometheus 30 d, no disk quota in v1 |
 | OPEN-09 Windows scope | M2.4 |
 | OPEN-10 approval policy | M4.5 |
 | OPEN-11 teams model | M6.6 |
 | OPEN-12 production topology | M6.5 |
-| OPEN-13 notification config | M3.4 |
+| ~~OPEN-13 notification config~~ | **Resolved 2026-10-17** — DB tables, M3.4 |
+| ~~OPEN-16 log classification~~ · ~~OPEN-20 `POST` for logs~~ · ~~OPEN-28 threshold home~~ | **Resolved 2026-10-17** — scoped permission only · `POST` only · per-environment `DCP_UTILISATION_THRESHOLDS` ([API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions)) |
+| **OPEN-31 log-push provenance** (new in M3.1) | **Accepted for v1**; closed by a per-environment-tenant gateway before production rollout (Phase 6) |
 | ~~OPEN-14 target discovery~~ | M2.3 — **resolved 2026-10-16**: DCP-generated `file_sd`, no reload call |
 | OPEN-15 audit export | M6.2 |
 | **OPEN-27 scoping a dimension-less resource** (new in M1.5) | **Not M1.6.** Corrected 2026-10-15 after M1.6 was built: §13.1 counts servers, failed services, alerts and recent activity — `application_id` appears only as a *filter*, and it resolves through `application_servers` to servers, which are already scope-filtered. The first milestone genuinely blocked is one that lists or counts applications in their own right. Working default in place: applications are not scope-filtered ([API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions)) |
