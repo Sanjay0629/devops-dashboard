@@ -810,6 +810,11 @@ async def test_log_parameters_are_validated_before_anything_else(
 # --- the SQL state filter against the Python rule ------------------------------
 
 
+# ~860 registrations over HTTP: 77-84 s alone on the M3.1 development machine
+# (2026-10-17), against the suite-wide 120 s hang detector, and past it under
+# coverage inside the full suite. The limit exists to catch hangs, so this test
+# gets its own rather than the suite's being loosened (PROGRESS issue 91).
+@pytest.mark.timeout(400)
 async def test_the_sql_state_expression_agrees_with_view_cached_on_every_combination(
     fleet: Fleet,
 ) -> None:

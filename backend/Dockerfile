@@ -33,10 +33,11 @@ COPY . .
 # /var/lib/dcp/targets is where the worker writes the Prometheus target file (M2.3).
 # Created and owned here so the named volume mounted over it inherits that
 # ownership on first use; otherwise it is root-owned and the non-root worker
-# cannot write to it.
+# cannot write to it. /var/log/sample is the same trick for the sample log
+# producer (M3.1); it exists in this development image only, never in production.
 RUN useradd --create-home --uid 10001 dcp \
-    && mkdir -p /var/lib/dcp/targets \
-    && chown -R dcp:dcp /app /opt/venv /var/lib/dcp
+    && mkdir -p /var/lib/dcp/targets /var/log/sample \
+    && chown -R dcp:dcp /app /opt/venv /var/lib/dcp /var/log/sample
 USER dcp
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \

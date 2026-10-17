@@ -3,7 +3,7 @@
 # Profiles keep the default `up` light:
 #   core          frontend, backend, worker, beat, postgres, redis   (M1.1)
 #   observability prometheus, grafana, loki, node-exporter           (M2.1, M3.1)
-#   logs          alloy                                             (M3.1)
+#   logs          alloy, sample-logs (a synthetic log producer)      (M3.1)
 #   fixtures      systemd-host: a host that runs systemd (M2.4). OPT-IN, and the
 #                 only service here that needs SYS_ADMIN — see its comment.
 #   mocks         mock-idp (M1.3), mock-jenkins (M5.1, not yet implemented)
@@ -532,6 +532,36 @@ services:
         limits: { cpus: "0.25", memory: 256m }
 
   # --- logs profile (M3.1) ---------------------------------------------------
+  # A DEVELOPMENT AID (CLAUDE.md §7): writes synthetic log files, laid out like
+  # a managed server's, for Alloy to ship. Everything it writes is fake; the
+  # canary "secrets" in sample-logs/canaries.json exist so the redaction tests
+  # have something to fail on. It reuses the backend's development image (no new
+  # image, no new dependency) and runs as that image's non-root user.
+  sample-logs:
+    <<: *hardening
+    profiles: [logs]
+    build:
+      context: ../../backend
+      target: development
+    command: ["python", "/sample-logs/produce.py"]
+    environment:
+      SAMPLE_LOG_ROOT: /var/log/sample
+      SAMPLE_INTERVAL_SECONDS: "10"
+    volumes:
+      - ./sample-logs:/sample-logs:ro
+      - sample-logs:/var/log/sample
+    healthcheck:
+      # The image's own healthcheck probes the API port, which this container
+      # does not serve. Healthy means "wrote something in the last minute".
+      test: ["CMD-SHELL", "test -n \"$$(find /var/log/sample/.heartbeat -mmin -1 2>/dev/null)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128m }
+
   alloy:
     <<: *hardening
     profiles: [logs]
@@ -552,3 +582,4 @@ volumes:
   prometheus-targets:
   loki-data:
   grafana-data:
+  sample-logs:

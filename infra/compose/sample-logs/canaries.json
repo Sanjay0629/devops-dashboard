@@ -1,0 +1,52 @@
+[
+  {
+    "name": "bearer_token",
+    "line": "upstream call failed, header Authorization: Bearer <<SECRET>>",
+    "secret": "canary-bearer-m31-0001"
+  },
+  {
+    "name": "password_key_value",
+    "line": "login attempt password=<<SECRET>> for user admin",
+    "secret": "canary-password-m31-0002"
+  },
+  {
+    "name": "json_api_key",
+    "line": "payload {\"api_key\": \"<<SECRET>>\", \"region\": \"eu-west-1\"}",
+    "secret": "canary-apikey-m31-0003"
+  },
+  {
+    "name": "aws_access_key_id",
+    "line": "using access key <<SECRET>> for s3 upload",
+    "secret": "AKIAM31CANARY0000001"
+  },
+  {
+    "name": "jwt",
+    "line": "token presented: <<SECRET>>",
+    "secret": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnktbTMxIn0.canarysig0004"
+  },
+  {
+    "name": "connection_string",
+    "line": "connecting to postgres://svc:<<SECRET>>@db.internal:5432/app",
+    "secret": "canary-dbpass-m31-0005"
+  },
+  {
+    "name": "session_cookie",
+    "line": "Set-Cookie: session_id=<<SECRET>>; HttpOnly",
+    "secret": "canary-session-m31-0006"
+  },
+  {
+    "name": "pem_block_one_line",
+    "line": "key material -----BEGIN PRIVATE KEY-----<<SECRET>>-----END PRIVATE KEY-----",
+    "secret": "MIIcanarym31pem0007"
+  },
+  {
+    "name": "pem_block_multi_line",
+    "known_gap": true,
+    "lines": [
+      "-----BEGIN PRIVATE KEY-----",
+      "<<SECRET>>",
+      "-----END PRIVATE KEY-----"
+    ],
+    "secret": "MIIcanarym31multiline0008"
+  }
+]
