@@ -289,8 +289,22 @@ services:
     # What *can* be verified is verified where the evidence exists:
     # scripts/smoke-test.sh asserts beat's container state and its startup log
     # line, and the worker round-trip proves the broker path end to end.
+    #
+    # **It declares a check anyway, and the check claims no more than Docker
+    # already knows**: that PID 1 is `celery ... beat`. That is the same fact as
+    # the container's running state, so it adds no assurance — it exists because
+    # Docker Compose 2.38 (the version on GitHub's hosted runners) makes
+    # `up --wait` FAIL with "container dcp-beat-1 has no healthcheck configured"
+    # for a service that has none, while the Compose 5.x this was developed on
+    # accepts it. The first hosted CI run found that; reproduced locally with
+    # the official 2.38.2 binary. A check that said more (a schedule-file age, a
+    # round trip) would be the overclaim this comment's first half rules out.
     healthcheck:
-      disable: true
+      test: ["CMD-SHELL", "grep -qa 'celery.*beat' /proc/1/cmdline"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     deploy:
       replicas: 1
       resources:
