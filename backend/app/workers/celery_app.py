@@ -13,7 +13,8 @@ privileged operations happen:
 * Queues separated by blast radius, so a throttled cloud API cannot starve
   notifications (docs/ARCHITECTURE.md §2.3).
 
-M1.1 registered exactly one task: ``ping``. M2.3 adds the monitoring tasks.
+M1.1 registered exactly one task: ``ping``. M2.3 adds the monitoring tasks; M2.4
+adds the service refresh.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from kombu import Queue
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
+from app.services.normalise import REFRESH_INTERVAL_SECONDS
 
 logger = get_logger(__name__)
 
@@ -68,6 +70,13 @@ def create_celery_app() -> Celery:
             "probe-agent-health": {
                 "task": "dcp.monitoring.probe_agents",
                 "schedule": float(settings.agent_probe_interval_seconds),
+                "options": {"queue": "integrations"},
+            },
+            # M2.4. The cache the service lists read; the interval is shared
+            # with the staleness bound (3x) so the two cannot drift apart.
+            "refresh-service-state": {
+                "task": "dcp.monitoring.refresh_services",
+                "schedule": float(REFRESH_INTERVAL_SECONDS),
                 "options": {"queue": "integrations"},
             },
             # Daily is ample for a three-month runway, and the task is

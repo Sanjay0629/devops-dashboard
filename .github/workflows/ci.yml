@@ -292,6 +292,13 @@ jobs:
         # Starts the core, mocks and (at step 18) observability profiles, and
         # asserts docs/TESTING.md §11 steps 1-12 — step 8's Prometheus half
         # included, which M2.1 made assertable for the first time.
+        #
+        # Step 18b (M2.4) also starts a container that runs systemd, which needs
+        # SYS_ADMIN and a writable cgroup tree. SMOKE_SYSTEMD=auto (the default)
+        # runs it and, if the runner cannot start it, ends with "PASSED, BUT
+        # INCOMPLETE ... NOT RUN" rather than failing or silently passing. It has
+        # NOT been observed on a hosted runner yet (PROGRESS.md issue 69);
+        # switch this to `require` once it has been.
         run: ./scripts/smoke-test.sh
 
   env-example:

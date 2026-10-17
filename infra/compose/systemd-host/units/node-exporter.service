@@ -1,0 +1,22 @@
+[Unit]
+Description=node_exporter with the systemd collector (M2.4 fixture)
+After=dbus.service
+Wants=dbus.service
+
+[Service]
+# Not root: the collector only reads, and the real deployment runs it as a
+# service user. If this fixture needed root it would be testing something the
+# product does not do.
+User=nobody
+# The allowlist is the exporter's own configuration (TS-02): DCP cannot set it,
+# and the units below are the only ones this host will ever report.
+ExecStart=/usr/local/bin/node_exporter \
+  --web.listen-address=:9100 \
+  --collector.systemd \
+  --collector.systemd.unit-include=dcp-fixture-.+\.service \
+  --collector.systemd.enable-restarts-metrics \
+  --collector.systemd.enable-start-time-metrics
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

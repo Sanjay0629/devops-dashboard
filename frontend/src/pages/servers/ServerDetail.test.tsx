@@ -319,6 +319,28 @@ describe('ServerDetail metrics link', () => {
   });
 });
 
+describe('ServerDetail services link', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('is offered with service:read and points at the services page', async () => {
+    mockApi();
+    renderDetail(authenticated(['server:read', 'service:read']));
+
+    const link = await screen.findByRole('link', { name: 'Services' });
+    expect(link).toHaveAttribute('href', '/servers/s1/services');
+  });
+
+  it('is hidden without it (advisory only; the backend decides)', async () => {
+    mockApi();
+    renderDetail(authenticated(['server:read']));
+
+    await screen.findByRole('heading', { name: 'Web 01' });
+    expect(screen.queryByRole('link', { name: 'Services' })).not.toBeInTheDocument();
+  });
+});
+
 describe('ServerDetail monitoring agent', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();

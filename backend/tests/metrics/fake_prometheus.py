@@ -16,13 +16,15 @@ which a live ``node_exporter`` cannot be made to produce on demand.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import httpx
 
 NOW = 1_760_000_000.0
 
-Instant = Sequence[tuple[str, str]]
+#: ``(instance, value)``, or ``(instance, value, extra_labels)`` for series that carry
+#: more than an instance (a systemd unit has ``name`` and ``state``).
+Instant = Sequence[tuple[str, str] | tuple[str, str, Mapping[str, str]]]
 Range = Sequence[tuple[str, Sequence[tuple[float, str]]]]
 
 
@@ -56,8 +58,11 @@ class FakePrometheus:
         if query not in self.instant:
             return httpx.Response(400, json={"status": "error", "errorType": "bad_data"})
         result = [
-            {"metric": {"instance": instance}, "value": [self.now, value]}
-            for instance, value in self.instant[query]
+            {
+                "metric": {"instance": entry[0], **(entry[2] if len(entry) == 3 else {})},
+                "value": [self.now, entry[1]],
+            }
+            for entry in self.instant[query]
         ]
         return httpx.Response(
             200, json={"status": "success", "data": {"resultType": "vector", "result": result}}

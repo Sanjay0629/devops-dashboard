@@ -240,6 +240,23 @@ Additional suites:
 
 **Step 18 also proves M2.3's acceptance criteria (2026-10-16).** `node-exporter` is no longer a static target, so the step first registers it through the API and then asserts, in order: the worker's target file lists it (and lists neither a seeded `[DEMO]` server nor any free text), the worker actually sees the tightened probe interval and unreachable window (the Compose-passthrough half that `scripts/check_env_example.py` cannot see), the probe marks it `HEALTHY` with a real `last_seen_at`, the seeded demo servers stay `UNKNOWN`, **stopping the exporter makes it `UNREACHABLE`**, and starting it again makes it `HEALTHY`. Traps the script now avoids and a future edit could reintroduce: Git Bash on Windows rewrites a bare `/var/...` argument into a Windows path (hence `sh -c '...'`); a `grep -o` that matches nothing ends the script silently under `set -e`; and `grep -q` at the end of a pipe under `set -o pipefail` can report a successful match as a failure.
 
+**Step 18b — systemd unit state against a real systemd (M2.4, `TS-02`) — goes beyond §11.** The ordinary `node-exporter` container has no system bus, so nothing in the normal stack can produce `node_systemd_*` series. Step 18b starts `systemd-host` (profile `fixtures`; [`infra/compose/systemd-host/`](../infra/compose/systemd-host/Dockerfile)): Debian with systemd as PID 1 and the *same pinned* `node_exporter` binary, copied from the image the normal stack runs, with its systemd collector enabled and a unit allowlist. It registers the host and four units through the API and drives real transitions, asserting what the **portal** says through the authenticated API:
+
+| Action on the fixture | Asserted result |
+|---|---|
+| a unit that fails at boot | `FAILED` |
+| `systemctl kill -s KILL` a running unit | `FAILED` (a clean `systemctl stop` of another is `INACTIVE` — two facts, two states) |
+| a registered unit the host does not have | `UNCOLLECTED`, never `INACTIVE` |
+| stop the system bus (host answers, collector fails) | `UNCOLLECTED`, `server_reachable: true`; back to `FAILED` when the bus returns |
+| stop the host | `UNKNOWN` for **all four** units on the detail page and in the list; none `INACTIVE` or `FAILED` (PRD §4.5) |
+| the list and the dashboard after the refresh job | the failed-service view lists exactly the two failed units; the dashboard counts them |
+| an unregistered unit (`systemd-journald.service`) | `404`, and never queried |
+| the unit fields this source cannot supply | `sub_state`, `load_state`, `enabled`, `main_pid` all `null` (`OPEN-29`) |
+
+**"Stop the exporter" and "stop the host" are one observable.** The plan's M2.4 test list asks for both, expecting `UNCOLLECTED` for the first and `UNKNOWN` for the second. With the systemd collector inside `node_exporter` there is no separate systemd exporter to stop, so a stopped exporter *is* an unreachable host to Prometheus, and the result is `UNKNOWN`. What the plan meant by `UNCOLLECTED` — the host answers and has nothing about the unit — is the collector failing, which stopping the system bus produces. The step asserts that instead, and the substitution is recorded here rather than left implicit.
+
+`SMOKE_SYSTEMD=auto|require|skip` (default `auto`). The fixture needs `SYS_ADMIN` and a writable cgroup tree ([SECURITY.md §7](SECURITY.md#7-network-isolation)), which not every Docker host grants. `auto` runs the step and, if the fixture cannot start, says so loudly and ends with **`SMOKE TEST PASSED, BUT INCOMPLETE: 1 step(s) NOT RUN`** — never a plain pass. `require` makes that a failure; `skip` omits it and reports the same. Once the fixture is up, every assertion must hold in every mode. The fallback coverage for a host that cannot run it is the unit and integration suites (`tests/services/`, `tests/integration/test_services_api.py`, `test_services_refresh.py`), which assert the same rules against scripted Prometheus answers — and **scripted answers prove the portal's reading of a series, not that a real systemd produces it**; that is exactly what this step adds.
+
 **Step 8's Loki half ("accepts a push and returns it") is still not asserted**: Loki ingests nothing until M3.1, and `grafana` has no dashboards, so both stay placeholders inside the `observability` profile and the script starts neither. Step 12's "resource limits in the production overlay" is partial: no production overlay exists yet, so what exists is checked instead (non-root, no privileged flag, no added capabilities, limits declared in the file we have).
 
 Script-driven, run in CI and nightly:

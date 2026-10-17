@@ -202,8 +202,49 @@ async def test_failed_services_is_a_real_zero(
     client, _caller, _team = dashboard
     failed = (await _summary(client))["failed_services"]
     assert failed["count"] == 0
+    assert failed["unobserved"] == 0
     assert failed["data_state"] == "ok"
     assert failed["source"] == "postgresql"
+
+
+def _service(
+    migrated: Engine,
+    server_id: str,
+    name: str,
+    *,
+    state: str,
+    observed_ago: float | None,
+    agent_status: str = "HEALTHY",
+) -> None:
+    """A registered unit on a server that is scraped, with a cached verdict."""
+    with migrated.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE servers SET metrics_instance = :instance, monitoring_enabled = true,"
+                " agent_status = :agent WHERE id = :id"
+            ),
+            {
+                "instance": f"d{uuid.uuid4().hex[:10]}.example:9100",
+                "agent": agent_status,
+                "id": uuid.UUID(server_id),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO services (id, server_id, service_name, monitoring_enabled,"
+                " last_observed_state, last_observed_at, created_at, updated_at)"
+                " VALUES (gen_random_uuid(), :server, :name, true, :state,"
+                " CASE WHEN CAST(:ago AS float8) IS NULL THEN NULL"
+                "      ELSE now() - make_interval(secs => CAST(:ago AS float8)) END,"
+                " now(), now())"
+            ),
+            {"server": uuid.UUID(server_id), "name": name, "state": state, "ago": observed_ago},
+        )
+
+
+async def _first_server(client: httpx.AsyncClient, team: str) -> str:
+    listed = await call(client, "GET", HEALTH, params={"owner_team": team, "limit": 100})
+    return str(listed.json()["items"][0]["server_id"])
 
 
 async def test_a_failed_unit_is_counted_through_its_server(
@@ -212,21 +253,84 @@ async def test_a_failed_unit_is_counted_through_its_server(
     uncached: None,
 ) -> None:
     client, _caller, team = dashboard
-    listed = await call(client, "GET", HEALTH, params={"owner_team": team, "limit": 100})
-    server_id = listed.json()["items"][0]["server_id"]
+    _service(
+        migrated,
+        await _first_server(client, team),
+        "nginx.service",
+        state="FAILED",
+        observed_ago=20,
+    )
+
+    section = (await _summary(client, owner_team=team))["failed_services"]
+
+    assert section["count"] == 1
+    assert section["unobserved"] == 0
+    assert section["data_state"] == "ok"
+
+
+async def test_a_dead_hosts_cached_failure_is_unobserved_not_failed(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str],
+    migrated: Engine,
+    uncached: None,
+) -> None:
+    """The cache says FAILED; the host has gone quiet. It is unknown, and is counted so."""
+    client, _caller, team = dashboard
+    _service(
+        migrated,
+        await _first_server(client, team),
+        "nginx.service",
+        state="FAILED",
+        observed_ago=20,
+        agent_status="UNREACHABLE",
+    )
+
+    section = (await _summary(client, owner_team=team))["failed_services"]
+
+    assert (section["count"], section["unobserved"]) == (0, 1)
+
+
+async def test_a_stale_cache_is_unobserved_not_failed(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str],
+    migrated: Engine,
+    uncached: None,
+) -> None:
+    client, _caller, team = dashboard
+    _service(
+        migrated,
+        await _first_server(client, team),
+        "nginx.service",
+        state="FAILED",
+        observed_ago=900,
+    )
+
+    section = (await _summary(client, owner_team=team))["failed_services"]
+
+    assert (section["count"], section["unobserved"]) == (0, 1)
+
+
+async def test_a_zero_over_units_nobody_could_read_says_so(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str],
+    migrated: Engine,
+    uncached: None,
+) -> None:
+    """0 failed of 3 unread is not 0 failed of 3: `unobserved` is what tells them apart."""
+    client, _caller, team = dashboard
+    server_id = await _first_server(client, team)
+    _service(migrated, server_id, "a.service", state="UNKNOWN", observed_ago=None)
     with migrated.begin() as connection:
-        connection.execute(
-            text(
-                "INSERT INTO services (id, server_id, service_name, monitoring_enabled,"
-                " last_observed_state, created_at, updated_at)"
-                " VALUES (gen_random_uuid(), :server, 'nginx.service', true, 'FAILED',"
-                " now(), now())"
-            ),
-            {"server": uuid.UUID(server_id)},
-        )
-    body = await _summary(client, owner_team=team)
-    assert body["failed_services"]["count"] == 1
-    assert body["failed_services"]["data_state"] == "ok"
+        for name, state in (("b.service", "UNCOLLECTED"), ("c.service", "ACTIVE")):
+            connection.execute(
+                text(
+                    "INSERT INTO services (id, server_id, service_name, monitoring_enabled,"
+                    " last_observed_state, last_observed_at, created_at, updated_at)"
+                    " VALUES (gen_random_uuid(), :server, :name, true, :state, now(), now(), now())"
+                ),
+                {"server": uuid.UUID(server_id), "name": name, "state": state},
+            )
+
+    section = (await _summary(client, owner_team=team))["failed_services"]
+
+    assert (section["count"], section["unobserved"]) == (0, 2)
 
 
 # --- honest data states (PRD §4.2 acceptance criterion) -----------------------

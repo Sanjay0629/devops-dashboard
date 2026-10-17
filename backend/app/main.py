@@ -36,6 +36,7 @@ from app.health.router import router as health_router
 from app.inventory.router_applications import router as applications_router
 from app.inventory.router_servers import router as servers_router
 from app.metrics.router import router as metrics_router
+from app.services.router import router as services_router
 
 logger = get_logger(__name__)
 
@@ -100,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # catalogue is static, and §26.1's job is to say that nothing is
     # configured rather than to disappear when nothing is.
     app.include_router(metrics_router, prefix=settings.api_base_path)
+    app.include_router(services_router, prefix=settings.api_base_path)
 
     return app
 

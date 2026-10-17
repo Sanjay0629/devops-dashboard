@@ -1,0 +1,9 @@
+[Unit]
+Description=A unit that fails to start: FAILED from boot (M2.4 fixture)
+
+[Service]
+ExecStart=/bin/false
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

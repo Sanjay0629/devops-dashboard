@@ -8,9 +8,10 @@ At M1.6 the product reads PostgreSQL and nothing else. Two sections therefore
 have a real source and the rest have none:
 
 * ``servers`` — counts of ``servers.status``, a real column. ``ok``.
-* ``failed_services`` — a count over ``services``, which exists and is empty.
-  A real zero, not an unknown: the table is the service allowlist, so "no
-  registered service is failed" is a fact rather than a gap.
+* ``failed_services`` — a count over ``services``, by the state each row
+  *shows* (M2.4), with the number of units that could not be read beside it.
+  A zero over an empty registry is a real zero; a zero over unread units is
+  not, and ``unobserved`` is what says which.
 * everything else — ``not_configured`` with ``null`` values and a reason
   naming the milestone that will fill it.
 
@@ -95,9 +96,17 @@ class UtilisationSection(DataSection):
 
 
 class FailedServicesSection(DataSection):
-    """A real count: ``services`` is the allowlist, and it is queryable now."""
+    """Units that *show* ``FAILED``, and how many could not be read at all.
+
+    ``count`` is a real count over the registry (``services`` is the allowlist),
+    but it is a count of what is **known**: a unit whose host is silent, or whose
+    exporter reports nothing, shows ``UNKNOWN`` or ``UNCOLLECTED`` and is not in
+    it. ``unobserved`` is how many such units there are, so ``0`` failed beside
+    ``12`` unobserved cannot be mistaken for ``0`` failed of ``12``.
+    """
 
     count: int | None = None
+    unobserved: int | None = None
 
 
 class ActiveAlertsSection(DataSection):

@@ -1,0 +1,9 @@
+[Unit]
+Description=A unit the smoke test stops cleanly: INACTIVE, not FAILED (M2.4 fixture)
+
+[Service]
+ExecStart=/bin/sleep infinity
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

@@ -46,6 +46,18 @@ const APPEARANCE: Record<string, { glyph: string; label: string; colour: string 
   UNKNOWN: { glyph: '?', label: 'Unknown', colour: 'var(--c-unknown)' },
   NOT_INSTALLED: { glyph: '—', label: 'Not installed', colour: 'var(--c-unknown)' },
 
+  // systemd unit state (`ServiceState`, M2.4). `INACTIVE` is a *known* stopped
+  // unit; `UNKNOWN` is a unit nobody could read (a silent host), and
+  // `UNCOLLECTED` is a host that answers while the exporter says nothing about
+  // the unit. Three different facts, three different shapes: a dead host must
+  // never be drawn as stopped services (PRD §4.5).
+  FAILED: { glyph: '■', label: 'Failed', colour: 'var(--c-critical)' },
+  INACTIVE: { glyph: '○', label: 'Inactive', colour: 'var(--c-unknown)' },
+  ACTIVATING: { glyph: '◔', label: 'Activating', colour: 'var(--c-warning)' },
+  DEACTIVATING: { glyph: '◕', label: 'Deactivating', colour: 'var(--c-warning)' },
+  UNCOLLECTED: { glyph: '∅', label: 'Not collected', colour: 'var(--c-stale)' },
+  UNSUPPORTED: { glyph: '—', label: 'Not supported', colour: 'var(--c-unknown)' },
+
   // Application status.
   ACTIVE: { glyph: '●', label: 'Active', colour: 'var(--c-healthy)' },
   ARCHIVED: { glyph: '—', label: 'Archived', colour: 'var(--c-unknown)' },

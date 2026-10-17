@@ -7,7 +7,7 @@
  * and §4.4 treat unknown, unavailable, unsupported and not-configured as four
  * different facts, and CLAUDE.md §5 forbids substituting one for another.
  *
- * Only an Overview tab: metrics, services, logs and operations are the later
+ * Only an Overview tab: metrics and services are linked pages, and logs and operations are the later
  * milestones' tabs, and an empty tab labelled "Metrics" would imply this host
  * has none rather than that nothing collects them yet.
  */
@@ -210,6 +210,7 @@ export function ServerDetail(): React.JSX.Element {
   const [associationError, setAssociationError] = useState<Failed<null> | null>(null);
   const mayWrite = useCanRender(PERMISSIONS.serverWrite);
   const mayReadMetrics = useCanRender(PERMISSIONS.metricsRead);
+  const mayReadServices = useCanRender(PERMISSIONS.serviceRead);
   const readOnly = useIsReadOnly();
 
   const { value: result, reload: load } = useLatestResponse(() => readServer(serverId), [serverId]);
@@ -259,6 +260,15 @@ export function ServerDetail(): React.JSX.Element {
               style={{ borderColor: 'var(--c-border)' }}
             >
               Metrics
+            </Link>
+          )}
+          {mayReadServices && (
+            <Link
+              to={`/servers/${server.id}/services`}
+              className="rounded border px-3 py-1 text-sm"
+              style={{ borderColor: 'var(--c-border)' }}
+            >
+              Services
             </Link>
           )}
           {mayWrite && (

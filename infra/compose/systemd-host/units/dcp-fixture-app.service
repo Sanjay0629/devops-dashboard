@@ -1,0 +1,9 @@
+[Unit]
+Description=A long-running unit the smoke test kills (M2.4 fixture)
+
+[Service]
+ExecStart=/bin/sleep infinity
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

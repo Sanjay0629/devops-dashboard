@@ -307,7 +307,7 @@ Also `403` + `LOGIN_DENIED` (M1.3, assumption A-05): a **new** identity whose em
     "collected_at": null,
     "source": "prometheus"
   },
-  "failed_services": { "count": 0, "data_state": "ok", "collected_at": "2026-01-15T09:29:00Z", "source": "postgresql" },
+  "failed_services": { "count": 0, "unobserved": 0, "data_state": "ok", "collected_at": "2026-01-15T09:29:00Z", "source": "postgresql" },
   "active_alerts": { "critical": null, "warning": null, "info": null, "data_state": "not_configured" },
   "recent_deployments": { "items": null, "data_state": "not_configured" },
   "recent_operations": { "items": null, "data_state": "not_configured" },
@@ -324,6 +324,8 @@ The `utilisation` block illustrates the required behaviour: Prometheus is down, 
 
 1. **`server_health` is a sibling section, not three fields inside `servers`.** `total`, `pending`, `managed`, `stale`, `unreachable` and `retired` are counts of the `servers.status` column — a real source, `data_state: "ok"`. `healthy`, `warning` and `critical` are a *health* rollup with no source until M2.1. One envelope carries one `data_state` (§4), and a block that mixed the two would have to claim either that the status counts are unavailable or that the health counts are collected. Both are false. The field names are unchanged, so a client reads `summary.server_health.healthy` instead of `summary.servers.healthy`.
 2. **`recent_deployments`, `recent_operations` and `recent_health_changes` are `DataSection`s carrying `items: null`, not bare arrays.** There is no deployments table, no operations table and no health-event table. `[]` asserts "nothing happened recently", which is a claim this product cannot make before M5.1, M4.2 and M2.5 respectively — and §4 rule 2 plus PRD §4.2 forbid a substitute value for an absent one just as firmly for an empty list as for a zero. Each carries an `unavailable_reason` naming the milestone that will fill it.
+
+**`failed_services` counts what units *show*, and says how many it could not read (M2.4).** `count` is the number of registered units on readable servers whose displayed state is `FAILED` — the §16.1 state, host-aware, not the raw `services.last_observed_state` column — so a unit cached `FAILED` on a host that has since gone quiet is not counted as failed. The new **`unobserved`** is the number that show `UNKNOWN` or `UNCOLLECTED` (including a cache that has not been refreshed in 180 s). It exists so `count: 0` beside `unobserved: 12` cannot be read as `0` of `12`; a client must show both. `data_state` stays `ok`: both numbers are exact counts of a real table.
 
 `stale` and `unreachable` under `servers` are the stored statuses. AD-14's sweep, which recomputes them from `last_seen_at`, is M2.5; until then nothing moves a server into them automatically, so the counts report what registration and administration set — an accurate count of a real column, not an observation of the host.
 
@@ -506,6 +508,17 @@ Validation: `cloud_account_id` must reference an `ACTIVE`, non-deleted account (
 **16.5** Mutable: `display_name`, `application_id`, `monitoring_enabled`, `action_policy_id`. Changing `action_policy_id` is privilege-relevant: Administrator only, audited as `SERVICE_ACTION_POLICY_CHANGED`.
 
 **16.7** Query: `limit` (default 100, max 1 000), `from`, `to` (max 24 h range), `level`. Served from Loki filtered to this unit — **not** by executing a command on the host. `503 provider_unavailable` when Loki is down. Response lines pass through the redaction pass ([SECURITY.md §17](SECURITY.md#17-sensitive-log-redaction)). Timeout 15 s. No audit (read), but `logs:read:system` denials are audited.
+
+**Implemented in M2.4 (§16.1–§16.7).** The reads need `service:read`; registration, edit and deregistration need `server:write`; every one is checked against the **server's** scope, so an out-of-scope server or unit is `404`. Divergences and decisions, each forced by the honest-states rule or by what the source can supply rather than chosen:
+
+- **Four fields are always `null` (`OPEN-29`):** `sub_state`, `load_state`, `enabled` and `main_pid`. Neither `node_exporter`'s systemd collector nor `systemd_exporter` exposes them (`TS-02`, [TECH_STACK.md §5.3](TECH_STACK.md#53-systemd-metrics-integration)). `last_state_change_at` is `null` for the same reason: the exporter's start time describes activation only, so §16.4 adds **`started_at`** (null unless the unit is running) rather than mislabelling it. `active/running` and `active/exited` are both `ACTIVE`.
+- **Lists read a cache; detail reads Prometheus.** §16.1 and §16.2 are served from `services.last_observed_*` and never fan out per row, so `restart_count` is `null` there. §16.4 queries Prometheus now and is the only place it is known. A cache older than 180 s, or a host the probe calls `UNREACHABLE`, shows `UNKNOWN` with `data_state: "stale"` and the time it was last true — never the cached state as though it were current. The `state` filter selects on the state a row **shows**, not on the raw column.
+- **Added item fields:** `display_name`, `application_id`, `monitoring_enabled`, and `unavailable_reason` (the closed set from §15). `data_state` is `ok | stale | unavailable | unsupported | not_configured`; `UNCOLLECTED` is `unavailable` + `no_data`.
+- **`allowed_actions` / `approval_required` are hints.** The policy's actions intersected with the caller's permissions (`status` ⇒ `service:read`, `logs_tail` ⇒ `logs:query`); approval is required when the policy's approval policy covers the server's environment. Neither carries authority.
+- **An action policy is a privilege.** Assigning one at registration, or changing it with §16.5, is Administrator-only (`admin:users` is the stand-in, as for a server's environment change) and refuses as `404`. A change is audited as `SERVICE_ACTION_POLICY_CHANGED` in addition to `SERVICE_UPDATED`; resubmitting the current policy is not a change. `monitoring_enabled: null` is `422`.
+- **§16.7 is routed and validated but cannot answer.** The permission is `logs:query` (the seeded spelling of `logs:read:system`). A valid request for a registered unit returns **`503 not_configured`** until Loki exists (M3.1) — an empty page would read as "no errors". `limit` ≤ 1 000, `from`/`to` carry a timezone and span ≤ 24 h, and any other query parameter is `422`.
+- **No field carries a command.** Bodies are `extra="forbid"`; `command`, `script`, `argv`, `exec` and `action` are `422 unknown_field`, and the unit name is validated with a full match (a trailing newline is refused).
+- **`GET /servers/{id}/services` accepts only `state`, `application_id`, `q` and paging;** `environment` and `server_id` are `422` there, since the path already fixes the server.
 
 ---
 

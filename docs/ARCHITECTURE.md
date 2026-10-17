@@ -323,7 +323,7 @@ Normalisation table (single implementation, unit-tested — PRD §12):
 | `active_state=failed` or `sub_state=failed` | `FAILED` |
 | `active_state=activating` | `ACTIVATING` |
 | `active_state=deactivating` | `DEACTIVATING` |
-| Exporter series absent but host `up` | `UNCOLLECTED` |
+| Exporter series absent but host `up` — including `node_scrape_collector_success{collector="systemd"}=0`, and an allowlisted unit missing from a *successful* collection | `UNCOLLECTED` |
 | Host unreachable / stale | `UNKNOWN` (host-level stale wins) |
 | Platform has no systemd (Windows) | `UNSUPPORTED` |
 
@@ -820,6 +820,7 @@ Recorded rather than silently resolved. Each has a working default so Phase 1 is
 | OPEN-12 | Production topology and HA expectations | Single-host Compose in a dedicated management environment | Phase 6 |
 | OPEN-13 | Notification channel configuration: DB-managed or environment config? | DB table added in Phase 3 (see [DATABASE.md](DATABASE.md)) | Phase 3 |
 | ~~OPEN-14~~ | Prometheus target discovery: DCP-generated `file_sd` or native cloud SD? | **RESOLVED 2026-10-16 (M2.3): DCP-generated `file_sd`, no reload call** — see [§4 point 3](#4-metrics-collection-architecture) | Phase 2 |
+| OPEN-29 | **New with `TS-02` (2026-10-17).** §6.1 and PRD §4.5 name `sub_state`, `load_state`, enabled state and main PID, but neither `node_exporter`'s systemd collector nor `systemd_exporter` exposes them (tested, [TECH_STACK.md §5.3](TECH_STACK.md#53-systemd-metrics-integration)). Only a restricted agent could. | **Agreed with the product owner 2026-10-17:** M2.4 returns all four as `null` (unknown — never `0`, `""` or a guessed value), the `ACTIVE` row reads `active_state=active` alone (so `active/exited` is `ACTIVE`; the distinction is lost, not wrong), and the UI says "not collected by this source". The agent (`OPEN-05`) fills them later with no API change | Agent milestone (M6.1) |
 
 ---
 
