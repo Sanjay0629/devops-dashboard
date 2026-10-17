@@ -482,6 +482,9 @@ services:
     cgroup: host
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      # journald writes a PERSISTENT journal when /var/log/journal exists, so
+      # this volume is how `alloy-journal` below reads a real one (M3.1).
+      - fixture-journal:/var/log/journal
     tmpfs: [/run, /tmp]
     # systemd shuts down cleanly on SIGRTMIN+3 and ignores SIGTERM.
     stop_signal: SIGRTMIN+3
@@ -491,6 +494,54 @@ services:
       timeout: 5s
       retries: 12
       start_period: 5s
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+
+  # M3.1. Reads the REAL systemd journal that `systemd-host` writes, through the
+  # same pipeline as everything else (the directory holds config.alloy and
+  # journal.alloy). Its own identity, so its lines are distinguishable from the
+  # sample producer's. `group_add: 999` is `systemd-journal` in that Debian
+  # image; the id differs between distributions, which is why it is not baked
+  # into the image. Fixtures profile: it needs the fixture, and so shares its
+  # "not every Docker host can run this" caveat (scripts/smoke-test.sh step 18e).
+  alloy-journal:
+    <<: *hardening
+    profiles: [fixtures]
+    image: grafana/alloy:v1.5.1
+    user: "473:473"
+    group_add: ["999"]
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --disable-reporting
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/
+    environment:
+      ALLOY_ENVIRONMENT: development
+      ALLOY_SERVER_ID: 00000000-0000-4000-8000-00000000a111
+      ALLOY_HOSTNAME: journal-host.internal.example
+      ALLOY_APPLICATION_ID: 00000000-0000-4000-8000-0000000000a9
+      ALLOY_APP_SERVICE: unused
+      ALLOY_LOG_ROOT: /nonexistent
+      ALLOY_DOCKER_ROOT: /nonexistent
+      ALLOY_JOURNAL_PATH: /var/log/journal
+    volumes:
+      - ../alloy:/etc/alloy:ro
+      - fixture-journal:/var/log/journal:ro
+      - alloy-journal-data:/var/lib/alloy/data
+    depends_on:
+      systemd-host: { condition: service_healthy }
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/12345 && printf "GET /-/ready HTTP/1.0\r\n\r\n" >&3 && grep -q "ready" <&3'
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 256m }
@@ -623,3 +674,5 @@ volumes:
   grafana-data:
   sample-logs:
   alloy-data:
+  alloy-journal-data:
+  fixture-journal:
