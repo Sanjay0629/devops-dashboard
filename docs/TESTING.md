@@ -268,7 +268,7 @@ The sweep is run *by hand* inside the polling loops (`sweep_status()` in the wor
 
 `SMOKE_SYSTEMD=auto|require|skip` (default `auto`). The fixture needs `SYS_ADMIN` and a writable cgroup tree ([SECURITY.md §7](SECURITY.md#7-network-isolation)), which not every Docker host grants. `auto` runs the step and, if the fixture cannot start, says so loudly and ends with **`SMOKE TEST PASSED, BUT INCOMPLETE: 1 step(s) NOT RUN`** — never a plain pass. `require` makes that a failure; `skip` omits it and reports the same. Once the fixture is up, every assertion must hold in every mode. The fallback coverage for a host that cannot run it is the unit and integration suites (`tests/services/`, `tests/integration/test_services_api.py`, `test_services_refresh.py`), which assert the same rules against scripted Prometheus answers — and **scripted answers prove the portal's reading of a series, not that a real systemd produces it**; that is exactly what this step adds.
 
-**Step 8's Loki half ("accepts a push and returns it") is still not asserted**: Loki ingests nothing until M3.1, and `grafana` has no dashboards, so both stay placeholders inside the `observability` profile and the script starts neither. Step 12's "resource limits in the production overlay" is partial: no production overlay exists yet, so what exists is checked instead (non-root, no privileged flag, no added capabilities, limits declared in the file we have).
+**Step 8's Loki half is asserted as of M3.1 (step 18c):** a push with the seven allowed labels is accepted and comes back from a query carrying exactly those labels; an eighth label and an 8-day-old sample are each rejected with `400`; every label Loki holds is on the allowlist (and `service_name`, which Loki 3 adds by itself, is not among them); retention reads back as 14 days with the compactor on. What it does **not** yet show is Alloy shipping a file through to Loki (M3.1 commit 3). `grafana` still has no dashboards, so the script starts it nowhere. Step 12's "resource limits in the production overlay" is partial: no production overlay exists yet, so what exists is checked instead (non-root, no privileged flag, no added capabilities, limits declared in the file we have).
 
 Script-driven, run in CI and nightly:
 
@@ -279,7 +279,7 @@ Script-driven, run in CI and nightly:
 5. Seeded inventory visible through `GET /api/v1/servers`.
 6. `demo_mode: true` present and the UI banner rendered.
 7. Mock IdP login completes end to end.
-8. With the `observability` profile: Prometheus has the bundled exporter target `up`; a metric query returns data **(both asserted since M2.1)**; Loki accepts a push and returns it **(M3.1)**.
+8. With the `observability` profile: Prometheus has the bundled exporter target `up`; a metric query returns data **(both asserted since M2.1)**; Loki accepts a push and returns it **(asserted since M3.1, step 18c)**.
 9. Celery worker and beat are connected; the `ping` task round-trips.
 10. **Stopping PostgreSQL makes `/readyz` return `503` and the API degrade with honest error states — not with zeros.**
 11. `docker compose down -v` then `up` again reaches the same healthy state (no hidden local state).

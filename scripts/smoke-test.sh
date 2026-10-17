@@ -35,9 +35,9 @@ COMPOSE_FILE="${COMPOSE_FILE:-infra/compose/docker-compose.yml}"
 # request, so there has to be an identity provider to authenticate against.
 COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks)
 # M2.1: §11.8's Prometheus half. A separate invocation rather than a third
-# `--profile` on COMPOSE, because `loki` and `grafana` live in the same profile
-# and are still placeholders — starting them would add two minutes to every
-# run and assert nothing (CLAUDE.md §7).
+# `--profile` on COMPOSE, because `grafana` lives in the same profile and is still
+# a placeholder — starting it would add time to every run and assert nothing
+# (CLAUDE.md §7). `loki` is started by name in step 18c (M3.1).
 OBSERVABILITY=(docker compose -f "$COMPOSE_FILE" --profile observability)
 # Everything, for teardown: `down` only reaches services in the profiles it is
 # given, so the core-and-mocks invocation would leave Prometheus running.
@@ -830,6 +830,91 @@ case "$SMOKE_SYSTEMD" in
   *) fail "SMOKE_SYSTEMD must be auto, require or skip (got: $SMOKE_SYSTEMD)" ;;
 esac
 
+log "18c. Loki accepts a push, returns it, and enforces its limits (§11.8 Loki half, M3.1)"
+# Loki is started by name for the reason `OBSERVABILITY` says: `grafana` shares
+# its profile and is still a placeholder.
+"${OBSERVABILITY[@]}" up -d --wait --wait-timeout "$TIMEOUT_SECONDS" loki \
+  || { "${OBSERVABILITY[@]}" logs --tail=50 loki; fail "loki did not become healthy"; }
+loki_uid="$("${OBSERVABILITY[@]}" exec -T loki id -u | tr -d '\r')"
+[[ "$loki_uid" != "0" ]] || fail "loki runs as root"
+printf '  loki uid=%s\n' "$loki_uid"
+
+# From the backend container, over the project network: the same route the
+# M3.2 client will take, and nothing here depends on the published port.
+"${COMPOSE[@]}" exec -T backend python - <<'PYTHON' || fail "loki assertions failed"
+import json
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+LOKI = "http://loki:3100"
+# The seven labels of docs/ARCHITECTURE.md §5 point 1 (AD-21), and nothing else.
+ALLOWED = {"environment", "server_id", "hostname", "application_id",
+           "service", "source_type", "level"}
+MARKER = f"smoke-m31-{int(time.time())}"
+
+
+def push(stream: dict, line: str, ts_ns: int | None = None) -> tuple[int, str]:
+    body = json.dumps({"streams": [{"stream": stream,
+        "values": [[str(ts_ns or time.time_ns()), line]]}]}).encode()
+    request = urllib.request.Request(f"{LOKI}/loki/api/v1/push", data=body,
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, response.read().decode()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode()
+
+
+def get(path: str, **params: str) -> str:
+    query = ("?" + urllib.parse.urlencode(params)) if params else ""
+    with urllib.request.urlopen(f"{LOKI}{path}{query}", timeout=10) as response:
+        return response.read().decode()
+
+
+stream = {"environment": "staging", "server_id": "smoke", "hostname": "smoke.invalid",
+          "application_id": "smoke", "service": "smoke", "source_type": "application",
+          "level": "info"}
+
+status, _ = push(stream, MARKER)
+assert status == 204, f"a push with the seven allowed labels was refused: {status}"
+print("  a push with the seven allowed labels: 204")
+
+for _ in range(15):
+    result = json.loads(get("/loki/api/v1/query_range", query='{server_id="smoke"}'))["data"]["result"]
+    lines = [v[1] for s in result for v in s["values"]]
+    if MARKER in lines:
+        break
+    time.sleep(1)
+else:
+    raise AssertionError("the pushed line never came back from a query")
+assert result[0]["stream"] == stream, result[0]["stream"]
+print("  it comes back from a query, carrying exactly those seven labels")
+
+# An eighth label is how a request id or a path would arrive. Rejected here is
+# the backstop; the shipper drops such labels before they get this far.
+status, text = push({**stream, "request_id": "r-1"}, MARKER + "-eight")
+assert status == 400 and "label names" in text, (status, text)
+print("  an eighth label is rejected (400): the cardinality backstop holds")
+
+# Older than reject_old_samples_max_age (7 d): a flapping shipper cannot back-fill.
+status, text = push(stream, MARKER + "-old", time.time_ns() - 8 * 86400 * 10**9)
+assert status == 400 and "too old" in text, (status, text)
+print("  an 8-day-old sample is rejected (400)")
+
+labels = set(json.loads(get("/loki/api/v1/labels"))["data"])
+assert labels <= ALLOWED, f"labels outside the allowlist: {sorted(labels - ALLOWED)}"
+assert "service_name" not in labels
+print(f"  every label Loki holds is on the allowlist: {sorted(labels)}")
+
+config = get("/config")
+assert "retention_enabled: true" in config, "compactor retention is off"
+assert "retention_period: 2w" in config, "retention is not 14 days (OPEN-08)"
+assert "reporting_enabled: false" in config, "Loki would send usage statistics"
+print("  retention is 14 d with the compactor on; usage reporting is off")
+PYTHON
+
 log "19. A database outage degrades honestly, with no zeros (§11.10)"
 "${COMPOSE[@]}" stop postgres >/dev/null
 # Poll rather than sleep: the readiness probe has its own per-check deadline,
@@ -878,5 +963,6 @@ if (( ${#NOT_RUN[@]} > 0 )); then
 else
   printf '\nSMOKE TEST PASSED\n'
 fi
-printf 'Covered docs/TESTING.md §11 steps 1-12, with step 8 partial:\n'
-printf '  its Prometheus half is asserted (step 18); its Loki half needs M3.1.\n'
+printf 'Covered docs/TESTING.md §11 steps 1-12. Step 8: the Prometheus half is\n'
+printf '  asserted (step 18), and so is Loki accepting a push and returning it\n'
+printf '  (step 18c). Alloy shipping through to Loki is not yet (M3.1 commit 3).\n'

@@ -14,9 +14,10 @@
 # VERIFIED: the `core` stack and the `mocks` profile are started and asserted
 # by scripts/smoke-test.sh, which passes. As of M2.1 `prometheus` and
 # `node-exporter` are real too — configured, scraped, and asserted by step 18
-# of that script through the backend's own client. `grafana` and `loki` are
-# still placeholders inside the same `observability` profile (no dashboards, no
-# ingestion), as is the `logs` profile's `alloy`; they arrive with M3.1.
+# of that script through the backend's own client. As of M3.1 `loki` is real too
+# (limits, retention, asserted by step 18c). `grafana` is still a placeholder
+# (no dashboards), and so is the `logs` profile's `alloy`, which collects
+# nothing until M3.1 commit 3.
 # See PROGRESS.md.
 #
 # Image versions are exact tags but are NOT digest-pinned yet; AD-16 requires
@@ -411,8 +412,11 @@ services:
       resources:
         limits: { cpus: "0.5", memory: 256m }
 
-  # PLACEHOLDER until M3.1: `infra/loki/loki-config.yaml` is minimal and
-  # nothing pushes to it.
+  # M3.1. Limits, retention and the label-count backstop are in
+  # infra/loki/loki-config.yaml; the label allowlist is Alloy's (AD-21). The
+  # image runs as uid 10001. The loopback port is a development convenience
+  # (the smoke test pushes and reads through it); nothing outside the project
+  # network needs Loki in a deployment (SECURITY.md §7).
   loki:
     <<: *hardening
     profiles: [observability]
@@ -423,6 +427,15 @@ services:
     volumes:
       - ../loki:/etc/loki:ro
       - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1g }
 
   # PLACEHOLDER: no dashboards and no provisioned data source. DCP renders its
   # own charts (M2.2); this is here for ad-hoc exploration only.
