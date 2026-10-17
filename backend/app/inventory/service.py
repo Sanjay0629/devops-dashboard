@@ -77,6 +77,7 @@ from app.inventory.schemas import (
     ServerUpdateRequest,
 )
 from app.metrics import discovery
+from app.monitoring.read import current_reference, evaluate
 
 logger = get_logger(__name__)
 
@@ -180,19 +181,6 @@ def server_summary(server: Server) -> ServerSummary:
     )
 
 
-def _stale_after(environment: str) -> int:
-    """This environment's ``stale`` line (AD-14, ``DCP_HEALTH_THRESHOLDS``)."""
-    return get_settings().health_thresholds.for_environment(environment).stale_after_seconds
-
-
-def _is_stale(server: Server) -> bool | None:
-    """``None`` when the host has never been seen — that is not staleness."""
-    if server.last_seen_at is None:
-        return None
-    age = datetime.now(UTC) - server.last_seen_at
-    return age.total_seconds() > _stale_after(server.environment)
-
-
 async def server_detail(db: AsyncSession, server: Server) -> ServerDetail:
     """§14.3. The sections with no source yet say so rather than guessing."""
     applications = (
@@ -215,15 +203,19 @@ async def server_detail(db: AsyncSession, server: Server) -> ServerDetail:
             )
         ).scalar_one()
     )
+    settings = get_settings()
+    health = evaluate(server, settings.health_thresholds, await current_reference(settings))
     return ServerDetail(
         **server_summary(server).model_dump(),
         provider_metadata=server.provider_metadata,
-        stale=_is_stale(server),
+        stale=health.stale,
         health=HealthSection(
-            state=None,
-            data_state="not_configured",
-            stale_after_seconds=_stale_after(server.environment),
-            unavailable_reason="Server health evaluation is not implemented yet (M2.5).",
+            state=health.state,
+            data_state=health.data_state,
+            collected_at=health.collected_at,
+            source="prometheus",
+            stale_after_seconds=health.stale_after_seconds,
+            unavailable_reason=health.unavailable_reason,
         ),
         applications=[
             AssociatedApplication(

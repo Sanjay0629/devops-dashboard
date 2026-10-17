@@ -48,11 +48,9 @@ from app.monitoring.health import HealthState
 UTILISATION_REASON = (
     "Fleet-wide utilisation is not aggregated yet; per-server metrics are on each server's page."
 )
-HEALTH_REASON = "Server health evaluation is not implemented yet (M2.5)."
 ALERTS_REASON = "Alerting is not implemented yet (M3.3)."
 DEPLOYMENTS_REASON = "Deployments are not implemented yet (M5.1)."
 OPERATIONS_REASON = "Service operations are not implemented yet (M4.2)."
-HEALTH_CHANGES_REASON = "Health-change history is not implemented yet (M2.5)."
 
 
 class ServerCounts(DataSection):
@@ -77,15 +75,28 @@ class ServerCounts(DataSection):
 
 
 class ServerHealthRollup(DataSection):
-    """The health rollup §13.1 draws inside ``servers``. No source until M2.1.
+    """The health rollup §13.1 draws inside ``servers`` (M2.5).
 
-    Every count is ``null``. A zero here would read as "no critical servers",
-    which is exactly the substitution PRD §4.2 forbids.
+    Counts **every readable server** — the population of ``servers.total`` — so
+    the five counts sum to it; a retired or unmonitored server is ``unknown``,
+    not omitted. They are the same states the ``health_status`` filter on §13.2
+    selects, from the same rule, so a card's number is the length of the list it
+    links to.
+
+    ``ok`` only while Prometheus has answered recently; otherwise ``stale``,
+    ``unavailable`` or ``not_configured`` and **every count is ``null``**, never
+    ``0`` (§4 rule 2, PRD §4.2). ``collected_at`` is when Prometheus last
+    answered, i.e. the age of the evidence.
+
+    ``critical`` is always ``null``: it would come from utilisation (``OPEN-28``),
+    which is not evaluated, and ``null`` says so where ``0`` would say "none".
     """
 
     healthy: int | None = None
     warning: int | None = None
     critical: int | None = None
+    stale: int | None = None
+    unreachable: int | None = None
     unknown: int | None = None
 
 
@@ -127,6 +138,31 @@ class RecentActivitySection(DataSection):
     items: list[dict[str, object]] | None = None
 
 
+class HealthChange(BaseModel):
+    """One status move made by the sweep (``SERVER_STATUS_CHANGED``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    server_id: uuid.UUID
+    display_name: str
+    environment: str
+    previous_status: str
+    new_status: str
+    health_state: HealthState | None
+    occurred_at: datetime
+
+
+class RecentHealthChangesSection(DataSection):
+    """The latest sweep moves, newest first, over the caller's readable servers.
+
+    A real list from a real table (``audit_events``), so ``[]`` is a true "no
+    recorded change" and is distinct from ``null`` ("not available"). Only the
+    sweep's moves appear: an administrator's edit is ``SERVER_UPDATED``.
+    """
+
+    items: list[HealthChange] | None = None
+
+
 class DashboardFilters(BaseModel):
     """The filters actually applied, echoed back (§13.1 ``filters_applied``)."""
 
@@ -152,7 +188,7 @@ class DashboardSummary(BaseModel):
     active_alerts: ActiveAlertsSection
     recent_deployments: RecentActivitySection
     recent_operations: RecentActivitySection
-    recent_health_changes: RecentActivitySection
+    recent_health_changes: RecentHealthChangesSection
     filters_applied: DashboardFilters
     demo_mode: bool
     #: How long this payload may be served from cache. Surfaced so the client
@@ -171,12 +207,14 @@ class ServerHealthRow(BaseModel):
     environment: str
     provider: str
     status: str
-    #: ``null`` at this milestone and never defaulted to ``healthy``: no
-    #: collector has looked at this host. The list's ``health`` section says
-    #: why, once, rather than repeating the reason on every row.
+    #: ``null`` when nothing could be evaluated (Prometheus unconfigured, silent
+    #: or stale) and never defaulted to ``healthy``; the list's ``health``
+    #: section says why, once, rather than on every row. ``unknown`` means it
+    #: *was* evaluated and nothing is known about this host.
     health_state: HealthState | None
     last_seen_at: datetime | None
-    #: ``null`` when the host has never been seen — that is not staleness.
+    #: Past the ``stale`` line. ``null`` whenever ``health_state`` is ``null`` or
+    #: ``unknown`` — never seen is not staleness.
     stale: bool | None
     #: Real: a count of rows in ``services``.
     failed_service_count: int
@@ -191,7 +229,7 @@ class DashboardHealthList(BaseModel):
 
     items: list[ServerHealthRow]
     page: CursorPage
-    #: Why every row's ``health_state`` is ``null``.
+    #: The rollup, and why every row's ``health_state`` is ``null`` when it is.
     health: ServerHealthRollup
     #: Why every row's ``active_alert_count`` is ``null``.
     alerts: ActiveAlertsSection

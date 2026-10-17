@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from redis.exceptions import RedisError
 
-from app.monitoring import sweep
+from app.monitoring import marker
 
 AT = datetime(2026, 10, 17, 12, 0, 0, tzinfo=UTC)
 
@@ -38,10 +38,10 @@ class FakeRedis:
 
 def test_a_written_marker_reads_back_as_the_same_instant() -> None:
     client = FakeRedis()
-    sweep.write_marker(client, AT)
+    marker.write_marker(client, AT)
     key, value = client.sets[0]
-    assert key == sweep.MARKER_KEY
-    assert sweep.read_marker(FakeRedis(value.encode())) == AT
+    assert key == marker.MARKER_KEY
+    assert marker.read_marker(FakeRedis(value.encode())) == AT
 
 
 @pytest.mark.parametrize(
@@ -54,11 +54,11 @@ def test_anything_unreadable_is_no_reference(stored: Any) -> None:
     A naive timestamp is refused because aging against a guessed zone is how a
     host gets called unreachable by an hour.
     """
-    assert sweep.read_marker(FakeRedis(stored)) is None
+    assert marker.read_marker(FakeRedis(stored)) is None
 
 
 def test_a_redis_failure_on_read_is_no_reference_not_an_error() -> None:
-    assert sweep.read_marker(FakeRedis(fail=True)) is None
+    assert marker.read_marker(FakeRedis(fail=True)) is None
 
 
 def test_a_redis_failure_on_write_is_swallowed() -> None:
@@ -66,4 +66,4 @@ def test_a_redis_failure_on_write_is_swallowed() -> None:
 
     A stale marker only makes the sweep more conservative.
     """
-    sweep.write_marker(FakeRedis(fail=True), AT)
+    marker.write_marker(FakeRedis(fail=True), AT)

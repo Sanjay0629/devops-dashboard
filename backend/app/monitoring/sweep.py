@@ -33,11 +33,9 @@ edit form would answer ``409`` because a host went quiet.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
-from typing import Any, Final, Protocol, cast
+from datetime import datetime
+from typing import Final, cast
 
-from redis import Redis
-from redis.exceptions import RedisError
 from sqlalchemy import Engine, insert, text
 
 from app.audit.models import AuditEvent
@@ -45,10 +43,10 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.metrics import discovery
 from app.monitoring.health import classify_health
+from app.monitoring.marker import read_marker, redis_client
 
 logger = get_logger(__name__)
 
-MARKER_KEY: Final = "dcp:monitoring:prometheus_answered_at"
 ACTOR_LABEL: Final = "system:health-sweep"
 ACTION_TYPE: Final = "SERVER_STATUS_CHANGED"
 
@@ -62,54 +60,6 @@ _STATUS_FOR_HEALTH: Final = {
     "stale": "STALE",
     "unreachable": "UNREACHABLE",
 }
-
-_SOCKET_TIMEOUT_SECONDS: Final = 2.0
-
-
-class _Store(Protocol):
-    def get(self, name: str) -> Any: ...
-    def set(self, name: str, value: str) -> Any: ...
-
-
-def redis_client(settings: Settings) -> Redis:
-    """A short-deadline client; every outbound call has a timeout."""
-    return Redis.from_url(
-        settings.redis_url.get_secret_value(),
-        socket_connect_timeout=_SOCKET_TIMEOUT_SECONDS,
-        socket_timeout=_SOCKET_TIMEOUT_SECONDS,
-    )
-
-
-def write_marker(client: _Store, at: datetime | None = None) -> None:
-    """Record that Prometheus answered. Best effort: a failure is logged, not raised.
-
-    A marker that fails to advance only makes the sweep more conservative, so
-    it must never stop the probe from writing its own results.
-    """
-    try:
-        client.set(MARKER_KEY, (at or datetime.now(UTC)).isoformat())
-    except (RedisError, OSError):
-        logger.warning("prometheus_marker_not_written")
-
-
-def read_marker(client: _Store) -> datetime | None:
-    """When Prometheus last answered, or ``None`` for anything unreadable.
-
-    A naive timestamp is refused rather than assumed to be UTC.
-    """
-    try:
-        stored = client.get(MARKER_KEY)
-    except (RedisError, OSError):
-        logger.warning("prometheus_marker_unreadable")
-        return None
-    if not isinstance(stored, (bytes, str)):
-        return None
-    try:
-        text_value = stored.decode() if isinstance(stored, bytes) else stored
-        marker = datetime.fromisoformat(text_value)
-    except ValueError:
-        return None
-    return marker if marker.tzinfo is not None else None
 
 
 def sweep(engine: Engine, settings: Settings, reference: datetime | None) -> dict[str, int | str]:

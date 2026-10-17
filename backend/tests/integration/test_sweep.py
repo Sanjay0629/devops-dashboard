@@ -24,7 +24,7 @@ import pytest
 from sqlalchemy import Engine, text
 
 from app.core.config import get_settings
-from app.monitoring import sweep
+from app.monitoring import marker, sweep
 from tests.integration.test_auth_flow import redis_url  # noqa: F401
 from tests.integration.test_monitoring import (  # noqa: F401 — isolated_fleet is used by name
     insert_server,
@@ -334,7 +334,7 @@ def test_the_probe_records_that_prometheus_answered(
     monkeypatch.setenv("DCP_REDIS_URL", redis_url)
     get_settings.cache_clear()
     client = redis.Redis.from_url(redis_url)
-    client.delete(sweep.MARKER_KEY)
+    client.delete(marker.MARKER_KEY)
     instance = unique("mk")
     insert_server(isolated_fleet, instance=instance)
     fake = FakePrometheus()
@@ -343,10 +343,10 @@ def test_the_probe_records_that_prometheus_answered(
     before = datetime.now(UTC)
     run_probe(isolated_fleet, fake)
 
-    marker = sweep.read_marker(client)
-    assert marker is not None
-    assert before - timedelta(seconds=1) <= marker <= datetime.now(UTC) + timedelta(seconds=1)
-    client.delete(sweep.MARKER_KEY)
+    answered = marker.read_marker(client)
+    assert answered is not None
+    assert before - timedelta(seconds=1) <= answered <= datetime.now(UTC) + timedelta(seconds=1)
+    client.delete(marker.MARKER_KEY)
 
 
 def test_a_probe_that_could_not_ask_prometheus_leaves_the_marker_alone(
@@ -363,13 +363,13 @@ def test_a_probe_that_could_not_ask_prometheus_leaves_the_marker_alone(
     get_settings.cache_clear()
     client = redis.Redis.from_url(redis_url)
     old = REFERENCE - timedelta(hours=1)
-    sweep.write_marker(client, old)
+    marker.write_marker(client, old)
     insert_server(isolated_fleet, instance=unique("mk2"))
 
     monitoring.probe_agents()
 
-    assert sweep.read_marker(client) == old
-    client.delete(sweep.MARKER_KEY)
+    assert marker.read_marker(client) == old
+    client.delete(marker.MARKER_KEY)
 
 
 def test_the_task_reads_the_marker_and_sweeps(
@@ -386,14 +386,14 @@ def test_the_task_reads_the_marker_and_sweeps(
     client = redis.Redis.from_url(redis_url)
     server_id = make(isolated_fleet, age=400)
 
-    client.delete(sweep.MARKER_KEY)
+    client.delete(marker.MARKER_KEY)
     assert monitoring.sweep_status()["outcome"] == "no_reference"
     assert status_of(isolated_fleet, server_id) == "MANAGED"
 
-    sweep.write_marker(client, REFERENCE)
+    marker.write_marker(client, REFERENCE)
     assert monitoring.sweep_status()["outcome"] == "swept"
     assert status_of(isolated_fleet, server_id) == "STALE"
-    client.delete(sweep.MARKER_KEY)
+    client.delete(marker.MARKER_KEY)
 
 
 def test_the_sweep_is_scheduled() -> None:

@@ -30,7 +30,7 @@ a Prometheus restart, accepted over a status that outlives its evidence.
 ``last_seen_at`` is set to the host's latest successful scrape and only ever
 moves forward. It is the field the M2.5 status sweep reads (AD-14), and a probe
 that got an answer from Prometheus also records *when* in Redis
-(``app.monitoring.sweep``), which is what the sweep measures age against.
+(``app.monitoring.marker``), which is what the sweep measures age against.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.metrics import discovery, templates
 from app.metrics.client import PrometheusClient, PrometheusUnavailableError, Sample
-from app.monitoring import sweep
+from app.monitoring import marker
 
 logger = get_logger(__name__)
 
@@ -169,9 +169,9 @@ def probe(
         # After the write, so the marker never claims a moment the rows do not
         # yet reflect. Only a real answer advances it (M2.5, D2): an outage
         # leaves it where it was, and the sweep ages nothing against it.
-        marker_store = sweep.redis_client(settings)
+        marker_store = marker.redis_client(settings)
         try:
-            sweep.write_marker(marker_store)
+            marker.write_marker(marker_store)
         finally:
             marker_store.close()
     return {"targets": len(targets), "changed": changed, "outcome": outcome}

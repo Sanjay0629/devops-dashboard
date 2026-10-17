@@ -1098,7 +1098,7 @@ export interface components {
       failed_services: components['schemas']['FailedServicesSection'];
       filters_applied: components['schemas']['DashboardFilters'];
       recent_deployments: components['schemas']['RecentActivitySection'];
-      recent_health_changes: components['schemas']['RecentActivitySection'];
+      recent_health_changes: components['schemas']['RecentHealthChangesSection'];
       recent_operations: components['schemas']['RecentActivitySection'];
       server_health: components['schemas']['ServerHealthRollup'];
       servers: components['schemas']['ServerCounts'];
@@ -1174,6 +1174,33 @@ export interface components {
     HTTPValidationError: {
       /** Detail */
       detail?: components['schemas']['ValidationError'][];
+    };
+    /**
+     * HealthChange
+     * @description One status move made by the sweep (``SERVER_STATUS_CHANGED``).
+     */
+    HealthChange: {
+      /** Display Name */
+      display_name: string;
+      /** Environment */
+      environment: string;
+      /** Health State */
+      health_state:
+        ('healthy' | 'warning' | 'critical' | 'stale' | 'unreachable' | 'unknown') | null;
+      /** New Status */
+      new_status: string;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+      /** Previous Status */
+      previous_status: string;
+      /**
+       * Server Id
+       * Format: uuid
+       */
+      server_id: string;
     };
     /** HealthCheckConfig */
     HealthCheckConfig: {
@@ -1582,6 +1609,31 @@ export interface components {
       /** Unavailable Reason */
       unavailable_reason?: string | null;
     };
+    /**
+     * RecentHealthChangesSection
+     * @description The latest sweep moves, newest first, over the caller's readable servers.
+     *
+     *     A real list from a real table (``audit_events``), so ``[]`` is a true "no
+     *     recorded change" and is distinct from ``null`` ("not available"). Only the
+     *     sweep's moves appear: an administrator's edit is ``SERVER_UPDATED``.
+     */
+    RecentHealthChangesSection: {
+      /** Collected At */
+      collected_at?: string | null;
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
+      /** Items */
+      items?: components['schemas']['HealthChange'][] | null;
+      /** Source */
+      source?: string | null;
+      /** Stale After Seconds */
+      stale_after_seconds?: number | null;
+      /** Unavailable Reason */
+      unavailable_reason?: string | null;
+    };
     /** RoleDetail */
     RoleDetail: {
       /** Description */
@@ -1903,10 +1955,21 @@ export interface components {
     };
     /**
      * ServerHealthRollup
-     * @description The health rollup §13.1 draws inside ``servers``. No source until M2.1.
+     * @description The health rollup §13.1 draws inside ``servers`` (M2.5).
      *
-     *     Every count is ``null``. A zero here would read as "no critical servers",
-     *     which is exactly the substitution PRD §4.2 forbids.
+     *     Counts **every readable server** — the population of ``servers.total`` — so
+     *     the five counts sum to it; a retired or unmonitored server is ``unknown``,
+     *     not omitted. They are the same states the ``health_status`` filter on §13.2
+     *     selects, from the same rule, so a card's number is the length of the list it
+     *     links to.
+     *
+     *     ``ok`` only while Prometheus has answered recently; otherwise ``stale``,
+     *     ``unavailable`` or ``not_configured`` and **every count is ``null``**, never
+     *     ``0`` (§4 rule 2, PRD §4.2). ``collected_at`` is when Prometheus last
+     *     answered, i.e. the age of the evidence.
+     *
+     *     ``critical`` is always ``null``: it would come from utilisation (``OPEN-28``),
+     *     which is not evaluated, and ``null`` says so where ``0`` would say "none".
      */
     ServerHealthRollup: {
       /** Collected At */
@@ -1922,12 +1985,16 @@ export interface components {
       healthy?: number | null;
       /** Source */
       source?: string | null;
+      /** Stale */
+      stale?: number | null;
       /** Stale After Seconds */
       stale_after_seconds?: number | null;
       /** Unavailable Reason */
       unavailable_reason?: string | null;
       /** Unknown */
       unknown?: number | null;
+      /** Unreachable */
+      unreachable?: number | null;
       /** Warning */
       warning?: number | null;
     };

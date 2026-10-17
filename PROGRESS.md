@@ -2711,7 +2711,7 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-### M2.5 plan — D1–D4 APPROVED 2026-10-17 as written; commits 1–2 of 5 done, commits 3–5 not started
+### M2.5 plan — D1–D4 APPROVED 2026-10-17 as written; commits 1–3 of 5 done, commits 4–5 not started
 
 **Commit 1 (pure classifier + `DCP_HEALTH_THRESHOLDS`) — done, committed.** `app/monitoring/health.py` holds `HealthThresholds`, `HealthThresholdTable` (a `default` plus the four `servers.environment` values, `extra="forbid"`, every merged resolution validated at startup) and `classify_health(thresholds, last_seen_at, reference) -> HostHealth(state, data_state)`. Tests: `backend/tests/monitoring/test_health_classifier.py` (40). Real results: unit **817 passed**; integration **365 passed** against real PostgreSQL/Redis; `ruff check`, `ruff format --check`, `mypy app` clean; `generate-api-types.sh` leaves `schema.ts` unchanged. A mutation check (`>` → `>=` on the stale line) fails `test_the_time_matrix[300-warning-ok]`. **Not run at the time:** `check-all.sh` — and when it was run for commit 2 it caught a real mismatch from this commit (`.env.example` said `{}`, Compose defaults to empty; fixed in commit 2).
 
@@ -2742,7 +2742,25 @@ Assumptions and consequences to review:
 - **Issue 67 is resolved by D2**, not by a longer threshold: a Prometheus outage freezes the marker, so nothing ages. A *Redis* flush also freezes everything until the next probe rewrites the marker (≤ `agent_probe_interval_seconds`).
 - The sweep reads `last_seen_at` as written by the probe, which only moves forward; the sweep does not read `agent_status`.
 
-**Next: commit 3 (read path).** Real `health_state`/`data_state` on server detail and the dashboard, a SQL `CASE` twin of `classify_health` with a parity test, the `health_status` filter and rollup, the stale-servers counter, and `recent_health_changes` from the `SERVER_STATUS_CHANGED` rows (D4). The read path must take its reference from the same Redis marker and report `unknown` when it is missing.
+**Commit 3 (read path) — done, committed.**
+
+- `app/monitoring/read.py`: `Reference` (the Redis marker, **usable only while fresh = 3 probe intervals**), `evaluate(server, table, reference)` and `health_state_expr(table, reference_at)`, the SQL `CASE` twin. Gates, in order: `RETIRED`, then `normalise.gate` (unsupported OS / monitoring off / no `metrics_instance` — the function the service views already use), then never seen ⇒ `unknown`; only then the time ladder. **No usable reference (unconfigured, never answered, or older than 3 probe intervals) ⇒ nothing is judged: `state` is `null`**, not `unknown`.
+- The twin compares timestamps (`last_seen_at < reference - N s`), not an extracted age, so its boundary is exactly the Python `age > N`.
+- `app/monitoring/marker.py` now owns the marker (moved out of `sweep.py` to avoid import cycles); `HealthState` lives in `monitoring.health`.
+- Dashboard: `server_health` is a real rollup over **every readable server** (sum = `servers.total`; adds `stale` and `unreachable`; `critical` stays `null`, `OPEN-28`); counts are `null` (never `0`) when the reference is unusable. `GET /dashboard/health` rows carry `health_state` and `stale` from `evaluate`, and `health_status` filters in SQL, so keyset paging works over the filtered set. `recent_health_changes` is the latest 10 `SERVER_STATUS_CHANGED` rows in 30 days, scope-filtered through the audit row's target; `[]` is a true "none recorded". Server detail's `health` and `stale` use the same function. `inventory.service._is_stale`/`_stale_after` and the dashboard `_is_stale` are gone.
+- Contracts: API_CONTRACTS §13.1, §13.2, §14.3 rewritten; `frontend/src/api/schema.ts` regenerated.
+
+Real results (2026-10-17): `check-all.sh` — 17 of 18 checks passed in the full run: unit **848 passed**, integration **397 passed** (real PostgreSQL 17.2 and Redis), frontend tsc/eslint/prettier/vitest (211)/build clean, changed-line coverage backend 290/303. The 18th, `contracts: api types`, failed because the regenerated `schema.ts` was not staged; re-run alone after staging it, it passed. Mutation checks each fail the expected test: SQL stale line off by one and a dropped `RETIRED` gate (both caught only by the parity test), a reference that ignores freshness, and an unscoped `recent_health_changes`. **Not run:** the smoke test; the UI in a browser.
+
+Consequences and assumptions to review:
+
+- **The dashboard page (commit 4) has not been updated.** It still renders Healthy / Warning / Critical cards and a banner for Health changes; with real data the rollup shows numbers for the first two, there are no cards yet for `stale` / `unreachable` / `unknown`, and a `recent_health_changes` section that is `ok` has no list rendering. Nothing was viewed in a browser.
+- **`stale` on a row/detail changed meaning slightly:** it now follows the *health verdict* (`null` for `unknown`, including a monitoring-disabled server with an old `last_seen_at`; before, it was `age > stale line` for any seen host). At defaults the numbers agree for every monitored host.
+- **A stale reference hides health everywhere**, including per-server detail, rather than showing a frozen last-known state with a stale label. Chosen for the simplest rule that obeys §4 rule 2; a "last known" display could be added without a contract change.
+- **The rollup's `servers.stale`/`unreachable` and `server_health.stale`/`unreachable` are different numbers** (stored status vs computed health) and the UI must label them so.
+- The dashboard cache (15 s) is not keyed on the reference, so a marker change shows up after the entry expires, like any other write.
+
+**Next: commit 4 (frontend).** Health on the dashboard and server detail (cards for the five states labelled apart from the status counts, last-collected times, a distinct never-seen state, the `recent_health_changes` list), tests incl. axe, mutation-check the key rule (`null` is never rendered as `0`). Then commit 5 (smoke step 18 with tight thresholds, contract/AD-14 amendments, PROGRESS).
 
 
 Read PRD §4.2, [ARCHITECTURE.md §4 point 5](docs/ARCHITECTURE.md#4-metrics-collection-architecture) (AD-14) and [IMPLEMENTATION_PLAN.md M2.5](docs/IMPLEMENTATION_PLAN.md#m25--stale-data-detection) first. Branch `phase-M2.5` was cut from `main` after PR #17; the next session starts there.
