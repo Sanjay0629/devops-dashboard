@@ -59,15 +59,15 @@ from app.services.schemas import (
 logger = get_logger(__name__)
 
 #: Which permission each action in a policy needs from the caller. ``status`` is
-#: a read, and ``logs_tail`` is the system-log permission (``logs:query``, the
-#: seeded form of ``logs:read:system``). None of this authorises anything — it
+#: a read, and ``logs_tail`` is the system-log permission
+#: (``logs:read:system``). None of this authorises anything — it
 #: only decides which buttons the UI offers (mandatory rule 4).
 _ACTION_PERMISSION: dict[str, tuple[str, str]] = {
     "start": ("service", "start"),
     "stop": ("service", "stop"),
     "restart": ("service", "restart"),
     "status": ("service", "read"),
-    "logs_tail": ("logs", "query"),
+    "logs_tail": ("logs", "read:system"),
 }
 
 

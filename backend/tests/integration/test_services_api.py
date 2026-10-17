@@ -772,7 +772,7 @@ async def test_logs_need_the_system_log_permission_which_a_viewer_lacks(fleet: F
     response = await call(fleet.client, "GET", fleet.url("web", "nginx.service", "/logs"))
 
     assert response.status_code == 403
-    assert "logs:query" in denials(fleet.engine, fleet.caller)
+    assert "logs:read:system" in denials(fleet.engine, fleet.caller)
 
 
 async def test_logs_for_an_unregistered_unit_or_unseen_server_are_404(fleet: Fleet) -> None:

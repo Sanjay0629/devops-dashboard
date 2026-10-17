@@ -11,9 +11,8 @@ Permissions, every one explicit on its route (mandatory rule 4):
   never ``403`` (§2);
 * registration — ``server:write``, the contract's permission, again against the
   server's scope;
-* logs — ``logs:query``, which is the seeded form of the contract's
-  ``logs:read:system`` (migration 0004 deliberately left the two spellings
-  alone). The route's permission denial is audited by the dependency; a scope
+* logs — ``logs:read:system`` (renamed from the seeded ``logs:query`` by
+  migration 0007, OPEN-32). The route's permission denial is audited by the dependency; a scope
   miss is a ``404``.
 
 **An action policy is a privilege, and only an Administrator may assign or
@@ -76,7 +75,7 @@ ServiceName = Annotated[
 ]
 ReadServices = Annotated[Authorized, require_permission("service", "read")]
 WriteServers = Annotated[Authorized, require_permission("server", "write")]
-QueryLogs = Annotated[Authorized, require_permission("logs", "query")]
+QueryLogs = Annotated[Authorized, require_permission("logs", "read:system")]
 
 Sort = Literal["service_name", "server"]
 Order = Literal["asc", "desc"]
@@ -387,6 +386,6 @@ async def service_logs(
             raise field_error(["query", "from"], "range", "`from` must be before `to`.")
         if to - from_ > MAX_LOG_RANGE:
             raise field_error(["query", "to"], "range", "The range may not exceed 24 hours.")
-    server = await service.load_server(db, server_id, authorized, "logs", "query")
+    server = await service.load_server(db, server_id, authorized, "logs", "read:system")
     await service.load_service(db, server, service_name)
     raise NotConfiguredError("Log search is not configured.", details={"integration": "loki"})

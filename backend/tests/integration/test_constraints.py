@@ -455,7 +455,10 @@ class TestSeededReferenceData:
                 )
             )
         }
-        assert actions == {"read"}
+        # `read` and the `read:<scope>` forms (migration 0007: `logs:read:application`).
+        # Anything else -- `query`, `write`, `start` -- is not a read.
+        assert actions == {"read", "read:application"}
+        assert all(action == "read" or action.startswith("read:") for action in actions)
 
     @pytest.mark.security
     def test_only_approver_holds_approve_permissions(self, connection: Connection) -> None:
