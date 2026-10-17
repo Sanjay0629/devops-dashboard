@@ -1,0 +1,41 @@
+// The systemd journal source. A separate file, loaded together with config.alloy
+// by pointing Alloy at the DIRECTORY (`alloy run /etc/alloy/`), because a host
+// with no journal must not load it: a source whose path does not exist is an
+// unhealthy component, and an unhealthy component makes `/-/ready` fail.
+//
+// It sets RAW labels only and forwards into `loki.process.common`, exactly like
+// the file sources, so the level and service collapsing, the redaction and the
+// label allowlist all apply to it too. Nothing else is needed here.
+//
+//   ALLOY_JOURNAL_PATH   /var/log/journal on a persistent-journal host
+//
+// The user running Alloy needs read access to the journal files (group
+// `systemd-journal` or `adm` on most distributions).
+
+loki.relabel "journal" {
+	forward_to = []
+
+	// The unit, only when it is a `.service`. A `.scope`, a `.slice` and a
+	// missing unit set no label and so end as `service="other"` in `common`;
+	// an instance (`foo@bar.service`) and a transient `run-*` unit are collapsed
+	// there too. Unit names are otherwise unbounded (`session-1234.scope`).
+	rule {
+		source_labels = ["__journal__systemd_unit"]
+		regex         = "(.+\\.service)"
+		target_label  = "service"
+	}
+
+	// emerg|alert|crit|err|warning|notice|info|debug; `common` maps the spellings.
+	rule {
+		source_labels = ["__journal_priority_keyword"]
+		target_label  = "level"
+	}
+}
+
+loki.source.journal "journal" {
+	path          = sys.env("ALLOY_JOURNAL_PATH")
+	max_age       = "12h"
+	labels        = {source_type = "journald"}
+	relabel_rules = loki.relabel.journal.rules
+	forward_to    = [loki.process.common.receiver]
+}

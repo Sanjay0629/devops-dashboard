@@ -278,7 +278,7 @@ done unmet and makes M1.6 large.
 
 **Responsibility:** collect journald, Nginx, PHP-FPM, application and Docker logs; relabel to the bounded label set; apply best-effort redaction; push to Loki.
 **Why:** PRD §4.7.
-**Rules:** the label allowlist in [ARCHITECTURE.md §5](ARCHITECTURE.md#5-centralized-logging-architecture) is enforced in the Alloy config; outbound push only, no inbound port; config is version-controlled and templated per environment.
+**Rules:** the label allowlist in [ARCHITECTURE.md §5](ARCHITECTURE.md#5-centralized-logging-architecture) is enforced in the Alloy config (`stage.label_keep`, last, after every guard); outbound push only, no inbound port; config is version-controlled and parameterised per host by environment variables (`ALLOY_*`, listed in the file's header) — rendering them from inventory is later work. `alloy fmt` is the formatter (tabs); `config.alloy` and `journal.alloy` are `fmt`-clean. **Alloy 1.5.1 facts learned building this:** `stage.replace` replaces only its capture group; a `loki.process` receives labels but not the extracted map, so normalisation lives in one shared `common` stage rather than per source; a source whose path does not exist is an unhealthy component and fails `/-/ready`, which is why the journal source is its own file; the image has bash but no `wget`/`curl`, so the healthcheck uses `/dev/tcp`.
 
 ### 5.5 Grafana Loki
 

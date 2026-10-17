@@ -562,18 +562,57 @@ services:
       resources:
         limits: { cpus: "0.25", memory: 128m }
 
+  # M3.1. Outbound only (SECURITY.md §7): the admin port is bound to loopback
+  # INSIDE the container and not published, so nothing can reach it from the
+  # network; the healthcheck below reaches it from within. (The placeholder
+  # this replaced bound 0.0.0.0 and published it.) The image runs as root by
+  # default; this runs it as its own `alloy` user. --disable-reporting stops
+  # Alloy telling Grafana which components are enabled.
+  #
+  # The identity below is what a real host gets rendered from DCP's inventory;
+  # here it is a fixed, obviously synthetic one for the sample producer. It is
+  # NOT a registered server, so the M3.2 UI will not show these lines until a
+  # server with this id is registered.
   alloy:
     <<: *hardening
     profiles: [logs]
     image: grafana/alloy:v1.5.1
+    user: "473:473"
     command:
       - run
-      - --server.http.listen-addr=0.0.0.0:12345
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --disable-reporting
+      - --storage.path=/var/lib/alloy/data
       - /etc/alloy/config.alloy
-    ports:
-      - "127.0.0.1:12345:12345"
+    environment:
+      ALLOY_ENVIRONMENT: ${ALLOY_ENVIRONMENT:-development}
+      ALLOY_SERVER_ID: ${ALLOY_SERVER_ID:-00000000-0000-4000-8000-00000000a110}
+      ALLOY_HOSTNAME: ${ALLOY_HOSTNAME:-sample-host.internal.example}
+      ALLOY_APPLICATION_ID: ${ALLOY_APPLICATION_ID:-00000000-0000-4000-8000-0000000000a9}
+      ALLOY_APP_SERVICE: sample-api
+      ALLOY_LOG_ROOT: /var/log/sample
+      ALLOY_DOCKER_ROOT: /var/log/sample/docker
     volumes:
       - ../alloy:/etc/alloy:ro
+      # The producer's files, read-only. On a real host these are /var/log and
+      # /var/lib/docker/containers, mounted the same way.
+      - sample-logs:/var/log/sample:ro
+      # File positions, so a restart does not re-send everything.
+      - alloy-data:/var/lib/alloy/data
+    healthcheck:
+      # The image has no wget or curl, only bash.
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/12345 && printf "GET /-/ready HTTP/1.0\r\n\r\n" >&3 && grep -q "ready" <&3'
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
 
 volumes:
   postgres-data:
@@ -583,3 +622,4 @@ volumes:
   loki-data:
   grafana-data:
   sample-logs:
+  alloy-data:
