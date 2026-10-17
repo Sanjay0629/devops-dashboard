@@ -270,6 +270,14 @@ graph LR
 4. **Range guards.** Every range query is bounded by max points (`range / step ≤ 11 000`), a server-count cap for comparisons, and an upstream timeout (default 10 s). Exceeding a guard returns a structured 422, never an unbounded query.
 5. **Stale vs zero (AD-14).** Health classification combines `servers.last_seen_at`, exporter `up`, and sample recency against per-environment thresholds (defaults: `warning` 2×scrape interval, `stale` 5 min, `unreachable` 15 min). Absent samples map to `unavailable`.
 
+   **As built (M2.5, 2026-10-17).**
+   - *Inputs.* The classifier (`app/monitoring/health.py`) reads `last_seen_at` only. `up` and sample recency enter through the agent probe, which sets `last_seen_at` to the **scrape timestamp of the latest successful scrape** and never moves it backwards, so "exporter down" and "sample too old" are the same age. `agent_status` is not an input.
+   - *Thresholds.* `DCP_HEALTH_THRESHOLDS`, JSON: a `default` and per-environment overrides (`development|staging|production|other`), each any subset of `warning_after_seconds` / `stale_after_seconds` / `unreachable_after_seconds` (defaults 30 / 300 / 900), strictly increasing after merging, 1–86400, validated at startup. A state begins **strictly after** its line (`age > N`), the rule the earlier `stale` flag already followed.
+   - *The reference (D2).* Age is measured against the last time **Prometheus answered**, a Redis marker (`dcp:monitoring:prometheus_answered_at`) the agent probe writes, not the wall clock. The sweep judges nothing without it; the read path uses it only while fresh (3 probe intervals) and otherwise reports "not evaluated" (`state: null`) dated by the marker. A Prometheus outage therefore ages nothing (PROGRESS issue 67).
+   - *Two owners of `servers.status` (`OPEN-30`).* Administrators: `PENDING`→`MANAGED`, `RETIRED`. The sweep (`dcp.monitoring.sweep_status`, beat, 60 s): `MANAGED`/`STALE`/`UNREACHABLE` for scraped servers only, audited as `SERVER_STATUS_CHANGED`, conditional on the status it read. `warning` is a health state with no `status` and stays `MANAGED`.
+   - *Gates.* A retired, unsupported-OS, monitoring-off or instance-less server is `unknown` however old its `last_seen_at`; a never-scraped one is `unknown`, not stale.
+   - *Read path.* `evaluate()` (Python) and `health_state_expr()` (SQL `CASE`) are one rule in two languages, held together by a parity test. `critical` is never produced (`OPEN-28`).
+
 ---
 
 ## 5. Centralized logging architecture
@@ -790,7 +798,7 @@ DCP is monitored by the same stack it operates (PRD §10): its own `/metrics` en
 | AD-11 | `audit_events` append-only: app DB role has `INSERT`/`SELECT` only; monthly partitions; retention by export-then-drop | PRD §4.12 |
 | AD-12 | `applications` are environment-agnostic; environment lives on `servers`, `deployment_targets`, `deployments` | Resolves PRD §4.9 vs §6 conflict. **Confirmed by the product owner 2026-10-14 (~~OPEN-02~~ closed)** |
 | AD-13 | Soft delete only on inventory/identity tables; never on operations, deployments, approvals, audit, alerts | Operational history must not be erasable |
-| AD-14 | Health/staleness computed from `last_seen_at` + exporter `up` + sample recency against per-environment thresholds; absent data ⇒ `unavailable` | PRD §4.2, §4.4 "must not silently replace unavailable data with zero" |
+| AD-14 | Health/staleness computed from `last_seen_at` + exporter `up` + sample recency against per-environment thresholds; absent data ⇒ `unavailable`. **Amended M2.5:** aged against the last time Prometheus answered, not the wall clock, so an outage ages nothing; no fresh reference ⇒ not evaluated; see [§4 point 5](#4-metrics-collection-architecture) | PRD §4.2, §4.4 "must not silently replace unavailable data with zero" |
 | AD-15 | `DCP_DEMO_MODE` with per-response `demo_mode` flag and a persistent UI banner | PRD §11; prevents mock data from masquerading as a live integration |
 | AD-16 | Exact pins in lockfiles, ranges in manifests, container images pinned by digest | PRD §10 maintainability |
 | AD-17 | `/api/v1`; additive-only within a major version; breaking changes ⇒ `/api/v2` | PRD §7 |

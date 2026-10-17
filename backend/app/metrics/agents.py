@@ -45,7 +45,12 @@ from sqlalchemy import Connection, Engine, text
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.metrics import discovery, templates
-from app.metrics.client import PrometheusClient, PrometheusUnavailableError, Sample
+from app.metrics.client import (
+    PrometheusClient,
+    PrometheusUnavailableError,
+    Sample,
+    gather_all,
+)
 from app.monitoring import marker
 
 logger = get_logger(__name__)
@@ -80,7 +85,7 @@ async def observe(
     found: dict[str, Observation] = {}
     for start in range(0, len(instances), BATCH_SIZE):
         chunk = list(instances[start : start + BATCH_SIZE])
-        window, latest, scraped = await asyncio.gather(
+        window, latest, scraped = await gather_all(
             client.query(templates.render_agent_window("LINUX", chunk, window_seconds)),
             client.query(templates.render("agent_up", "LINUX", chunk)),
             client.query(templates.render_scrape_timestamp("LINUX", chunk)),

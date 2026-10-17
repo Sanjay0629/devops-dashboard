@@ -16,6 +16,7 @@ the API renders as a 5xx and never a zero** (PRD §4.4, CLAUDE.md §5).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
@@ -33,6 +34,7 @@ from app.metrics.client import (
     CircuitBreaker,
     PrometheusClient,
     PrometheusUnavailableError,
+    gather_all,
 )
 
 PROMETHEUS_URL = "http://prometheus.invalid:9090"
@@ -571,3 +573,128 @@ async def test_a_probe_with_no_sample_is_a_provider_error(settings: Settings) ->
     with pytest.raises(PrometheusUnavailableError) as caught:
         await prometheus.probe()
     assert caught.value.reason == "provider_error"
+
+
+# --- the half-open probe must always be resolved or given back ---------------------
+#
+# Found by the M2.5 smoke test (step 18a), not by reading: after a Prometheus
+# outage long enough to open the breaker, the worker never recovered. The agent
+# probe sends three queries at once under ``asyncio.run``. In the half-open state
+# the first takes the single probe and the other two are refused ``circuit_open``;
+# ``gather`` re-raises that at once, ``asyncio.run`` cancels the query that holds
+# the probe before it can record a verdict, and the breaker is left half-open with
+# the probe taken -- refusing everything, every cycle, until the process restarts.
+
+
+def _half_open(
+    settings: Settings, handler: Callable[..., object]
+) -> tuple[PrometheusClient, CircuitBreaker]:
+    clock = FakeClock()
+    breaker = CircuitBreaker(clock=clock)
+    for _ in range(FAILURE_THRESHOLD):
+        breaker.record_failure("provider_unreachable")
+    clock.now += RESET_AFTER_SECONDS + 1
+    assert breaker.state() == "half_open"
+    client = PrometheusClient(
+        settings=settings,
+        transport=httpx.MockTransport(handler),
+        circuit=breaker,  # type: ignore[arg-type]
+    )
+    return client, breaker
+
+
+async def _slow_ok(_request: httpx.Request) -> httpx.Response:
+    # Yields like a real socket does. A handler that never yields lets the first
+    # query finish before the others start, and hides the whole problem.
+    await asyncio.sleep(0.02)
+    return httpx.Response(
+        200, json={"status": "success", "data": {"resultType": "vector", "result": []}}
+    )
+
+
+async def test_a_cancelled_half_open_probe_gives_the_probe_back(settings: Settings) -> None:
+    async def hang(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+    client, breaker = _half_open(settings, hang)
+    task = asyncio.ensure_future(client.query("vector(1)"))
+    await asyncio.sleep(0.01)
+    assert breaker.probe_taken is True
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Neither a verdict nor a wedge: the next caller may probe.
+    assert breaker.state() == "half_open"
+    assert breaker.probe_taken is False
+    assert breaker.allow() is True
+
+
+def test_concurrent_queries_resolve_the_half_open_probe_rather_than_wedging_it(
+    settings: Settings,
+) -> None:
+    client, breaker = _half_open(settings, _slow_ok)
+
+    async def cycle() -> list[tuple[object, ...]]:
+        return await gather_all(client.query("a"), client.query("b"), client.query("c"))
+
+    # The cycle that finds the circuit half-open cannot answer in full -- two of
+    # its three queries were refused -- and must say so...
+    with pytest.raises(PrometheusUnavailableError):
+        asyncio.run(cycle())
+    # ...but the probe it let through completed and closed the breaker, so the
+    # next cycle is whole. Plain ``asyncio.gather`` fails every cycle forever.
+    assert breaker.state() == "closed"
+    assert len(asyncio.run(cycle())) == 3
+
+
+def test_gather_all_reports_the_real_failure_over_a_refused_sibling(settings: Settings) -> None:
+    """``circuit_open`` is the symptom; the reason the circuit opened is the news."""
+
+    async def refuse(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    client, _breaker = _half_open(settings, refuse)
+
+    async def cycle() -> object:
+        return await gather_all(client.query("a"), client.query("b"))
+
+    with pytest.raises(PrometheusUnavailableError) as caught:
+        asyncio.run(cycle())
+    assert caught.value.reason == "provider_unreachable"
+
+
+async def test_gather_all_waits_for_every_query() -> None:
+    finished: list[str] = []
+
+    async def done(name: str, fail: bool = False) -> str:
+        await asyncio.sleep(0.01)
+        finished.append(name)
+        if fail:
+            raise PrometheusUnavailableError("provider_error")
+        return name
+
+    with pytest.raises(PrometheusUnavailableError):
+        await gather_all(done("a", fail=True), done("b"), done("c"))
+    assert sorted(finished) == ["a", "b", "c"]
+    assert await gather_all(done("x"), done("y")) == ["x", "y"]
+
+
+def test_the_agent_probe_recovers_after_an_outage_opened_the_breaker(settings: Settings) -> None:
+    """The user-visible case: a Prometheus restart must not strand the worker.
+
+    ``agents.observe`` and ``services.reader`` are the two call sites that send
+    concurrent queries under ``asyncio.run``; if either goes back to plain
+    ``gather`` this fails on the second cycle, not the first.
+    """
+    from app.metrics import agents
+
+    client, breaker = _half_open(settings, _slow_ok)
+    instances = ["web1.internal:9100"]
+
+    with pytest.raises(PrometheusUnavailableError):
+        asyncio.run(agents.observe(client, instances, 30))
+    assert breaker.state() == "closed"
+    observed = asyncio.run(agents.observe(client, instances, 30))
+    assert set(observed) == set(instances)

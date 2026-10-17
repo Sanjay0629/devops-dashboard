@@ -50,6 +50,13 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-240}"
 # about the worker's settings would fail.
 export DCP_AGENT_PROBE_INTERVAL_SECONDS=10
 export DCP_AGENT_UNREACHABLE_AFTER_SECONDS=30
+# M2.5, step 18a: tight host-health lines, so "a silent host goes STALE, then
+# UNREACHABLE" is asserted in minutes instead of a quarter of an hour. Not
+# tighter than this: a healthy host is last seen up to one scrape interval
+# (15 s) plus one probe interval (10 s) before the reference, and a line inside
+# that would flap a perfectly good host. `stale` and `unreachable` are far enough
+# apart (30 s) that a sweep landing in between is certain to observe STALE.
+export DCP_HEALTH_THRESHOLDS='{"default":{"warning_after_seconds":30,"stale_after_seconds":45,"unreachable_after_seconds":75}}'
 FRONTEND="http://localhost:${FRONTEND_HOST_PORT:-5173}"
 BACKEND="http://localhost:${BACKEND_HOST_PORT:-8000}"
 IDP="http://localhost:${MOCK_IDP_HOST_PORT:-9000}"
@@ -501,6 +508,146 @@ printf '  UNREACHABLE after the configured window\n'
 "${OBSERVABILITY[@]}" start node-exporter >/dev/null
 await_agent_status HEALTHY 150
 printf '  HEALTHY again once the exporter returned\n'
+
+log "18a. The status sweep, host health, and a Prometheus outage that ages nothing (M2.5, AD-14)"
+# The registered exporter is the host. Registration lands PENDING and the sweep
+# never touches PENDING (D1), so an administrator accepts it first -- through the
+# API, as a person would.
+detail_field() {
+  api "/servers/$smoke_server" \
+    | "${COMPOSE[@]}" exec -T backend python -c 'import json,sys; d=json.load(sys.stdin); print('"$1"')'
+}
+summary_field() {
+  api "/dashboard/summary" \
+    | "${COMPOSE[@]}" exec -T backend python -c 'import json,sys; d=json.load(sys.stdin); print('"$1"')'
+}
+sweep_now() {
+  "${COMPOSE[@]}" exec -T worker python -c \
+    "from app.workers.tasks.monitoring import sweep_status; print(sweep_status())" | tail -1
+}
+status_changes() {
+  "${COMPOSE[@]}" exec -T postgres psql -U dcp -d dcp -tAc \
+    "SELECT count(*) FROM audit_events WHERE target_id = '$smoke_server' AND action_type = 'SERVER_STATUS_CHANGED' AND actor_label = 'system:health-sweep'" \
+    | tr -d '\r[:space:]'
+}
+# Sweeps by hand while polling (the beat entry runs once a minute, and is proven
+# separately below), so each transition is bounded by the thresholds and not by
+# the schedule.
+await_server_status() {
+  local want="$1" limit="$2" got=""
+  local deadline=$((SECONDS + limit))
+  while (( SECONDS < deadline )); do
+    sweep_now >/dev/null
+    got="$(detail_field 'd["status"]')"
+    [[ "$got" == "$want" ]] && return 0
+    sleep 3
+  done
+  fail "status never became $want within ${limit}s (last: ${got:-<none>})"
+}
+await_health() {
+  local want="$1" limit="$2" got=""
+  local deadline=$((SECONDS + limit))
+  while (( SECONDS < deadline )); do
+    got="$(detail_field 'd["health"]["state"]')"
+    [[ "$got" == "$want" ]] && return 0
+    sleep 3
+  done
+  fail "health never became $want within ${limit}s (last: ${got:-<none>})"
+}
+
+csrf="$(grep dcp_csrf "$JAR" | awk '{print $NF}')"
+accepted="$(curl -sS -c "$JAR" -b "$JAR" --max-time 20 -X PATCH \
+  -H 'Content-Type: application/json' -H "X-CSRF-Token: $csrf" -H "Origin: $FRONTEND" \
+  --data '{"status":"MANAGED"}' "$FRONTEND/api/v1/servers/$smoke_server")"
+grep -q '"status":"MANAGED"' <<<"$accepted" || fail "accepting the registration failed: $accepted"
+printf '  an administrator accepted the registration: MANAGED\n'
+before_updated="$(detail_field 'd["updated_at"]')"
+
+# The beat entry is real and the worker runs it: a line only the scheduled
+# task writes (a by-hand call logs in its own process, not the container's).
+printf '  waiting for the beat to run the sweep on its own\n'
+deadline=$((SECONDS + 150))
+until worker_log="$("${COMPOSE[@]}" logs worker 2>&1)" && grep -q 'status_swept' <<<"$worker_log"; do
+  (( SECONDS < deadline )) || fail "the scheduled sweep never ran"
+  sleep 5
+done
+printf '  the scheduled sweep ran\n'
+
+await_health healthy 90
+[[ "$(detail_field 'd["stale"]')" == "False" ]] || fail "a healthy host is flagged stale"
+[[ "$(detail_field 'd["status"]')" == "MANAGED" ]] || fail "the sweep moved a healthy host"
+printf '  healthy, not stale, still MANAGED -- the sweep leaves a healthy host alone\n'
+
+# The dashboard rollup agrees with the host, and counts every readable server.
+rollup=""
+for _ in 1 2 3 4 5 6; do
+  rollup="$(summary_field '(d["server_health"]["data_state"], d["server_health"]["healthy"] is not None and d["server_health"]["healthy"] >= 1, sum(d["server_health"][k] for k in ("healthy","warning","stale","unreachable","unknown")) == d["servers"]["total"])' 2>/dev/null || true)"
+  [[ "$rollup" == "('ok', True, True)" ]] && break
+  sleep 5
+done
+[[ "$rollup" == "('ok', True, True)" ]] || fail "the health rollup is wrong or does not sum to the server total: $rollup"
+printf '  dashboard rollup is ok, counts the host healthy, and sums to the server total\n'
+
+printf '  stopping the exporter: nothing is scraped, Prometheus keeps answering\n'
+"${OBSERVABILITY[@]}" stop node-exporter >/dev/null
+await_server_status STALE 150
+[[ "$(detail_field 'd["health"]["state"]')" == "stale" ]] || fail "status is STALE but health is not"
+[[ "$(detail_field 'd["stale"]')" == "True" ]] || fail "a STALE host is not flagged stale"
+printf '  STALE: status and health agree\n'
+await_server_status UNREACHABLE 180
+[[ "$(detail_field 'd["health"]["state"]')" == "unreachable" ]] || fail "status is UNREACHABLE but health is not"
+printf '  UNREACHABLE: status and health agree\n'
+
+[[ "$(status_changes)" == "2" ]] || fail "expected exactly two audited moves, got $(status_changes)"
+meta="$("${COMPOSE[@]}" exec -T postgres psql -U dcp -d dcp -tAc \
+  "SELECT string_agg(sanitized_metadata->>'from' || '>' || (sanitized_metadata->>'to'), ',' ORDER BY occurred_at) FROM audit_events WHERE target_id = '$smoke_server' AND action_type = 'SERVER_STATUS_CHANGED'" \
+  | tr -d '\r[:space:]')"
+[[ "$meta" == "MANAGED>STALE,STALE>UNREACHABLE" ]] || fail "the audited moves are wrong: $meta"
+printf '  two audited moves by system:health-sweep: %s\n' "$meta"
+[[ "$(detail_field 'd["updated_at"]')" == "$before_updated" ]] \
+  || fail "a sweep flip moved updated_at, so an open edit form would answer 409"
+printf '  updated_at did not move (migration 0006)\n'
+changes=""
+for _ in 1 2 3 4 5 6; do
+  changes="$(summary_field '[(c["display_name"], c["new_status"]) for c in d["recent_health_changes"]["items"]][0]' 2>/dev/null || true)"
+  [[ "$changes" == "('Smoke exporter', 'UNREACHABLE')" ]] && break
+  sleep 5
+done
+[[ "$changes" == "('Smoke exporter', 'UNREACHABLE')" ]] || fail "recent_health_changes does not list the move: $changes"
+printf '  the dashboard lists the move, newest first\n'
+
+"${OBSERVABILITY[@]}" start node-exporter >/dev/null
+await_server_status MANAGED 150
+await_health healthy 90
+[[ "$(status_changes)" == "3" ]] || fail "expected three audited moves after recovery, got $(status_changes)"
+printf '  back to MANAGED and healthy once the exporter returned\n'
+
+# Issue 67, against a real Prometheus. Stopping Prometheus itself silences every
+# host at once; aged against the wall clock, that is a fleet outage and the
+# sweep would call this host UNREACHABLE after 75 s. Aged against the last time
+# Prometheus answered, nothing happens.
+printf '  stopping Prometheus for longer than the unreachable line (90 s)\n'
+"${OBSERVABILITY[@]}" stop prometheus >/dev/null
+for _ in 1 2 3 4 5 6 7 8 9; do
+  sweep_now >/dev/null
+  sleep 10
+done
+[[ "$(detail_field 'd["status"]')" == "MANAGED" ]] \
+  || fail "a Prometheus outage aged the host into $(detail_field 'd["status"]')"
+[[ "$(status_changes)" == "3" ]] || fail "the sweep moved a host during a Prometheus outage"
+printf '  still MANAGED, no move audited: an outage ages nothing\n'
+# And the read path does not judge hosts against an answer it can no longer
+# confirm: not evaluated, dated by when Prometheus last answered -- never "healthy".
+verdict="$(detail_field '(d["health"]["state"], d["health"]["data_state"], d["stale"])')"
+[[ "$verdict" == "(None, 'stale', None)" ]] \
+  || fail "health during an outage should be not evaluated and stale, got $verdict"
+printf '  health is "not evaluated" and dated, not a frozen verdict: %s\n' "$verdict"
+
+"${OBSERVABILITY[@]}" start prometheus >/dev/null
+await_health healthy 150
+[[ "$(detail_field 'd["status"]')" == "MANAGED" ]] || fail "the host did not come back MANAGED after the outage"
+[[ "$(status_changes)" == "3" ]] || fail "recovery from the outage wrote a status move"
+printf '  Prometheus returned: healthy again, still MANAGED, still three moves\n'
 
 log "18b. systemd unit state against a real systemd, exporter and Prometheus (TS-02, M2.4)"
 # The ordinary node-exporter container has no system bus, so nothing in the

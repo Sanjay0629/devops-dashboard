@@ -513,6 +513,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M2.5 — Stale-data detection
 
+**Status: complete locally (2026-10-17); not yet pushed or run on hosted CI.** Evidence in [`PROGRESS.md`](../PROGRESS.md) §3, §6 (issues 88–90) and §9. What the plan below says was done differently: health is computed from `last_seen_at` alone (the probe already folds `up` and sample recency into it); thresholds are one `DCP_HEALTH_THRESHOLDS` JSON setting rather than `system_settings` (which accepts one key); ages are measured against the last time Prometheus answered, not the wall clock (a Prometheus outage must not look like a fleet outage); the "frozen clock" integration test became a real silent host and a real Prometheus outage in smoke step 18a; and the work found and fixed a circuit-breaker defect that stopped the worker recovering from that outage (issue 88). Decisions: `OPEN-30` in [ARCHITECTURE.md §19](ARCHITECTURE.md#19-open-decisions).
+
 **Tasks:** per-environment staleness thresholds in settings; the stale sweep job updating `servers.status`; health classification combining `last_seen_at`, exporter `up` and sample recency; `data_state` propagation; dashboard "stale servers" counter.
 
 **Acceptance:** a server that stops reporting becomes `STALE` then `UNREACHABLE` per thresholds (PRD §4.2 acceptance criterion); a healthy server is never confused with a silent one; **the system never reports healthy merely because no alert arrived** (PRD §2).
