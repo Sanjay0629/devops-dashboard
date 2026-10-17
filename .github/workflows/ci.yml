@@ -259,7 +259,11 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Scan ${{ matrix.name }}
-        uses: aquasecurity/trivy-action@v0.28.0
+        # v0.28.0's nested `aquasecurity/setup-trivy@v0.2.1` no longer resolves
+        # ("unable to find version"), which failed the job at "Set up job".
+        # v0.36.0 pins its nested actions by commit SHA. Not itself SHA-pinned
+        # (AD-16 asks for that for actions too).
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: dcp-${{ matrix.name }}:ci
           format: table
