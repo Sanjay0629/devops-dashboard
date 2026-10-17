@@ -21,6 +21,7 @@ export type DashboardHealthList = Schemas['DashboardHealthList'];
 export type ServerHealthRow = Schemas['ServerHealthRow'];
 export type ServerCounts = Schemas['ServerCounts'];
 export type ServerHealthRollup = Schemas['ServerHealthRollup'];
+export type HealthChange = Schemas['HealthChange'];
 
 /**
  * The filters §13.1 and §13.2 share, as the UI holds them.
@@ -33,6 +34,10 @@ export type DashboardFilters = {
   provider?: string | undefined;
   owner_team?: string | undefined;
 };
+
+/** §13.2's `health_status`. `critical` is accepted by the API and never produced. */
+export const HEALTH_STATUSES = ['healthy', 'warning', 'stale', 'unreachable', 'unknown'] as const;
+export type HealthStatus = (typeof HEALTH_STATUSES)[number];
 
 /**
  * Is this parsed body the shape we asked for?
@@ -63,7 +68,11 @@ export async function readSummary(
 }
 
 export async function readHealthList(
-  filters: DashboardFilters & { cursor?: string | undefined; limit?: string | undefined } = {},
+  filters: DashboardFilters & {
+    cursor?: string | undefined;
+    limit?: string | undefined;
+    health_status?: HealthStatus | undefined;
+  } = {},
 ): Promise<Result<DashboardHealthList>> {
   return call(`/dashboard/health${queryString(filters)}`, {}, isHealthList);
 }

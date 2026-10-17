@@ -295,9 +295,8 @@ Also `403` + `LOGIN_DENIED` (M1.3, assumption A-05): a **new** identity whose em
     "data_state": "ok", "collected_at": "2026-01-15T09:30:00Z", "source": "postgresql"
   },
   "server_health": {
-    "healthy": null, "warning": null, "critical": null, "unknown": null,
-    "data_state": "not_configured", "collected_at": null, "source": "prometheus",
-    "unavailable_reason": "Server health evaluation is not implemented yet (M2.5)."
+    "healthy": 3, "warning": 1, "critical": null, "stale": 1, "unreachable": 1, "unknown": 0,
+    "data_state": "ok", "collected_at": "2026-01-15T09:29:50Z", "source": "prometheus"
   },
   "utilisation": {
     "cpu_percent_avg": null, "memory_percent_avg": null,
@@ -311,7 +310,11 @@ Also `403` + `LOGIN_DENIED` (M1.3, assumption A-05): a **new** identity whose em
   "active_alerts": { "critical": null, "warning": null, "info": null, "data_state": "not_configured" },
   "recent_deployments": { "items": null, "data_state": "not_configured" },
   "recent_operations": { "items": null, "data_state": "not_configured" },
-  "recent_health_changes": { "items": null, "data_state": "not_configured" },
+  "recent_health_changes": {
+    "items": [ { "server_id": "…", "display_name": "web-01", "environment": "staging",
+                 "previous_status": "MANAGED", "new_status": "STALE", "health_state": "stale",
+                 "occurred_at": "2026-01-15T09:20:00Z" } ],
+    "data_state": "ok", "collected_at": "2026-01-15T09:30:00Z", "source": "postgresql" },
   "filters_applied": { "environment": ["staging"] },
   "demo_mode": false,
   "cache_ttl_seconds": 15
@@ -322,12 +325,14 @@ The `utilisation` block illustrates the required behaviour: Prometheus is down, 
 
 **Two shape decisions, taken in M1.6 and recorded here rather than left as a silent divergence.** An earlier draft of this section drew `healthy`, `warning` and `critical` inside `servers` beside `total` and `managed`, and the three recent-activity keys as bare `[]`.
 
-1. **`server_health` is a sibling section, not three fields inside `servers`.** `total`, `pending`, `managed`, `stale`, `unreachable` and `retired` are counts of the `servers.status` column — a real source, `data_state: "ok"`. `healthy`, `warning` and `critical` are a *health* rollup with no source until M2.1. One envelope carries one `data_state` (§4), and a block that mixed the two would have to claim either that the status counts are unavailable or that the health counts are collected. Both are false. The field names are unchanged, so a client reads `summary.server_health.healthy` instead of `summary.servers.healthy`.
-2. **`recent_deployments`, `recent_operations` and `recent_health_changes` are `DataSection`s carrying `items: null`, not bare arrays.** There is no deployments table, no operations table and no health-event table. `[]` asserts "nothing happened recently", which is a claim this product cannot make before M5.1, M4.2 and M2.5 respectively — and §4 rule 2 plus PRD §4.2 forbid a substitute value for an absent one just as firmly for an empty list as for a zero. Each carries an `unavailable_reason` naming the milestone that will fill it.
+1. **`server_health` is a sibling section, not three fields inside `servers`.** `total`, `pending`, `managed`, `stale`, `unreachable` and `retired` are counts of the `servers.status` column — a real source, `data_state: "ok"`. `healthy`, `warning`, `stale`, `unreachable`, `unknown` and `critical` are a *health* rollup from a different source (Prometheus, M2.5). One envelope carries one `data_state` (§4), and a block that mixed the two would have to claim either that the status counts are unavailable or that the health counts are collected. Both are false. The field names are unchanged, so a client reads `summary.server_health.healthy` instead of `summary.servers.healthy`.
+2. **`recent_deployments` and `recent_operations` are `DataSection`s carrying `items: null`, not bare arrays** (`recent_health_changes` stopped being one in M2.5: it reads `audit_events`, so it can say `[]` and mean it, below). There is no deployments table and no operations table. `[]` asserts "nothing happened recently", which is a claim this product cannot make before M5.1 and M4.2 — and §4 rule 2 plus PRD §4.2 forbid a substitute value for an absent one just as firmly for an empty list as for a zero. Each carries an `unavailable_reason` naming the milestone that will fill it.
 
 **`failed_services` counts what units *show*, and says how many it could not read (M2.4).** `count` is the number of registered units on readable servers whose displayed state is `FAILED` — the §16.1 state, host-aware, not the raw `services.last_observed_state` column — so a unit cached `FAILED` on a host that has since gone quiet is not counted as failed. The new **`unobserved`** is the number that show `UNKNOWN` or `UNCOLLECTED` (including a cache that has not been refreshed in 180 s). It exists so `count: 0` beside `unobserved: 12` cannot be read as `0` of `12`; a client must show both. `data_state` stays `ok`: both numbers are exact counts of a real table.
 
-`stale` and `unreachable` under `servers` are the stored statuses. AD-14's sweep, which recomputes them from `last_seen_at`, is M2.5; until then nothing moves a server into them automatically, so the counts report what registration and administration set — an accurate count of a real column, not an observation of the host.
+**`server_health` is the host-health rollup (M2.5).** It counts **every readable server** — the same population as `servers.total` — so the five counts sum to it: a retired, unsupported, unmonitored or never-scraped server is `unknown`, not omitted. They are exactly the states the §13.2 `health_status` filter selects, by the same rule, so a card's number is the length of the list it links to. It is `ok` only while Prometheus has answered within three probe intervals; otherwise it is `stale` (with `collected_at` = when Prometheus last answered), `unavailable` (never answered) or `not_configured`, and **every count is `null`, never `0`** (§4 rule 2). **Nothing is judged against an old answer**: during a Prometheus outage hosts are not aged into `unreachable` (`OPEN-30`, PROGRESS issue 67). `critical` is always `null` — it would come from utilisation (`OPEN-28`), which is not evaluated, and `null` says so where `0` would say "none". `stale` and `unreachable` here are *health* (computed from `last_seen_at` against `DCP_HEALTH_THRESHOLDS` on read); the same-named counts under `servers` are the stored `status`, which the sweep writes within about a minute, and which also depend on administrators' `PENDING`/`RETIRED`.
+
+**`recent_health_changes` (M2.5, D4)** is the latest 10 `SERVER_STATUS_CHANGED` audit rows from the last 30 days, newest first, on servers the caller can read (scope is applied through the audit row's target, so a move on an unreadable server is never listed). Only the sweep's moves appear; an administrator's edit is `SERVER_UPDATED`. `[]` means no recorded change.
 
 `cache_ttl_seconds` reports `DCP_DASHBOARD_CACHE_TTL_SECONDS`, so a client need not guess how often polling is worth anything. The cached entry is keyed on the caller's **resolved scope** as well as the filters (docs/SECURITY.md §20); a write is not reflected until the entry expires.
 
@@ -339,12 +344,12 @@ The `utilisation` block illustrates the required behaviour: Prometheus is down, 
     {
       "server_id": "…", "display_name": "web-01", "hostname": "web-01.internal.example",
       "environment": "staging", "provider": "ON_PREM", "status": "MANAGED",
-      "health_state": null, "last_seen_at": null, "stale": null,
+      "health_state": "healthy", "last_seen_at": "2026-01-15T09:29:45Z", "stale": false,
       "failed_service_count": 0, "active_alert_count": null
     }
   ],
   "page": { "limit": 50, "next_cursor": null, "has_more": false, "total": null },
-  "health": { "data_state": "not_configured", "unavailable_reason": "Server health evaluation is not implemented yet (M2.5)." },
+  "health": { "healthy": 3, "warning": 1, "critical": null, "stale": 1, "unreachable": 1, "unknown": 0, "data_state": "ok", "collected_at": "2026-01-15T09:29:50Z", "source": "prometheus" },
   "alerts": { "data_state": "not_configured", "unavailable_reason": "Alerting is not implemented yet (M3.3)." },
   "collected_at": "2026-01-15T09:30:00Z",
   "filters_applied": {},
@@ -353,9 +358,9 @@ The `utilisation` block illustrates the required behaviour: Prometheus is down, 
 }
 ```
 
-`health_state` is `null` until M2.1 and is **never defaulted to `healthy`** — an unmonitored host is unknown, not well. The `health` and `alerts` sections carry that reason once for the page rather than repeating it on every row; `stale` is `null` when `last_seen_at` is (never seen is not stale), and `failed_service_count` is a real count over `services`, which exists.
+`health_state` is **never defaulted to `healthy`**. It is one of `healthy | warning | stale | unreachable | unknown` when a fresh Prometheus reference exists (`critical` is never produced, `OPEN-28`), and **`null` when nothing could be evaluated** — Prometheus unconfigured, silent or stale. `unknown` is an evaluated answer: the server is retired, on an unsupported OS, has monitoring off, has no `metrics_instance`, or has never been scraped. `stale` is the verdict `stale` or `unreachable`, `false` for `healthy`/`warning`, and `null` for `unknown` and `null` (never seen is not stale). The `health` section is the §13.1 rollup and carries the reason once for the page when the rows are `null`; `failed_service_count` is a real count over `services`.
 
-Filtering on `health_status` therefore matches nothing and returns an empty page with `health.data_state: "not_configured"`. The filter is **honoured rather than ignored**: silently dropping a filter the backend cannot yet apply would return the whole list looking as though the filter had applied, and an operator would read it as the healthy subset.
+Filtering on `health_status` is applied in SQL by the twin of the rule that produces `health_state` (a parity test holds them together), so cursor paging works over the filtered set. With no usable reference it matches nothing and returns an empty page with `health.data_state` saying why: the filter is **honoured rather than ignored**, because dropping it would return the whole list looking like the healthy subset.
 
 Errors: `401`, `403`, `422` (unknown filter value), `503` (database unavailable). No audit (read).
 
@@ -401,9 +406,9 @@ Validation: `cloud_account_id` must reference an `ACTIVE`, non-deleted account (
 
 **Implemented in M2.3 — `metrics_instance` is policed (§14.2, §14.4).** Because the value becomes a scrape target, a *new or changed* `metrics_instance` is refused with `422 not_permitted` (field `body.metrics_instance`) unless its port is one of `DCP_METRICS_TARGET_PORTS` (default `9100`, listed in `allowed` when that is the problem) and it is not a loopback, link-local, unspecified, multicast or reserved address, nor in the `.invalid` TLD. A `PATCH` that resubmits the row's *current* value is not refused, so a seeded row stays editable. The value is never echoed. Registering, or editing `metrics_instance`, `monitoring_enabled`, `environment` or `status`, enqueues a rebuild of the target file (best effort; a periodic rebuild heals a missed one).
 
-**14.3** Returns the full row plus `health_state`, `agent_status`, computed `stale`, associated applications, registered service count, open alert count and `management_capabilities` (from the provider's capability set — an explicit statement of what this provider can and cannot do, [ARCHITECTURE.md §7.2](ARCHITECTURE.md#72-capability-matrix--providers-are-not-interchangeable)). Out of scope ⇒ `404`.
+**14.3** Returns the full row plus `health` (`state`, `data_state`, `collected_at` = `last_seen_at`, `stale_after_seconds` = the server's environment line — the same rule as §13.2, with `state: null` and the reason when nothing could be evaluated), `agent_status`, computed `stale`, associated applications, registered service count, open alert count and `management_capabilities` (from the provider's capability set — an explicit statement of what this provider can and cannot do, [ARCHITECTURE.md §7.2](ARCHITECTURE.md#72-capability-matrix--providers-are-not-interchangeable)). Out of scope ⇒ `404`.
 
-**14.4** Mutable fields only: `display_name`, `owner_team`, `environment`, `monitoring_enabled`, `metrics_instance`, `status` (`PENDING`↔`MANAGED`↔`RETIRED` only), `os_version`, `private_ip`, `region`. Immutable: `id`, `cloud_account_id`, `provider_resource_id`, `created_at` (`422 not_permitted`). **Changing `environment` is a privilege-relevant change** — it alters the authorisation boundary for every future operation on this server, so it requires Administrator and is audited as `SERVER_ENVIRONMENT_CHANGED`. Supports `If-Unmodified-Since` ⇒ `409 conflict`. Audit `SERVER_UPDATED`.
+**14.4** Mutable fields only: `display_name`, `owner_team`, `environment`, `monitoring_enabled`, `metrics_instance`, `status` (`PENDING`↔`MANAGED`↔`RETIRED` only), `os_version`, `private_ip`, `region`. Immutable: `id`, `cloud_account_id`, `provider_resource_id`, `created_at` (`422 not_permitted`). **Changing `environment` is a privilege-relevant change** — it alters the authorisation boundary for every future operation on this server, so it requires Administrator and is audited as `SERVER_ENVIRONMENT_CHANGED`. Supports `If-Unmodified-Since` ⇒ `409 conflict`. Audit `SERVER_UPDATED`. **`STALE` and `UNREACHABLE` are written only by the status sweep (M2.5, `OPEN-30`)**, which audits each move as `SERVER_STATUS_CHANGED` with `actor_type = SYSTEM`, `actor_label = system:health-sweep` and `{from, to, health_state, age_seconds, reference_at}`; its moves do not advance `updated_at`, so they cannot cause a `409` here (migration 0006).
 
 **14.5** Soft delete; `status → RETIRED`, `deleted_at` set. Blocked with `409 invalid_state_transition` while any non-terminal operation targets the server. History is retained. Audit `SERVER_RETIRED`.
 
@@ -958,7 +963,7 @@ Performance figures are PRD §10 design budgets, explicitly **not** measured res
 
 ## 28. Audit `action_type` catalogue (initial, extensible)
 
-`LOGIN_SUCCEEDED`, `LOGIN_FAILED`, `LOGIN_DENIED`, `LOGOUT`, `SESSION_TERMINATED`, `AUTHZ_DENIED`, `SERVER_REGISTERED`, `SERVER_UPDATED`, `SERVER_ENVIRONMENT_CHANGED`, `SERVER_RETIRED`, `SERVER_CONNECTIVITY_CHECKED`, `SERVICE_REGISTERED`, `SERVICE_UPDATED`, `SERVICE_ACTION_POLICY_CHANGED`, `SERVICE_DEREGISTERED`, `APPLICATION_REGISTERED`, `APPLICATION_UPDATED`, `APPLICATION_ARCHIVED`, `SERVICE_OPERATION_REQUESTED`, `SERVICE_OPERATION_DENIED`, `SERVICE_OPERATION_APPROVED`, `SERVICE_OPERATION_REJECTED`, `SERVICE_OPERATION_CANCELLED`, `SERVICE_OPERATION_STARTED`, `SERVICE_OPERATION_COMPLETED`, `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_DENIED`, `DEPLOYMENT_APPROVED`, `DEPLOYMENT_REJECTED`, `DEPLOYMENT_CANCELLED`, `DEPLOYMENT_STARTED`, `DEPLOYMENT_COMPLETED`, `DEPLOYMENT_ROLLBACK_REQUESTED`, `ALERT_ACKNOWLEDGED`, `ALERT_ASSIGNED`, `ALERT_INGESTED`, `ROLE_GRANTED`, `ROLE_REVOKED`, `USER_CREATED`, `USER_DISABLED`, `USER_ENABLED`, `CLOUD_ACCOUNT_REGISTERED`, `CLOUD_ACCOUNT_UPDATED`, `CLOUD_ACCOUNT_DISABLED`, `CLOUD_ACCOUNT_VERIFIED`, `CLOUD_ACCOUNT_SYNC_REQUESTED`, `DEPLOYMENT_TARGET_REGISTERED`, `DEPLOYMENT_TARGET_UPDATED`, `APPROVAL_POLICY_CHANGED`, `NOTIFICATION_CHANNEL_CHANGED`, `AUDIT_QUERIED`, `AUDIT_EXPORTED`, `READ_ONLY_MODE_CHANGED`.
+`LOGIN_SUCCEEDED`, `LOGIN_FAILED`, `LOGIN_DENIED`, `LOGOUT`, `SESSION_TERMINATED`, `AUTHZ_DENIED`, `SERVER_REGISTERED`, `SERVER_UPDATED`, `SERVER_ENVIRONMENT_CHANGED`, `SERVER_RETIRED`, `SERVER_STATUS_CHANGED`, `SERVER_CONNECTIVITY_CHECKED`, `SERVICE_REGISTERED`, `SERVICE_UPDATED`, `SERVICE_ACTION_POLICY_CHANGED`, `SERVICE_DEREGISTERED`, `APPLICATION_REGISTERED`, `APPLICATION_UPDATED`, `APPLICATION_ARCHIVED`, `SERVICE_OPERATION_REQUESTED`, `SERVICE_OPERATION_DENIED`, `SERVICE_OPERATION_APPROVED`, `SERVICE_OPERATION_REJECTED`, `SERVICE_OPERATION_CANCELLED`, `SERVICE_OPERATION_STARTED`, `SERVICE_OPERATION_COMPLETED`, `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_DENIED`, `DEPLOYMENT_APPROVED`, `DEPLOYMENT_REJECTED`, `DEPLOYMENT_CANCELLED`, `DEPLOYMENT_STARTED`, `DEPLOYMENT_COMPLETED`, `DEPLOYMENT_ROLLBACK_REQUESTED`, `ALERT_ACKNOWLEDGED`, `ALERT_ASSIGNED`, `ALERT_INGESTED`, `ROLE_GRANTED`, `ROLE_REVOKED`, `USER_CREATED`, `USER_DISABLED`, `USER_ENABLED`, `CLOUD_ACCOUNT_REGISTERED`, `CLOUD_ACCOUNT_UPDATED`, `CLOUD_ACCOUNT_DISABLED`, `CLOUD_ACCOUNT_VERIFIED`, `CLOUD_ACCOUNT_SYNC_REQUESTED`, `DEPLOYMENT_TARGET_REGISTERED`, `DEPLOYMENT_TARGET_UPDATED`, `APPROVAL_POLICY_CHANGED`, `NOTIFICATION_CHANNEL_CHANGED`, `AUDIT_QUERIED`, `AUDIT_EXPORTED`, `READ_ONLY_MODE_CHANGED`.
 
 ---
 

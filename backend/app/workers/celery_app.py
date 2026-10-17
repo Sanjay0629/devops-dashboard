@@ -72,6 +72,14 @@ def create_celery_app() -> Celery:
                 "schedule": float(settings.agent_probe_interval_seconds),
                 "options": {"queue": "integrations"},
             },
+            # M2.5. Once a minute against thresholds measured in minutes; the
+            # sweep ages hosts against the last time Prometheus answered, so a
+            # slow beat costs a little latency and never a false verdict.
+            "sweep-server-status": {
+                "task": "dcp.monitoring.sweep_status",
+                "schedule": 60.0,
+                "options": {"queue": "integrations"},
+            },
             # M2.4. The cache the service lists read; the interval is shared
             # with the staleness bound (3x) so the two cannot drift apart.
             "refresh-service-state": {

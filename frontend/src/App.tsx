@@ -126,10 +126,10 @@ function Shell(): React.JSX.Element {
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M2.4 — inventory, a PostgreSQL dashboard, per-server host metrics and systemd
-            service state from Prometheus. Logs, alerting, operations and deployments are not
-            implemented yet, and every section that depends on them says so rather than showing a
-            zero.
+            Milestone M2.5 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
+            service state and host health from Prometheus. Logs, alerting, operations and
+            deployments are not implemented yet, and every section that depends on them says so
+            rather than showing a zero.
           </p>
         </div>
         <div className="flex items-center gap-3">

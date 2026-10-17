@@ -31,14 +31,15 @@ import json
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, get_args
 
 from redis.exceptions import RedisError
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import UnaryExpression
 
+from app.audit.models import AuditEvent
 from app.authz.matcher import Grant, normalise_scope
 from app.authz.queries import readable_servers
 from app.core.config import get_settings
@@ -48,8 +49,6 @@ from app.core.redis import get_redis
 from app.dashboard.schemas import (
     ALERTS_REASON,
     DEPLOYMENTS_REASON,
-    HEALTH_CHANGES_REASON,
-    HEALTH_REASON,
     OPERATIONS_REASON,
     UTILISATION_REASON,
     ActiveAlertsSection,
@@ -57,7 +56,9 @@ from app.dashboard.schemas import (
     DashboardHealthList,
     DashboardSummary,
     FailedServicesSection,
+    HealthChange,
     RecentActivitySection,
+    RecentHealthChangesSection,
     ServerCounts,
     ServerHealthRollup,
     ServerHealthRow,
@@ -66,6 +67,8 @@ from app.dashboard.schemas import (
 from app.inventory.models import CloudAccount, Server, Service
 from app.inventory.queries import SERVER_SORTS, server_filter_conditions
 from app.inventory.schemas import CursorPage
+from app.monitoring.health import HealthState
+from app.monitoring.read import Reference, current_reference, evaluate, health_state_expr
 from app.services.listing import displayed_state
 
 logger = get_logger(__name__)
@@ -244,11 +247,94 @@ async def _failed_service_counts(
     return counts.get("FAILED", 0), counts.get("UNKNOWN", 0) + counts.get("UNCOLLECTED", 0)
 
 
-def _unknown_health() -> ServerHealthRollup:
+async def _health_rollup(
+    db: AsyncSession,
+    grants: Sequence[Grant],
+    filters: DashboardFilterSet,
+    reference: Reference,
+) -> ServerHealthRollup:
+    """The five health counts, or the reason there are none (never ``0``)."""
+    usable = reference.usable
+    if usable is None:
+        return ServerHealthRollup(
+            data_state=reference.data_state,
+            collected_at=reference.at if reference.data_state == "stale" else None,
+            source="prometheus",
+            unavailable_reason=reference.reason,
+        )
+    state = health_state_expr(get_settings().health_thresholds, usable)
+    rows = (
+        await db.execute(
+            select(state, func.count()).where(*_readable(grants, filters)).group_by(state)
+        )
+    ).all()
+    counts = {name: int(count) for name, count in rows}
     return ServerHealthRollup(
-        data_state="not_configured",
+        healthy=counts.get("healthy", 0),
+        warning=counts.get("warning", 0),
+        stale=counts.get("stale", 0),
+        unreachable=counts.get("unreachable", 0),
+        unknown=counts.get("unknown", 0),
+        data_state="ok",
+        collected_at=usable,
         source="prometheus",
-        unavailable_reason=HEALTH_REASON,
+    )
+
+
+#: How far back and how many sweep moves the dashboard shows. A window as well
+#: as a limit so the query prunes ``audit_events`` partitions instead of reading
+#: all of them.
+_HEALTH_CHANGES_LIMIT = 10
+_HEALTH_CHANGES_WINDOW = timedelta(days=30)
+
+
+async def _recent_health_changes(
+    db: AsyncSession, grants: Sequence[Grant], filters: DashboardFilterSet, collected_at: datetime
+) -> RecentHealthChangesSection:
+    """The latest status moves the sweep made, on servers the caller can read.
+
+    Scope reaches an audit row through its target: ``audit_events`` carries no
+    scope of its own, and listing a move on a server the caller cannot see
+    would leak that it exists. Audit metadata is read as data, not trusted: an
+    unexpected shape degrades the field to ``null`` rather than failing the page.
+    """
+    known = set(get_args(HealthState))
+    rows: Sequence[Any] = (
+        await db.execute(
+            select(
+                AuditEvent.occurred_at,
+                AuditEvent.sanitized_metadata,
+                Server.id,
+                Server.display_name,
+                Server.environment,
+            )
+            .join(Server, Server.id == AuditEvent.target_id)
+            .where(
+                AuditEvent.action_type == "SERVER_STATUS_CHANGED",
+                AuditEvent.target_type == "server",
+                AuditEvent.occurred_at >= collected_at - _HEALTH_CHANGES_WINDOW,
+                *_readable(grants, filters),
+            )
+            .order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc())
+            .limit(_HEALTH_CHANGES_LIMIT)
+        )
+    ).all()
+    items = []
+    for occurred_at, metadata, server_id, display_name, environment in rows:
+        health = metadata.get("health_state")
+        items.append(
+            HealthChange(
+                server_id=server_id,
+                display_name=display_name,
+                environment=environment,
+                previous_status=str(metadata.get("from", "")),
+                new_status=str(metadata.get("to", "")),
+                health_state=health if health in known else None,
+                occurred_at=occurred_at,
+            )
+        )
+    return RecentHealthChangesSection(
+        items=items, data_state="ok", collected_at=collected_at, source="postgresql"
     )
 
 
@@ -263,8 +349,11 @@ async def summary(
     settings = get_settings()
     counts = await _status_counts(db, grants, filters)
     failed, unobserved = await _failed_service_counts(db, grants, filters)
+    reference = await current_reference(settings)
+    rollup = await _health_rollup(db, grants, filters, reference)
     # Stamped after the reads, so it describes the data rather than the request.
     collected_at = datetime.now(UTC)
+    changes = await _recent_health_changes(db, grants, filters, collected_at)
 
     return DashboardSummary(
         servers=ServerCounts(
@@ -278,7 +367,7 @@ async def summary(
             collected_at=collected_at,
             source="postgresql",
         ),
-        server_health=_unknown_health(),
+        server_health=rollup,
         utilisation=UtilisationSection(
             data_state="not_configured",
             source="prometheus",
@@ -298,26 +387,11 @@ async def summary(
         recent_operations=RecentActivitySection(
             data_state="not_configured", unavailable_reason=OPERATIONS_REASON
         ),
-        recent_health_changes=RecentActivitySection(
-            data_state="not_configured", unavailable_reason=HEALTH_CHANGES_REASON
-        ),
+        recent_health_changes=changes,
         filters_applied=filters.echoed(),
         demo_mode=settings.demo_mode,
         cache_ttl_seconds=settings.dashboard_cache_ttl_seconds,
     )
-
-
-def _is_stale(last_seen_at: datetime | None) -> bool | None:
-    """``None`` when the host has never been seen — that is not staleness.
-
-    The same rule as ``app/inventory/service._is_stale``; that one takes a
-    ``Server`` and this one the column, because §13.2 reads rows, not
-    entities.
-    """
-    if last_seen_at is None:
-        return None
-    age = datetime.now(UTC) - last_seen_at
-    return age.total_seconds() > get_settings().server_stale_after_seconds
 
 
 def health_rows_query(
@@ -328,6 +402,7 @@ def health_rows_query(
     order: str,
     cursor: Cursor | None,
     limit: int,
+    extra: Sequence[Any] = (),
 ) -> Select[Any]:
     """§13.2's page, with the per-server failed-unit count as a subquery.
 
@@ -351,7 +426,7 @@ def health_rows_query(
     statement = (
         select(Server, CloudAccount.provider, failed_units.label("failed_service_count"))
         .join(CloudAccount, CloudAccount.id == Server.cloud_account_id)
-        .where(*_readable(grants, filters))
+        .where(*_readable(grants, filters), *extra)
     )
     if cursor is not None:
         pair = func.row(spec.expression, Server.id)
@@ -376,42 +451,63 @@ async def health_list(
 ) -> DashboardHealthList:
     """§13.2, computed fresh from PostgreSQL.
 
-    ``health_status`` filters a field that has no source yet, so it can only
-    match nothing, and it is honoured rather than ignored: silently dropping a
-    filter returns the *whole* list looking as though the filter applied. The
-    ``health`` section on the response is what says why the page is empty.
+    ``health_status`` is applied in SQL by the twin of the rule that produces
+    each row's ``health_state`` (``monitoring.read``), so the page a filter
+    selects is the page of rows that show that state, and the cursor pages over
+    it. With no usable reference nothing can be evaluated, so the filter matches
+    nothing — honoured rather than ignored, because silently dropping it would
+    return the *whole* list looking as though the filter applied. The ``health``
+    section is what says why the page is empty.
     """
     settings = get_settings()
+    table = settings.health_thresholds
+    reference = await current_reference(settings)
     items: list[ServerHealthRow] = []
     next_cursor: str | None = None
     has_more = False
 
-    if not health_status:
+    extra: list[Any] = []
+    unanswerable = False
+    if health_status:
+        if reference.usable is None:
+            unanswerable = True
+        else:
+            extra.append(health_state_expr(table, reference.usable).in_(health_status))
+
+    if not unanswerable:
         fetched = (
             await db.execute(
                 health_rows_query(
-                    grants, filters, sort=sort, order=order, cursor=cursor, limit=limit
+                    grants,
+                    filters,
+                    sort=sort,
+                    order=order,
+                    cursor=cursor,
+                    limit=limit,
+                    extra=extra,
                 )
             )
         ).all()
         has_more = len(fetched) > limit
         page_rows = fetched[:limit]
-        items = [
-            ServerHealthRow(
-                server_id=server.id,
-                display_name=server.display_name,
-                hostname=server.hostname,
-                environment=server.environment,
-                provider=provider,
-                status=server.status,
-                health_state=None,
-                last_seen_at=server.last_seen_at,
-                stale=_is_stale(server.last_seen_at),
-                failed_service_count=int(failed_count),
-                active_alert_count=None,
+        items = []
+        for server, provider, failed_count in page_rows:
+            health = evaluate(server, table, reference)
+            items.append(
+                ServerHealthRow(
+                    server_id=server.id,
+                    display_name=server.display_name,
+                    hostname=server.hostname,
+                    environment=server.environment,
+                    provider=provider,
+                    status=server.status,
+                    health_state=health.state,
+                    last_seen_at=server.last_seen_at,
+                    stale=health.stale,
+                    failed_service_count=int(failed_count),
+                    active_alert_count=None,
+                )
             )
-            for server, provider, failed_count in page_rows
-        ]
         if has_more and page_rows:
             last = page_rows[-1][0]
             next_cursor = encode_cursor(
@@ -422,7 +518,7 @@ async def health_list(
     return DashboardHealthList(
         items=items,
         page=CursorPage(limit=limit, next_cursor=next_cursor, has_more=has_more),
-        health=_unknown_health(),
+        health=await _health_rollup(db, grants, filters, reference),
         alerts=_unknown_alerts(),
         collected_at=collected_at,
         filters_applied=filters.echoed(),

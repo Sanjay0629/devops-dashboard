@@ -28,7 +28,9 @@ probe can no longer vouch for. That is the cost of flapping to ``UNKNOWN`` durin
 a Prometheus restart, accepted over a status that outlives its evidence.
 
 ``last_seen_at`` is set to the host's latest successful scrape and only ever
-moves forward. It is the field the M2.5 stale sweep reads (AD-14).
+moves forward. It is the field the M2.5 status sweep reads (AD-14), and a probe
+that got an answer from Prometheus also records *when* in Redis
+(``app.monitoring.marker``), which is what the sweep measures age against.
 """
 
 from __future__ import annotations
@@ -43,7 +45,13 @@ from sqlalchemy import Connection, Engine, text
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.metrics import discovery, templates
-from app.metrics.client import PrometheusClient, PrometheusUnavailableError, Sample
+from app.metrics.client import (
+    PrometheusClient,
+    PrometheusUnavailableError,
+    Sample,
+    gather_all,
+)
+from app.monitoring import marker
 
 logger = get_logger(__name__)
 
@@ -77,7 +85,7 @@ async def observe(
     found: dict[str, Observation] = {}
     for start in range(0, len(instances), BATCH_SIZE):
         chunk = list(instances[start : start + BATCH_SIZE])
-        window, latest, scraped = await asyncio.gather(
+        window, latest, scraped = await gather_all(
             client.query(templates.render_agent_window("LINUX", chunk, window_seconds)),
             client.query(templates.render("agent_up", "LINUX", chunk)),
             client.query(templates.render_scrape_timestamp("LINUX", chunk)),
@@ -162,4 +170,13 @@ def probe(
 
     with engine.begin() as connection:
         changed = apply(connection, targets, observations)
+    if observations is not None:
+        # After the write, so the marker never claims a moment the rows do not
+        # yet reflect. Only a real answer advances it (M2.5, D2): an outage
+        # leaves it where it was, and the sweep ages nothing against it.
+        marker_store = marker.redis_client(settings)
+        try:
+            marker.write_marker(marker_store)
+        finally:
+            marker_store.close()
     return {"targets": len(targets), "changed": changed, "outcome": outcome}

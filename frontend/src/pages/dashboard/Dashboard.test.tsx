@@ -45,17 +45,19 @@ const SUMMARY = {
     stale_after_seconds: null,
     unavailable_reason: null,
   },
-  // Every value null, exactly as the backend reports it at M1.6.
+  // No Prometheus: every count null, exactly as the backend reports it.
   server_health: {
     healthy: null,
     warning: null,
     critical: null,
+    stale: null,
+    unreachable: null,
     unknown: null,
     data_state: 'not_configured',
     collected_at: null,
     source: 'prometheus',
     stale_after_seconds: null,
-    unavailable_reason: 'Server health evaluation is not implemented yet (M2.1).',
+    unavailable_reason: 'Prometheus is not configured, so health cannot be evaluated.',
   },
   utilisation: {
     cpu_percent_avg: null,
@@ -104,12 +106,12 @@ const SUMMARY = {
     unavailable_reason: 'Service operations are not implemented yet (M4.2).',
   },
   recent_health_changes: {
-    items: null,
-    data_state: 'not_configured',
-    collected_at: null,
-    source: null,
+    items: [],
+    data_state: 'ok',
+    collected_at: '2026-10-15T09:30:00Z',
+    source: 'postgresql',
     stale_after_seconds: null,
-    unavailable_reason: 'Health-change history is not implemented yet (M2.5).',
+    unavailable_reason: null,
   },
   filters_applied: {},
   demo_mode: false,
@@ -134,13 +136,7 @@ function healthList(items: unknown[] = [ROW], hasMore = false) {
   return {
     items,
     page: { limit: 25, next_cursor: hasMore ? 'cursor-2' : null, has_more: hasMore, total: null },
-    health: {
-      data_state: 'not_configured',
-      collected_at: null,
-      source: 'prometheus',
-      stale_after_seconds: null,
-      unavailable_reason: 'Server health evaluation is not implemented yet (M2.1).',
-    },
+    health: SUMMARY.server_health,
     alerts: {
       data_state: 'not_configured',
       collected_at: null,
@@ -259,16 +255,249 @@ describe('Dashboard', () => {
     expect(card).not.toHaveTextContent(/not observed/);
   });
 
-  it('never shows an unmonitored server as healthy', async () => {
+  it('never shows an unevaluated server as healthy', async () => {
     mockApi();
     renderDashboard();
     const row = (await screen.findByRole('link', { name: 'Web 01' })).closest('tr');
     expect(row).not.toBeNull();
-    // `health_state` is null. "Unknown", never "Healthy".
-    expect(within(row as HTMLElement).getByText('Unknown')).toBeInTheDocument();
+    // `health_state` is null: nothing was evaluated. Not a badge at all, and
+    // above all not "Healthy" - and not "Unknown", which is a verdict.
+    expect(within(row as HTMLElement).getByText('Not evaluated')).toBeInTheDocument();
     expect(within(row as HTMLElement).queryByText('Healthy')).toBeNull();
+    expect(within(row as HTMLElement).queryByText('Unknown')).toBeNull();
+    expect(within(row as HTMLElement).getByText('Never seen')).toBeInTheDocument();
     // And the alert count is not a zero either — there is no alerts table.
     expect(within(row as HTMLElement).getByText('Not configured')).toBeInTheDocument();
+  });
+
+  // --- health (M2.5) -----------------------------------------------------------
+
+  const ROLLUP = {
+    ...SUMMARY.server_health,
+    healthy: 3,
+    warning: 1,
+    stale: 1,
+    unreachable: 1,
+    unknown: 0,
+    critical: null,
+    data_state: 'ok',
+    collected_at: '2026-10-15T09:29:50Z',
+    unavailable_reason: null,
+  };
+
+  function healthRegion(): HTMLElement {
+    return screen.getByRole('region', { name: 'Health' });
+  }
+
+  it('shows real health counts, including a real zero, and labels them apart from status', async () => {
+    mockApi({ summary: { ...SUMMARY, server_health: ROLLUP } });
+    renderDashboard();
+    await screen.findByText('6');
+
+    const card = (label: string) =>
+      within(healthRegion()).getByRole('heading', { name: label }).parentElement;
+    expect(card('Healthy')).toHaveTextContent('3');
+    expect(card('Warning')).toHaveTextContent('1');
+    expect(card('Stale')).toHaveTextContent('1');
+    expect(card('Unreachable')).toHaveTextContent('1');
+    // `unknown` is 0 because the rollup was computed and nobody is unknown.
+    expect(card('Unknown')).toHaveTextContent('0');
+
+    // The registration-status counts are a different group with their own
+    // heading, so two cards named "Stale" cannot be mistaken for one number.
+    const registration = screen.getByRole('region', { name: 'Registration status' });
+    expect(within(registration).getByRole('link', { name: 'Stale' })).toHaveAttribute(
+      'href',
+      '/servers?status=STALE',
+    );
+    expect(within(healthRegion()).queryByRole('link')).toBeNull();
+  });
+
+  it('dates the health rollup by when Prometheus last answered', async () => {
+    mockApi({ summary: { ...SUMMARY, server_health: ROLLUP } });
+    renderDashboard();
+    await screen.findByText('6');
+    expect(within(healthRegion()).getByText(/Collected/)).toBeInTheDocument();
+  });
+
+  it('does not render critical as 0 or as collected', async () => {
+    // Nothing evaluates utilisation, so `critical` is null inside an `ok`
+    // section. A banner would say "Collected"; a `?? 0` would say "none".
+    mockApi({ summary: { ...SUMMARY, server_health: ROLLUP } });
+    renderDashboard();
+    await screen.findByText('6');
+    const critical = within(healthRegion()).getByRole('heading', {
+      name: 'Critical',
+    }).parentElement;
+    expect(critical).toHaveTextContent(/Not evaluated/);
+    expect(critical?.textContent ?? '').not.toMatch(/\b0\b/);
+    expect(critical).not.toHaveTextContent(/Collected/);
+  });
+
+  it('shows no count at all while Prometheus is silent', async () => {
+    mockApi({
+      summary: {
+        ...SUMMARY,
+        server_health: {
+          ...SUMMARY.server_health,
+          data_state: 'unavailable',
+          unavailable_reason: 'Prometheus has not answered yet, so health cannot be evaluated.',
+        },
+      },
+    });
+    renderDashboard();
+    await screen.findByText('6');
+    for (const label of ['Healthy', 'Warning', 'Stale', 'Unreachable', 'Unknown', 'Critical']) {
+      const card = within(healthRegion()).getByRole('heading', { name: label }).parentElement;
+      expect(card).toHaveTextContent(/Prometheus has not answered yet/);
+      expect(card?.textContent ?? '').not.toMatch(/\d/);
+    }
+  });
+
+  it('dates a stale rollup and counts nothing', async () => {
+    mockApi({
+      summary: {
+        ...SUMMARY,
+        server_health: {
+          ...SUMMARY.server_health,
+          data_state: 'stale',
+          collected_at: '2026-10-15T07:00:00Z',
+          unavailable_reason:
+            'Prometheus has not answered recently, so health is not judged against old data.',
+        },
+      },
+    });
+    renderDashboard();
+    await screen.findByText('6');
+    expect(within(healthRegion()).getByText(/Collected/)).toBeInTheDocument();
+    const card = within(healthRegion()).getByRole('heading', { name: 'Healthy' }).parentElement;
+    expect(card).toHaveTextContent(/Stale — Prometheus has not answered recently/);
+    // No digit in the card text, so no count - not even a dated one.
+    expect(card?.textContent ?? '').not.toMatch(/\d/);
+  });
+
+  it('renders each health state, and "Never seen" for a host never scraped', async () => {
+    const seen = (name: string, state: string, at: string | null, stale: boolean | null) => ({
+      ...ROW,
+      server_id: name.toLowerCase(),
+      display_name: name,
+      health_state: state,
+      last_seen_at: at,
+      stale,
+    });
+    mockApi({
+      health: healthList([
+        seen('Aa', 'healthy', '2026-10-15T09:30:00Z', false),
+        seen('Bb', 'stale', '2026-10-15T09:20:00Z', true),
+        seen('Cc', 'unreachable', '2026-10-15T08:00:00Z', true),
+        seen('Dd', 'unknown', null, null),
+      ]),
+    });
+    renderDashboard();
+    const rowOf = async (name: string) =>
+      (await screen.findByRole('link', { name })).closest('tr') as HTMLElement;
+
+    expect(within(await rowOf('Aa')).getByText('Healthy')).toBeInTheDocument();
+    expect(within(await rowOf('Bb')).getByText('Stale')).toBeInTheDocument();
+    expect(within(await rowOf('Cc')).getByText('Unreachable')).toBeInTheDocument();
+    const unknown = await rowOf('Dd');
+    // Evaluated, nothing known: a verdict badge, and a last-seen that is not a time.
+    expect(within(unknown).getByText('Unknown')).toBeInTheDocument();
+    expect(within(unknown).getByText('Never seen')).toBeInTheDocument();
+    expect(within(unknown).queryByText('Not evaluated')).toBeNull();
+  });
+
+  it('puts the health reason above the table only when the rollup has none', async () => {
+    mockApi({
+      summary: { ...SUMMARY, server_health: ROLLUP },
+      health: { ...healthList([ROW]), health: ROLLUP },
+    });
+    const first = renderDashboard();
+    await screen.findByRole('link', { name: 'Web 01' });
+    // `ok`: the cards already say it; a banner above the table would be noise.
+    expect(
+      screen.queryByText(/Prometheus is not configured, so health cannot be evaluated/),
+    ).toBeNull();
+    first.unmount();
+
+    mockApi();
+    renderDashboard();
+    await screen.findByRole('link', { name: 'Web 01' });
+    expect(
+      screen.getAllByText(/Prometheus is not configured, so health cannot be evaluated/).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('sends the chosen health filter to the backend, to the list only', async () => {
+    const fetchMock = mockApi();
+    renderDashboard();
+    await screen.findByText('6');
+    await userEvent.selectOptions(screen.getByLabelText('Health status'), 'stale');
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([input]) =>
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+      );
+      expect(
+        urls.some(
+          (url) => url.includes('/dashboard/health') && url.includes('health_status=stale'),
+        ),
+      ).toBe(true);
+      // The summary is not filtered by health: its counts *are* the breakdown.
+      expect(
+        urls.some((url) => url.includes('/dashboard/summary') && url.includes('health_status')),
+      ).toBe(false);
+    });
+  });
+
+  // --- recent health changes ----------------------------------------------------
+
+  const CHANGES = {
+    ...SUMMARY.recent_health_changes,
+    items: [
+      {
+        server_id: 's9',
+        display_name: 'Db 09',
+        environment: 'production',
+        previous_status: 'MANAGED',
+        new_status: 'STALE',
+        health_state: 'stale',
+        occurred_at: '2026-10-15T09:20:00Z',
+      },
+    ],
+  };
+
+  it('lists the moves the sweep made, with a link to the server', async () => {
+    mockApi({ summary: { ...SUMMARY, recent_health_changes: CHANGES } });
+    renderDashboard();
+    const link = await screen.findByRole('link', { name: 'Db 09' });
+    expect(link).toHaveAttribute('href', '/servers/s9');
+    const item = link.closest('li') as HTMLElement;
+    expect(within(item).getByText('Managed')).toBeInTheDocument();
+    expect(within(item).getByText('Stale')).toBeInTheDocument();
+  });
+
+  it('says "none recorded" for an empty list, which is a fact', async () => {
+    mockApi();
+    renderDashboard();
+    expect(await screen.findByText(/No health changes recorded/)).toBeInTheDocument();
+  });
+
+  it('says "not available" for a null list rather than "none recorded"', async () => {
+    mockApi({
+      summary: {
+        ...SUMMARY,
+        recent_health_changes: {
+          ...SUMMARY.recent_health_changes,
+          items: null,
+          data_state: 'unavailable',
+          collected_at: null,
+          unavailable_reason: 'The audit trail could not be read.',
+        },
+      },
+    });
+    renderDashboard();
+    expect(await screen.findByText(/The audit trail could not be read/)).toBeInTheDocument();
+    expect(screen.queryByText(/No health changes recorded/)).toBeNull();
   });
 
   // --- the other states ------------------------------------------------------
@@ -347,6 +576,50 @@ describe('Dashboard', () => {
   });
 
   // --- accessibility ----------------------------------------------------------
+
+  it('has no axe violations with real health data on the page', async () => {
+    mockApi({
+      summary: {
+        ...SUMMARY,
+        server_health: {
+          ...SUMMARY.server_health,
+          healthy: 3,
+          warning: 1,
+          stale: 1,
+          unreachable: 1,
+          unknown: 0,
+          data_state: 'ok',
+          collected_at: '2026-10-15T09:29:50Z',
+          unavailable_reason: null,
+        },
+        recent_health_changes: {
+          ...SUMMARY.recent_health_changes,
+          items: [
+            {
+              server_id: 's9',
+              display_name: 'Db 09',
+              environment: 'production',
+              previous_status: 'MANAGED',
+              new_status: 'STALE',
+              health_state: 'stale',
+              occurred_at: '2026-10-15T09:20:00Z',
+            },
+          ],
+        },
+      },
+      health: healthList([
+        { ...ROW, health_state: 'stale', last_seen_at: '2026-10-15T09:20:00Z', stale: true },
+        { ...ROW, server_id: 's2', display_name: 'Web 02', health_state: 'unknown' },
+      ]),
+    });
+    const { container } = renderDashboard();
+    await screen.findByRole('link', { name: 'Db 09' });
+    const results = await axe.run(container, {
+      runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] },
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(results.violations.map((violation) => violation.id)).toEqual([]);
+  });
 
   it('has no axe violations', async () => {
     mockApi();

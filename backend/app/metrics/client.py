@@ -66,9 +66,10 @@ double it.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Final, Literal
@@ -209,6 +210,15 @@ class CircuitBreaker:
             self.opened_at = self.clock()
             self.probe_taken = False
 
+    def release_probe(self) -> None:
+        """Give an unresolved half-open probe back.
+
+        For a call that was cancelled before it learned anything: it is neither
+        a success nor a failure, and keeping the probe would leave the circuit
+        half-open and refusing everyone forever.
+        """
+        self.probe_taken = False
+
     def reset(self) -> None:
         self.consecutive_failures = 0
         self.opened_at = None
@@ -216,6 +226,36 @@ class CircuitBreaker:
         self.last_success_at = None
         self.last_error_at = None
         self.last_error_reason = None
+
+
+async def gather_all[T](*queries: Awaitable[T]) -> list[T]:
+    """Run queries together and wait for **all** of them, then fail if any failed.
+
+    Not ``asyncio.gather``: that re-raises the first failure at once and leaves
+    the rest running, and under ``asyncio.run`` -- every Celery task here -- the
+    rest are then cancelled. After an outage the circuit is half-open and admits
+    exactly one probe; of three concurrent queries one holds it and two are
+    refused ``circuit_open``, so a plain ``gather`` raises, the holder is
+    cancelled before it can record that Prometheus is back, and the circuit
+    refuses every later cycle too. Waiting lets the probe finish and close it:
+    the cycle that finds the circuit half-open fails (two of its queries were
+    refused) and the next one is whole.
+
+    Raises the first failure that is not ``circuit_open``, since that is the
+    reason the circuit opened rather than a symptom of it.
+    """
+    results = await asyncio.gather(*queries, return_exceptions=True)
+    failures = [result for result in results if isinstance(result, BaseException)]
+    if failures:
+        real = [
+            failure
+            for failure in failures
+            if not (
+                isinstance(failure, PrometheusUnavailableError) and failure.reason == "circuit_open"
+            )
+        ]
+        raise (real or failures)[0]
+    return [result for result in results if not isinstance(result, BaseException)]
 
 
 #: Shared across requests: a breaker that is rebuilt per request has no memory
@@ -287,6 +327,11 @@ class PrometheusClient:
             payload = await self._request(url, params)
         except PrometheusUnavailableError as error:
             self.circuit.record_failure(error.reason)
+            raise
+        except asyncio.CancelledError:
+            # Not a verdict about Prometheus, but this call may hold the one
+            # half-open probe; see ``gather_all`` for how that gets cancelled.
+            self.circuit.release_probe()
             raise
         self.circuit.record_success()
         return payload

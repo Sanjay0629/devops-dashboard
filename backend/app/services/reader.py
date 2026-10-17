@@ -21,14 +21,13 @@ registered is dropped here and never reaches a caller.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 
 from app.metrics import templates
-from app.metrics.client import PrometheusClient, Sample
+from app.metrics.client import PrometheusClient, Sample, gather_all
 from app.services import queries
 from app.services.normalise import UnitObservation
 
@@ -81,7 +80,7 @@ def _chunks[T](items: Sequence[T], size: int) -> list[Sequence[T]]:
 
 
 async def _hosts(client: PrometheusClient, instances: Sequence[str]) -> dict[str, HostFacts]:
-    up, scraped, collector = await asyncio.gather(
+    up, scraped, collector = await gather_all(
         client.query(templates.render("agent_up", "LINUX", instances)),
         client.query(templates.render_scrape_timestamp("LINUX", instances)),
         client.query(queries.collector_success(instances)),
@@ -110,7 +109,7 @@ async def _units(
     names: Sequence[str],
     wanted: frozenset[tuple[str, str]],
 ) -> dict[tuple[str, str], UnitObservation]:
-    state, restarts, started = await asyncio.gather(
+    state, restarts, started = await gather_all(
         client.query(queries.unit_state(instances, names)),
         client.query(queries.restart_total(instances, names)),
         client.query(queries.start_time(instances, names)),

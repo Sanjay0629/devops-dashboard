@@ -38,6 +38,7 @@ from app.inventory.models import (
     OPERATING_SYSTEMS,
     SERVER_STATUSES,
 )
+from app.monitoring.health import HealthState
 
 Environment = Literal["development", "staging", "production", "other"]
 OperatingSystem = Literal["LINUX", "WINDOWS", "OTHER"]
@@ -49,7 +50,6 @@ ServerStatus = Literal["PENDING", "MANAGED", "STALE", "UNREACHABLE", "RETIRED"]
 SettableServerStatus = Literal["PENDING", "MANAGED", "RETIRED"]
 ApplicationStatus = Literal["ACTIVE", "ARCHIVED"]
 DataState = Literal["ok", "stale", "unavailable", "unsupported", "not_configured"]
-HealthState = Literal["healthy", "warning", "critical", "stale", "unreachable", "unknown"]
 
 # Same guard as app/admin/schemas.py: the Literals above and the database CHECK
 # constraints are two statements of one closed set, and a mismatch means the

@@ -339,12 +339,18 @@ async def test_a_zero_over_units_nobody_could_read_says_so(
 async def test_every_section_without_a_source_is_null_and_says_why(
     dashboard: tuple[httpx.AsyncClient, uuid.UUID, str],
 ) -> None:
-    """The acceptance criterion, over the wire, for all six absent sources."""
+    """The acceptance criterion, over the wire, for the sources that are absent.
+
+    ``recent_health_changes`` used to be here and no longer is: it reads
+    ``audit_events`` (M2.5), so ``[]`` is a true "nothing recorded". The health
+    rollup is absent here only because these tests configure no Prometheus; its
+    other states are in ``test_health_read.py``.
+    """
     client, _caller, _team = dashboard
     body = await _summary(client)
 
     for name, fields in (
-        ("server_health", ("healthy", "warning", "critical", "unknown")),
+        ("server_health", ("healthy", "warning", "critical", "stale", "unreachable", "unknown")),
         (
             "utilisation",
             (
@@ -357,7 +363,6 @@ async def test_every_section_without_a_source_is_null_and_says_why(
         ("active_alerts", ("critical", "warning", "info")),
         ("recent_deployments", ("items",)),
         ("recent_operations", ("items",)),
-        ("recent_health_changes", ("items",)),
     ):
         section = body[name]
         assert section["data_state"] == "not_configured", name
