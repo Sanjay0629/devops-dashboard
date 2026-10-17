@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Base image pinned to an exact patch version. Digest pinning (AD-16) is NOT yet
 # done — see PROGRESS.md "Known issues" and scripts/pin-digests.sh.
-FROM python:3.12.8-slim-bookworm AS base
+FROM python:3.12.15-slim-bookworm AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
