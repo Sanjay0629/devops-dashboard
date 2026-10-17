@@ -364,6 +364,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/logs/query': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Search logs across authorised servers
+     * @description §19.1. Structured filters in, redacted lines out; no LogQL is ever accepted.
+     */
+    post: operations['query_logs_api_v1_logs_query_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/logs/sources': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Filter values for the log search form
+     * @description §19.2. The values are closed (AD-21), so this is the catalogue itself.
+     */
+    get: operations['log_sources_api_v1_logs_sources_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/metrics/compare': {
     parameters: {
       query?: never;
@@ -608,7 +648,7 @@ export interface paths {
     };
     /**
      * Recent service logs
-     * @description §16.7 — validated now, answered by Loki from M3.1.
+     * @description §16.7 — one registered unit's lines, from Loki, redacted.
      */
     get: operations['service_logs_api_v1_servers__server_id__services__service_name__logs_get'];
     put?: never;
@@ -1289,6 +1329,162 @@ export interface components {
       /** Integrations */
       integrations: components['schemas']['IntegrationStatus'][];
     };
+    /**
+     * LogEntry
+     * @description One redacted line. ``hostname`` is the inventory's, never the shipper's label.
+     */
+    LogEntry: {
+      /** Hostname */
+      hostname: string;
+      /**
+       * Level
+       * @enum {string}
+       */
+      level: 'debug' | 'info' | 'warn' | 'error' | 'critical' | 'unknown';
+      /** Line */
+      line: string;
+      /**
+       * Line Truncated
+       * @default false
+       */
+      line_truncated: boolean;
+      /**
+       * Server Id
+       * Format: uuid
+       */
+      server_id: string;
+      /** Service */
+      service: string;
+      /**
+       * Source Type
+       * @enum {string}
+       */
+      source_type: 'journald' | 'syslog' | 'nginx' | 'php_fpm' | 'docker' | 'application';
+      /**
+       * Timestamp
+       * Format: date-time
+       */
+      timestamp: string;
+    };
+    /** LogLimits */
+    LogLimits: {
+      /** Default Limit */
+      default_limit: number;
+      /** Max Contains */
+      max_contains: number;
+      /** Max Limit */
+      max_limit: number;
+      /** Max Range Days */
+      max_range_days: number;
+      /** Max Server Ids */
+      max_server_ids: number;
+      /** Retention Days */
+      retention_days: number;
+    };
+    /** LogPage */
+    LogPage: {
+      /** Has More */
+      has_more: boolean;
+      /** Limit */
+      limit: number;
+      /** Next Cursor */
+      next_cursor: string | null;
+      /** Total */
+      total?: null;
+    };
+    /** LogQueryRequest */
+    LogQueryRequest: {
+      /** Application Id */
+      application_id?: string | null;
+      /** Contains */
+      contains?: string | null;
+      /** Cursor */
+      cursor?: string | null;
+      /**
+       * Direction
+       * @default backward
+       * @enum {string}
+       */
+      direction: 'backward' | 'forward';
+      /** Environment */
+      environment?: ('development' | 'staging' | 'production' | 'other') | null;
+      /**
+       * From
+       * Format: date-time
+       */
+      from: string;
+      /** Level */
+      level?: ('debug' | 'info' | 'warn' | 'error' | 'critical' | 'unknown')[] | null;
+      /**
+       * Limit
+       * @default 200
+       */
+      limit: number;
+      /** Pattern Preset */
+      pattern_preset?:
+        | (
+            | 'http_5xx'
+            | 'oom_killed'
+            | 'connection_refused'
+            | 'timeout'
+            | 'permission_denied'
+            | 'auth_failure'
+            | 'segfault'
+            | 'disk_full'
+          )
+        | null;
+      /** Server Ids */
+      server_ids?: string[] | null;
+      /** Service */
+      service?: string | null;
+      /** Source Type */
+      source_type?: ('journald' | 'syslog' | 'nginx' | 'php_fpm' | 'docker' | 'application') | null;
+      /**
+       * To
+       * Format: date-time
+       */
+      to: string;
+    };
+    /** LogSearchResponse */
+    LogSearchResponse: {
+      /**
+       * Data State
+       * @default ok
+       * @constant
+       */
+      data_state: 'ok';
+      /** Entries */
+      entries: components['schemas']['LogEntry'][];
+      /** Excluded By Scope Count */
+      excluded_by_scope_count: number;
+      /** Ingestion */
+      ingestion: components['schemas']['ServerIngestion'][];
+      page: components['schemas']['LogPage'];
+      query_stats: components['schemas']['QueryStats'];
+      /** Servers Searched */
+      servers_searched: number;
+      /**
+       * Source
+       * @default loki
+       * @constant
+       */
+      source: 'loki';
+    };
+    /**
+     * LogSources
+     * @description §19.2. The label values are closed (AD-21), so this is the catalogue itself.
+     */
+    LogSources: {
+      /** Environments */
+      environments: ('development' | 'staging' | 'production' | 'other')[];
+      /** Levels */
+      levels: ('debug' | 'info' | 'warn' | 'error' | 'critical' | 'unknown')[];
+      limits: components['schemas']['LogLimits'];
+      /** Presets */
+      presets: components['schemas']['PresetInfo'][];
+      /** Source Types */
+      source_types: ('journald' | 'syslog' | 'nginx' | 'php_fpm' | 'docker' | 'application')[];
+    };
     /** LogoutResponse */
     LogoutResponse: {
       /**
@@ -1519,6 +1715,35 @@ export interface components {
     PermissionList: {
       /** Items */
       items: components['schemas']['PermissionEntry'][];
+    };
+    /** PresetInfo */
+    PresetInfo: {
+      /** Description */
+      description: string;
+      /**
+       * Id
+       * @enum {string}
+       */
+      id:
+        | 'http_5xx'
+        | 'oom_killed'
+        | 'connection_refused'
+        | 'timeout'
+        | 'permission_denied'
+        | 'auth_failure'
+        | 'segfault'
+        | 'disk_full';
+      /** Label */
+      label: string;
+    };
+    /** QueryStats */
+    QueryStats: {
+      /** Bytes Scanned */
+      bytes_scanned: number | null;
+      /** Duration Ms */
+      duration_ms: number;
+      /** Truncated */
+      truncated: boolean;
     };
     /** RangeMetrics */
     RangeMetrics: {
@@ -2029,6 +2254,30 @@ export interface components {
       stale: boolean | null;
       /** Status */
       status: string;
+    };
+    /**
+     * ServerIngestion
+     * @description Whether a selected server's shipper has been sending lines (OPEN-34).
+     *
+     *     ``receiving``: lines in the last 15 minutes. ``quiet``: none in 15 minutes
+     *     but some in 24 hours. ``silent``: none in 24 hours. ``unknown``: Loki could
+     *     not say. **An empty result is "no matching lines" only when every selected
+     *     server is ``receiving``**; otherwise it may mean a host or a shipper that is
+     *     not talking (PROGRESS issue 93).
+     */
+    ServerIngestion: {
+      /** Hostname */
+      hostname: string;
+      /**
+       * Server Id
+       * Format: uuid
+       */
+      server_id: string;
+      /**
+       * State
+       * @enum {string}
+       */
+      state: 'receiving' | 'quiet' | 'silent' | 'unknown';
     };
     /** ServerList */
     ServerList: {
@@ -3197,6 +3446,73 @@ export interface operations {
       };
     };
   };
+  query_logs_api_v1_logs_query_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['LogQueryRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['LogSearchResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Loki is unavailable or not configured. Never an empty page. */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Loki did not answer within the deadline. */
+      504: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  log_sources_api_v1_logs_sources_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['LogSources'];
+        };
+      };
+    };
+  };
   compare_metrics_api_v1_metrics_compare_post: {
     parameters: {
       query?: never;
@@ -3764,7 +4080,7 @@ export interface operations {
         limit?: number;
         from?: string | null;
         to?: string | null;
-        level?: ('debug' | 'info' | 'notice' | 'warning' | 'error' | 'critical') | null;
+        level?: ('debug' | 'info' | 'warn' | 'error' | 'critical' | 'unknown') | null;
       };
       header?: never;
       path: {
@@ -3783,7 +4099,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['LogSearchResponse'];
         };
       };
       /** @description Validation Error */
@@ -3795,8 +4111,15 @@ export interface operations {
           'application/json': components['schemas']['HTTPValidationError'];
         };
       };
-      /** @description Log search is not configured (Loki arrives with M3.1). */
+      /** @description Loki is unavailable or not configured. Never an empty page. */
       503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Loki did not answer within the deadline. */
+      504: {
         headers: {
           [name: string]: unknown;
         };

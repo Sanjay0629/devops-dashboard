@@ -35,6 +35,7 @@ from app.db.session import dispose_engine
 from app.health.router import router as health_router
 from app.inventory.router_applications import router as applications_router
 from app.inventory.router_servers import router as servers_router
+from app.logs.router import router as logs_router
 from app.metrics.router import router as metrics_router
 from app.services.router import router as services_router
 
@@ -102,6 +103,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # configured rather than to disappear when nothing is.
     app.include_router(metrics_router, prefix=settings.api_base_path)
     app.include_router(services_router, prefix=settings.api_base_path)
+    # §19.1 and §19.2 (M3.2). Mounted even with no Loki configured: they answer
+    # 503 not_configured rather than disappearing.
+    app.include_router(logs_router, prefix=settings.api_base_path)
 
     return app
 

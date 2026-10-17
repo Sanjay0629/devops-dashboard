@@ -23,11 +23,12 @@ one field needs more. ``admin:users`` is the stand-in for "is an
 Administrator", exactly as in ``inventory/router_servers.py``, and a refusal
 reads as ``404`` for the same reason it does there.
 
-**16.7 is routed and validated but cannot answer yet.** Log search is Loki's,
-and Loki is not configured until M3.1. Returning an empty page would be a lie
-that looks like "no errors in the last hour", so a valid request for a
-registered unit answers ``503 not_configured`` — after the permission, scope,
-registration and parameter checks, so those are exercised for real.
+**16.7 is answered by the log engine (M3.2).** It is the same code as
+``POST /logs/query`` (``app/logs/service.py``) restricted to one registered
+unit's journald lines, so scope, redaction, the ingestion state and the
+"unavailable is never empty" rule are not reimplemented here. With no Loki
+configured it answers ``503 not_configured`` -- after the permission, scope,
+registration and parameter checks.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ from app.audit import service as audit
 from app.auth.dependencies import ReadBudget, client_ip, user_agent
 from app.authz.dependencies import Authorized, require_permission
 from app.core.config import get_settings
-from app.core.errors import NotConfiguredError, field_error
+from app.core.errors import field_error
 from app.core.filters import reject_unknown_query_parameters
 from app.core.logging import get_logger
 from app.core.pagination import Cursor, decode_cursor, encode_cursor
@@ -51,6 +52,8 @@ from app.db.session import get_session
 from app.inventory.models import SERVICE_NAME_PATTERN, Server, Service
 from app.inventory.schemas import CursorPage, Environment
 from app.inventory.service import NotFoundError
+from app.logs import service as logs_service
+from app.logs.schemas import LogSearchResponse
 from app.services import listing, service
 from app.services.normalise import ServiceState
 from app.services.schemas import (
@@ -362,8 +365,10 @@ async def deregister_service(
     "/servers/{server_id}/services/{service_name}/logs",
     dependencies=[ReadBudget],
     summary="Recent service logs",
-    response_model=None,
-    responses={503: {"description": "Log search is not configured (Loki arrives with M3.1)."}},
+    responses={
+        503: {"description": "Loki is unavailable or not configured. Never an empty page."},
+        504: {"description": "Loki did not answer within the deadline."},
+    },
 )
 async def service_logs(
     request: Request,
@@ -375,17 +380,20 @@ async def service_logs(
     from_: Annotated[datetime | None, Query(alias="from")] = None,
     to: Annotated[datetime | None, Query()] = None,
     level: Annotated[LogLevel | None, Query()] = None,
-) -> None:
-    """§16.7 — validated now, answered by Loki from M3.1."""
+) -> LogSearchResponse:
+    """§16.7 — one registered unit's lines, from Loki, redacted."""
     reject_unknown_query_parameters(request, LOG_QUERY_PARAMS)
     for name, value in (("from", from_), ("to", to)):
         if value is not None and value.tzinfo is None:
             raise field_error(["query", name], "type", "Must carry a timezone offset.")
-    if from_ is not None and to is not None:
-        if from_ >= to:
-            raise field_error(["query", "from"], "range", "`from` must be before `to`.")
-        if to - from_ > MAX_LOG_RANGE:
-            raise field_error(["query", "to"], "range", "The range may not exceed 24 hours.")
+    end = to or (from_ + timedelta(hours=1) if from_ else datetime.now(UTC))
+    start = from_ or end - timedelta(hours=1)
+    if start >= end:
+        raise field_error(["query", "from"], "range", "`from` must be before `to`.")
+    if end - start > MAX_LOG_RANGE:
+        raise field_error(["query", "to"], "range", "The range may not exceed 24 hours.")
     server = await service.load_server(db, server_id, authorized, "logs", "read:system")
     await service.load_service(db, server, service_name)
-    raise NotConfiguredError("Log search is not configured.", details={"integration": "loki"})
+    return await logs_service.search_unit(
+        db, authorized, server, service_name, start=start, end=end, limit=limit, level=level
+    )

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import datetime
 from typing import Annotated, Final, Literal
 
 from pydantic import (
@@ -109,3 +110,111 @@ class LogQueryRequest(BaseModel):
                 "at least one of server_ids, application_id or environment is required"
             )
         return self
+
+
+# --- responses ---------------------------------------------------------------
+
+IngestionState = Literal["receiving", "quiet", "silent", "unknown"]
+
+
+class LogEntry(BaseModel):
+    """One redacted line. ``hostname`` is the inventory's, never the shipper's label."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: datetime
+    server_id: uuid.UUID
+    hostname: str
+    service: str
+    source_type: SourceType
+    level: LabelLevel
+    line: str
+    #: ``true`` when the redacted line was cut at ``MAX_LINE_CHARS``.
+    line_truncated: bool = False
+
+
+class QueryStats(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    duration_ms: int
+    #: ``null`` when Loki did not report it -- not ``0``.
+    bytes_scanned: int | None
+    #: ``true`` when more lines matched than this page holds.
+    truncated: bool
+
+
+class ServerIngestion(BaseModel):
+    """Whether a selected server's shipper has been sending lines (OPEN-34).
+
+    ``receiving``: lines in the last 15 minutes. ``quiet``: none in 15 minutes
+    but some in 24 hours. ``silent``: none in 24 hours. ``unknown``: Loki could
+    not say. **An empty result is "no matching lines" only when every selected
+    server is ``receiving``**; otherwise it may mean a host or a shipper that is
+    not talking (PROGRESS issue 93).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    server_id: uuid.UUID
+    hostname: str
+    state: IngestionState
+
+
+class LogPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int
+    next_cursor: str | None
+    has_more: bool
+    total: None = None
+
+
+class LogSearchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entries: list[LogEntry]
+    page: LogPage
+    query_stats: QueryStats
+    #: How many *explicitly requested* servers were dropped for scope. Always
+    #: ``0`` for an environment or application selection: a count there would
+    #: say how many servers exist outside the caller's reach.
+    excluded_by_scope_count: int
+    #: How many servers the query actually covered after scoping.
+    servers_searched: int
+    #: Empty on a page fetched with a cursor (the first page carries it).
+    ingestion: list[ServerIngestion]
+    data_state: Literal["ok"] = "ok"
+    source: Literal["loki"] = "loki"
+
+
+class PresetInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: PresetId
+    label: str
+    description: str
+
+
+class LogLimits(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_range_days: int
+    retention_days: int
+    max_limit: int
+    default_limit: int
+    max_contains: int
+    max_server_ids: int
+
+
+class LogSources(BaseModel):
+    """§19.2. The label values are closed (AD-21), so this is the catalogue itself."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Only the source types this caller may read on *some* server. A UI hint;
+    #: the query enforces it per server.
+    source_types: list[SourceType]
+    levels: list[LabelLevel]
+    environments: list[Environment]
+    presets: list[PresetInfo]
+    limits: LogLimits
