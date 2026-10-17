@@ -34,8 +34,8 @@ def test_error_message_does_not_leak_the_offending_value(
 
 def test_credentials_are_not_printable(settings: Settings) -> None:
     """SecretStr keeps the value out of repr, str and f-strings."""
-    assert "placeholder@localhost" not in repr(settings)
-    assert "placeholder@localhost" not in str(settings.database_url)
+    assert "placeholder@127.0.0.1" not in repr(settings)
+    assert "placeholder@127.0.0.1" not in str(settings.database_url)
     assert settings.database_url.get_secret_value().startswith("postgresql+psycopg://")
 
 

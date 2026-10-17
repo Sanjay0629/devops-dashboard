@@ -18,14 +18,25 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings, get_settings
 from app.db.session import get_engine, get_session_factory
 
+# Where the unit suite points PostgreSQL and Redis: **a port nothing listens on**,
+# not the default ones. The unit tests never open a socket, and some of them
+# (the fail-closed rate limiter, readiness) assert what happens when a backing
+# service is *unreachable* — which is only true if nothing answers. `localhost`
+# on 5432 and 6379 is where a CI service container, or a developer's own
+# PostgreSQL and Redis, actually answer, and the suite then fails for a reason
+# that has nothing to do with the code (found when CI first ran: the `backend`
+# job has both as service containers). Port 1 (tcpmux) is closed on any machine
+# that matters and refuses at once, so a stray connection fails fast, not slow.
+UNREACHABLE = "127.0.0.1:1"
+
 # Placeholder credentials. Nothing here reaches a real service; the password is
 # literally the word "placeholder" so a secret scanner has nothing to find.
 TEST_ENV = {
     "DCP_ENVIRONMENT": "local",
     "DCP_LOG_LEVEL": "INFO",
     "DCP_DEMO_MODE": "true",
-    "DCP_DATABASE_URL": "postgresql+psycopg://placeholder:placeholder@localhost:5432/placeholder",
-    "DCP_REDIS_URL": "redis://localhost:6379/0",
+    "DCP_DATABASE_URL": f"postgresql+psycopg://placeholder:placeholder@{UNREACHABLE}/placeholder",
+    "DCP_REDIS_URL": f"redis://{UNREACHABLE}/0",
 }
 
 

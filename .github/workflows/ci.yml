@@ -259,7 +259,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Scan ${{ matrix.name }}
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: dcp-${{ matrix.name }}:ci
           format: table
@@ -270,6 +270,15 @@ jobs:
   compose:
     name: Compose smoke test
     runs-on: ubuntu-latest
+    env:
+      # The workflow-level `DCP_DATABASE_URL` / `DCP_REDIS_URL` point at
+      # `localhost` for the unit suite and the schema export. Docker Compose
+      # interpolates `${DCP_DATABASE_URL:-...}` from *this* environment, so left
+      # alone they replace the Compose defaults and hand every container a URL
+      # to a PostgreSQL that is not in it (`migrate` exits 1, connection
+      # refused). Empty is "unset" to `:-`, so the Compose defaults win.
+      DCP_DATABASE_URL: ''
+      DCP_REDIS_URL: ''
     steps:
       - uses: actions/checkout@v4
       - name: Validate Compose configuration
@@ -322,6 +331,15 @@ jobs:
   e2e:
     name: End-to-end (Playwright)
     runs-on: ubuntu-latest
+    env:
+      # The workflow-level `DCP_DATABASE_URL` / `DCP_REDIS_URL` point at
+      # `localhost` for the unit suite and the schema export. Docker Compose
+      # interpolates `${DCP_DATABASE_URL:-...}` from *this* environment, so left
+      # alone they replace the Compose defaults and hand every container a URL
+      # to a PostgreSQL that is not in it (`migrate` exits 1, connection
+      # refused). Empty is "unset" to `:-`, so the Compose defaults win.
+      DCP_DATABASE_URL: ''
+      DCP_REDIS_URL: ''
     steps:
       - uses: actions/checkout@v4
 

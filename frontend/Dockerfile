@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # See backend/Dockerfile: exact tags, digests still to be pinned (AD-16).
-FROM node:22.12.0-alpine AS base
+FROM node:22.23.3-alpine AS base
 ENV CI=true
 WORKDIR /app
 RUN apk add --no-cache curl
@@ -28,7 +28,7 @@ RUN npm run build
 # Static assets only. In production the reverse proxy serves these and routes
 # /api to the backend, so the SPA and API share one origin
 # (docs/ARCHITECTURE.md §2.1).
-FROM nginx:1.27.3-alpine AS production
+FROM nginx:1.30.6-alpine AS production
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
