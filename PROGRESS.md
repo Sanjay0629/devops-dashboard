@@ -110,7 +110,7 @@ enforcement) and M1.3
 
 ## 1. Current project stage
 
-**Stage: Phase 2 — Monitoring. M1.1 – M1.7 and M2.1 – M2.3 complete. M2.4 (systemd, `TS-02`) is next. As of M2.2 a server with a registered `metrics_instance` shows
+**Stage: Phase 2 — Monitoring. M1.1 – M1.7 and M2.1 – M2.3 complete. M2.4 (systemd) is next; its gate `TS-02` is resolved (2026-10-17). As of M2.2 a server with a registered `metrics_instance` shows
 real current values and history; the dashboard's `utilisation` section is still
 `not_configured`.**
 
@@ -1079,7 +1079,7 @@ In the order they bite:
       into two application rows across staging and production, taking
       `application_id` scope grants and alert routing with it. Closed in all four
       contract documents.
-- [ ] `TS-02` (systemd metrics source) and `TS-01` (charting library) — before M2.
+- [x] `TS-02` (systemd metrics source) and `TS-01` (charting library) — before M2. Both resolved: `TS-01` 2026-10-16, `TS-02` 2026-10-17.
 - [ ] `OPEN-15` — the audit-immutability hardening M1.2 could not finish: a
       non-superuser application role separate from the migration owner. Scheduled
       M6.2; see issue 28.
@@ -1348,7 +1348,7 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 | Phase | Milestones | Status |
 |---|---|---|
 | 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · ~~M1.7 consolidation~~ **done** | **Phase 1 COMPLETE** 2026-10-15 |
-| 2 — Monitoring | ~~M2.1 Prometheus client~~ **done** · ~~M2.2 host metrics + charts~~ **done** · ~~M2.3 target discovery~~ **done** · M2.4 systemd monitoring · M2.5 stale detection | **In progress.** M2.1 – M2.3 complete 2026-10-16; M2.4 ([§9](#9-next-recommended-task)) is next and is gated by `TS-02` |
+| 2 — Monitoring | ~~M2.1 Prometheus client~~ **done** · ~~M2.2 host metrics + charts~~ **done** · ~~M2.3 target discovery~~ **done** · M2.4 systemd monitoring · M2.5 stale detection | **In progress.** M2.1 – M2.3 complete 2026-10-16; M2.4 ([§9](#9-next-recommended-task)) is next; `TS-02` resolved 2026-10-17 |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
 | 5 — Deployments | M5.1 targets + Jenkins client · M5.2 lifecycle · M5.3 build logs · M5.4 production approvals · M5.5 health checks + rollback | Pending |
@@ -1452,7 +1452,7 @@ Once a decision is reviewed, record the date and the outcome here.
 | # | Issue |
 |---|---|
 | 16 | 14 open decisions (`OPEN-01` … `OPEN-25`, see each document's open-decisions table) remain unresolved. Each has a working default, so Phase 1 is not blocked, but `OPEN-02` must be settled before M1.5. |
-| 17 | ~~`TS-01` (charting library)~~ **RESOLVED 2026-10-16** — `d3-shape` + `d3-scale` used directly, and its functional gate (a data gap must render as a gap, not a zero) was **tested rather than assumed**, which is what it was waiting for. `TS-02` (systemd metrics source) is still unselected and gates M2.4. |
+| 17 | ~~`TS-01` (charting library)~~ **RESOLVED 2026-10-16** — `d3-shape` + `d3-scale` used directly, and its functional gate (a data gap must render as a gap, not a zero) was **tested rather than assumed**, which is what it was waiting for. ~~`TS-02` (systemd metrics source)~~ **RESOLVED 2026-10-17** — `node_exporter`'s systemd collector with a unit allowlist, **tested against a real systemd rather than chosen from documentation**. The test found that no exporter exposes `sub_state`, `load_state`, enabled state or main PID; that is `OPEN-29`, agreed as `null` for M2.4. |
 | 18 | No exact dependency versions are recorded anywhere, deliberately — versions belong in resolved lockfiles, not in prose. Nothing has been compatibility-tested. |
 | 19 | The documentation set contains 236 relative links; all were verified to resolve to existing files and headings on 2026-10-13. Re-verify after any heading change — moving the `**[MANDATORY]**` labels out of `docs/SECURITY.md` headings during review was needed precisely because they altered 24 anchors. |
 
@@ -2590,7 +2590,7 @@ this table is unchanged: **not configured, not connected, not operational.**
 | Redis | **Running and in use** | redis 7.4.1-alpine via Compose on host port 6380. Now carries the session store, the single-use OIDC login state and the rate-limit counters (database `0`; the integration suite uses `1`). Verified by the live login flow |
 | Prometheus | **Running, scraped and read by the backend — the first real integration in this table** | prom/prometheus 3.0.1 via Compose (`observability` profile) on host port 9090, loopback only. `infra/prometheus/prometheus.yml` is a real config: 15 s scrape interval, two jobs (`prometheus` self-scrape, `node`), 30-day retention. The backend reads it through `app/metrics/client.py` at `DCP_PROMETHEUS_URL` (default `http://prometheus:9090`). Verified by smoke-test step 18, which asserts the exporter target `up` and executes **all ten templates** **through that client** — five with their values asserted in range, five asserted to be valid PromQL (see [§7](#7-tests-executed-and-their-actual-results) for why the split, and for what each returned). Still: **targets are static** — generating them from inventory is `OPEN-14`/M2.3 — and **no alert rules exist** (M3.3). This is a local stack, not a production Prometheus; nothing has been deployed anywhere |
 | Node Exporter | **Running and scraped** | prom/node-exporter 1.8.2 in the `observability` profile, host port 9100, loopback only. **Deliberately no host mounts**, so it reports the *container's* CPU, memory and filesystems rather than the Docker host's — mounting the host root into a container is a posture change a development convenience does not justify. It is a real exporter producing real `node_*` series, which is what the templates are verified against; host-level collection on registered servers is the agent's job (M6.1) |
-| systemd exporter | **Not configured** | Source not selected (`TS-02`); M2.4 |
+| systemd exporter | **Not configured** | Source selected 2026-10-17 (`TS-02`): `node_exporter`'s systemd collector, so there is no separate exporter. **Selected and tested in a scratch run, not configured in Compose** — nothing in the repository enables it yet (M2.4) |
 | windows_exporter | **Not configured, and deliberately out of scope** | `OPEN-09` now has an implemented working default: **there are no Windows templates at all**, and a WINDOWS server resolves to the `UNSUPPORTED` data state. `windows_exporter` cannot run in a Linux container, so Windows PromQL would be strings never executed against anything — which looks like coverage and is not. The decision stays open |
 | Grafana Alloy | **Declared, never started** | Compose `logs` profile + placeholder `infra/alloy/config.alloy` that collects nothing (M3.1) |
 | Grafana Loki | **Declared, never started** | Compose service + minimal `infra/loki/loki-config.yaml`. No ingestion (M3.1). Still a placeholder *inside the same `observability` profile* as the now-real Prometheus, which is why `scripts/smoke-test.sh` starts `prometheus` and `node-exporter` by name rather than the whole profile |
@@ -2621,9 +2621,22 @@ as expected (see issue 23).
    `compose` job runs step 18, which has grown (registration, a stop and a start of the
    exporter); its duration on a two-core runner is unmeasured, and the step budgets
    (120 s to `HEALTHY`, 150 s to each transition) were tuned on a fast machine.
-2. **M2.4 — systemd service monitoring**, gated by **`TS-02`** (the systemd metrics
-   source). M2.3's discovery is the pattern to follow: a second target kind means a
-   second job and a second file, selected by the same kind of single predicate.
+2. **M2.4 — systemd service monitoring.** `TS-02` is resolved (2026-10-17):
+   `node_exporter`'s systemd collector, so **there is no second target kind** — the
+   systemd series arrive on the `node` job M2.3 already generates, and the work is the
+   allowlist, the normalisation, and the read path. What to build around:
+   - the unit allowlist is generated from registered `services` rows, never a wildcard
+     (cardinality is `5 × units`);
+   - `UNCOLLECTED` = `node_scrape_collector_success{collector="systemd"}=0` **or** no
+     systemd series at all; a unit missing from a *successful* collection is also not
+     `INACTIVE` (verified: such a unit emits no series);
+   - `node_systemd_unit_start_time_seconds == 0` means **unknown**, not 1970;
+   - `sub_state`, `load_state`, enabled state and main PID are `null` (`OPEN-29`), and
+     `active/exited` reads as `ACTIVE`;
+   - the dev `node-exporter` has no system bus, so the integration fixture must be a
+     container running systemd, **not** the existing service;
+   - the scratch run behind the decision is not in the repository — M2.4 should turn
+     it into a standing test, as `TS-01`'s gap test was.
 3. **`OPEN-28` before M3.3**, unchanged.
 4. **`agent_status` is now real, so M2.5 can build on it** — and should decide issue 67
    (how long a status may be trusted) and whether `status` joins the 0005 exclusion.
@@ -2705,7 +2718,7 @@ in hand:**
   there is no chart on a page yet.
 - **`OPEN-14` (target discovery) gates M2.3**, not M2.2. The target list in
   `infra/prometheus/prometheus.yml` is static and says so.
-- **`TS-02` (systemd metrics source) gates M2.4.**
+- **`TS-02` (systemd metrics source) gated M2.4 — resolved 2026-10-17.**
 
 **What M2.2 inherits from M2.1 and from the `TS-01` decision, and what it must not
 re-litigate:**

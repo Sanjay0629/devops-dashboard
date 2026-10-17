@@ -249,7 +249,30 @@ done unmet and makes M1.6 large.
 **Options:** the Prometheus `systemd_exporter`, `node_exporter`'s systemd collector with a unit allowlist, or the restricted DCP agent exposing the same series.
 **Why:** PRD §4.5 requires unit state without SSH.
 **Rules:** configure a **unit allowlist** on the exporter — scraping every unit on every host is a cardinality problem, and the portal only ever displays registered services. Linux only; Windows hosts report `UNSUPPORTED` for unit state (OPEN-09).
-**Selection pending:** the exact exporter is a Phase 2 decision; whichever is chosen, the normalisation table in [ARCHITECTURE.md §6.1](ARCHITECTURE.md#61-monitoring-read) is the contract.
+**Decision: `node_exporter`'s systemd collector with a unit allowlist. Selected 2026-10-17 (`TS-02` resolved).** The normalisation table in [ARCHITECTURE.md §6.1](ARCHITECTURE.md#61-monitoring-read) remains the contract, amended by `OPEN-29` (below).
+
+*Need (§10 rung 1).* Real now: M2.4 is P0 (PRD §4.5) and a failed service must be identifiable without logging in.
+
+*Rung 5 — an already-deployed component covers it.* `node-exporter` is already in Compose, already scraped, and already a registered target kind (M2.3). Enabling its systemd collector adds **no component, no port, no scrape job and no `file_sd` kind**, and `node_scrape_collector_success{collector="systemd"}` is a purpose-made signal for "collector failed" that a separate exporter would have to approximate.
+
+*Why not `systemd_exporter`.* Tested, not assumed: its `systemd_unit_state` has the same `name`/`type`/`state` shape and exposes no more of what the PRD asks for. It adds `service_type`/`mount_type` (not wanted), a second container, a second job and a second discovery kind, and all 19 of its metrics are documented as UNSTABLE; the latest release is 0.7.0 (2025-03-14). *Why not the agent:* it is the only source that could supply the attributes below, but it is a new component with its own security surface (`OPEN-05`) and out of proportion to M2.4.
+
+**What the collector was tested to do** (pinned `prom/node-exporter:v1.8.2` against a real systemd 255 on WSL2, non-root, system bus socket mounted read-only; a throwaway unit that exits non-zero, a `RemainAfterExit` unit, and `cron.service`):
+
+| Observed | Consequence |
+|---|---|
+| `--collector.systemd.unit-include` limits the series to the allowlist; five `node_systemd_unit_state` series per unit, exactly one equal to `1` | Cardinality is `5 × registered services`. The allowlist is generated from registered services, never a wildcard |
+| A failed unit reports `state="failed"` = 1 | `FAILED` is distinguishable |
+| A stopped but still-loaded unit reports `state="inactive"` = 1 | `INACTIVE` is distinguishable from `FAILED` |
+| An allowlisted unit that does not exist produces **no series at all**, while `node_scrape_collector_success{collector="systemd"}` stays `1` | "Absent from a *successful* collection" — the unit is not loaded on this host. It must not be rendered `INACTIVE` |
+| With no system bus, the exporter stays up (`/metrics` = 200), `node_scrape_collector_success{collector="systemd"}` = `0`, and **no systemd series** are emitted | This is the `UNCOLLECTED` case: host up, collector failed |
+| With the collector not enabled (the default), no `systemd` series and no `collector="systemd"` series exist | `UNCOLLECTED` as well, by absence — the same state, so the two causes must not be told apart in the UI |
+| `node_systemd_unit_start_time_seconds` is `0` for a unit that is not running | **`0` means unknown, not 1970.** Rendering it as a date is the exact zero-for-unknown error CLAUDE.md §5 forbids |
+| `active` is reported identically for `sub_state=running` and `sub_state=exited` | The §6.1 table's `ACTIVE` row cannot be tested for `running`. See `OPEN-29` |
+
+**Not available from this source, or from `systemd_exporter`:** `sub_state`, `load_state` (only used as a "loaded" filter), the unit-file enabled state, and the main PID. They are `null` in M2.4 (`OPEN-29`). `node_systemd_service_restart_total` and `node_systemd_unit_start_time_seconds` need `--collector.systemd.enable-restarts-metrics` and `--collector.systemd.enable-start-time-metrics`. There is **no last-state-change timestamp**: the start time is the nearest series and describes activation only, so "last state change" is the collection timestamp until an agent supplies more.
+
+**Operational constraint.** The collector needs the system bus. A host install of `node_exporter` has it; a *containerised* one must have `/run/dbus/system_bus_socket` mounted, which is a posture change on par with the host-root mount the development exporter deliberately avoids (PROGRESS.md §8). M2.4's integration fixture is therefore a container that runs systemd itself, not the existing `node-exporter` service.
 
 ### 5.4 Grafana Alloy
 
@@ -425,7 +448,7 @@ The frontend and backend contract is kept aligned mechanically, not by disciplin
 | OPEN-13 | Notification channel config storage | DB table in Phase 3 |
 | ~~OPEN-14~~ | Prometheus target discovery | **Resolved 2026-10-16 (M2.3):** DCP-generated `file_sd`, no reload call |
 | ~~TS-01~~ | Charting library | **RESOLVED 2026-10-16: `d3-shape` + `d3-scale`, used directly, no React wrapper** ([§2.5](#25-charting-library)). The gap criterion was tested rather than assumed, and the test is kept as a standing regression test. Recharts rejected on bundle size (+129 kB gzipped, more than doubling the app) and on its `role="application"` default; uPlot rejected because a canvas renderer makes the criterion untestable — and it cannot be imported under jsdom at all |
-| TS-02 | systemd metrics source (systemd_exporter vs node_exporter collector vs agent) | Undecided; Phase 2 |
+| ~~TS-02~~ | systemd metrics source (systemd_exporter vs node_exporter collector vs agent) | **RESOLVED 2026-10-17: `node_exporter`'s systemd collector with a unit allowlist** ([§5.3](#53-systemd-metrics-integration)). Tested against a real systemd. Gap: no `sub_state`/`load_state`/enabled/PID from any exporter — `OPEN-29`, agent is the later source |
 | TS-03 | Python package manager (uv vs Poetry vs pip-tools) | Undecided; any one of them, with a committed lockfile |
 | TS-04 | Component primitive library | Undecided; must be headless and accessible |
 
