@@ -362,7 +362,8 @@ describe('Dashboard', () => {
           ...SUMMARY.server_health,
           data_state: 'stale',
           collected_at: '2026-10-15T07:00:00Z',
-          unavailable_reason: 'Prometheus last answered, health is not judged against old data.',
+          unavailable_reason:
+            'Prometheus has not answered recently, so health is not judged against old data.',
         },
       },
     });
@@ -370,7 +371,7 @@ describe('Dashboard', () => {
     await screen.findByText('6');
     expect(within(healthRegion()).getByText(/Collected/)).toBeInTheDocument();
     const card = within(healthRegion()).getByRole('heading', { name: 'Healthy' }).parentElement;
-    expect(card).toHaveTextContent(/Stale — Prometheus last answered/);
+    expect(card).toHaveTextContent(/Stale — Prometheus has not answered recently/);
     // No digit in the card text, so no count - not even a dated one.
     expect(card?.textContent ?? '').not.toMatch(/\d/);
   });

@@ -498,55 +498,59 @@ export function Dashboard(): React.JSX.Element {
       )}
 
       {health?.kind === 'ok' && health.value.items.length > 0 && (
-        <table className="w-full text-left text-sm" aria-labelledby="status-table-heading">
-          <thead>
-            <tr style={{ color: 'var(--c-text-muted)' }}>
-              <th scope="col" className="py-2">
-                Name
-              </th>
-              <th scope="col">Environment</th>
-              <th scope="col">Provider</th>
-              <th scope="col">Registration</th>
-              <th scope="col">Health</th>
-              <th scope="col">Last seen</th>
-              <th scope="col">Failed units</th>
-              <th scope="col">Open alerts</th>
-            </tr>
-          </thead>
-          <tbody>
-            {health.value.items.map((row) => (
-              <tr
-                key={row.server_id}
-                className="border-t"
-                style={{ borderColor: 'var(--c-border)' }}
-              >
-                <td className="py-2">
-                  <Link to={`/servers/${row.server_id}`} className="underline">
-                    {row.display_name}
-                  </Link>
-                </td>
-                <td>{row.environment}</td>
-                <td>{row.provider}</td>
-                <td>
-                  <StatusBadge value={row.status} />
-                </td>
-                <td>
-                  {/* null is "not evaluated", `unknown` is "evaluated, nothing
-                      known"; neither is ever a green tick. */}
-                  <HealthBadge state={row.health_state} />
-                </td>
-                <td>
-                  <LastSeen at={row.last_seen_at} />
-                </td>
-                <td>{row.failed_service_count}</td>
-                <td style={{ color: 'var(--c-text-muted)' }}>
-                  {/* Not 0: there is no alerts table to have counted. */}
-                  {row.active_alert_count ?? 'Not configured'}
-                </td>
+        // Eight columns do not fit a phone; the table scrolls inside its own box
+        // rather than widening the page (PRD §8: usable on a narrow screen).
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm" aria-labelledby="status-table-heading">
+            <thead>
+              <tr style={{ color: 'var(--c-text-muted)' }}>
+                <th scope="col" className="py-2">
+                  Name
+                </th>
+                <th scope="col">Environment</th>
+                <th scope="col">Provider</th>
+                <th scope="col">Registration</th>
+                <th scope="col">Health</th>
+                <th scope="col">Last seen</th>
+                <th scope="col">Failed units</th>
+                <th scope="col">Open alerts</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {health.value.items.map((row) => (
+                <tr
+                  key={row.server_id}
+                  className="border-t"
+                  style={{ borderColor: 'var(--c-border)' }}
+                >
+                  <td className="py-2">
+                    <Link to={`/servers/${row.server_id}`} className="underline">
+                      {row.display_name}
+                    </Link>
+                  </td>
+                  <td>{row.environment}</td>
+                  <td>{row.provider}</td>
+                  <td>
+                    <StatusBadge value={row.status} />
+                  </td>
+                  <td>
+                    {/* null is "not evaluated", `unknown` is "evaluated, nothing
+                      known"; neither is ever a green tick. */}
+                    <HealthBadge state={row.health_state} />
+                  </td>
+                  <td>
+                    <LastSeen at={row.last_seen_at} />
+                  </td>
+                  <td>{row.failed_service_count}</td>
+                  <td style={{ color: 'var(--c-text-muted)' }}>
+                    {/* Not 0: there is no alerts table to have counted. */}
+                    {row.active_alert_count ?? 'Not configured'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {health?.kind === 'ok' && (

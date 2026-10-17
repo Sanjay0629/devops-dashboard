@@ -92,10 +92,12 @@ def classify_reference(
         return Reference("unavailable", None, NO_ANSWER_REASON)
     # Strict, like every other bound here: exactly on it is still fresh.
     if (now - at).total_seconds() > fresh_within_seconds:
+        # No timestamp in the text: `collected_at` carries it as a time, and a
+        # raw ISO string repeated on six cards is noise the page already dates.
         return Reference(
             "stale",
             at,
-            f"Prometheus last answered at {at.isoformat()}; health is not judged against old data.",
+            "Prometheus has not answered recently, so health is not judged against old data.",
         )
     return Reference("ok", at, None)
 
