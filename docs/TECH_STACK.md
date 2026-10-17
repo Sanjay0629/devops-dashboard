@@ -261,7 +261,7 @@ done unmet and makes M1.6 large.
 
 | Observed | Consequence |
 |---|---|
-| `--collector.systemd.unit-include` limits the series to the allowlist; five `node_systemd_unit_state` series per unit, exactly one equal to `1` | Cardinality is `5 × registered services`. The allowlist is generated from registered services, never a wildcard |
+| `--collector.systemd.unit-include` limits the series to the allowlist; five `node_systemd_unit_state` series per unit, exactly one equal to `1` | Cardinality is `5 × registered services`. The exporter-side allowlist is **host configuration** (DCP has no write path to a host's `node_exporter` flags and must not gain one); DCP's own allowlist is applied **on read** — queries name only registered units, validated against the service-name pattern. Never a wildcard on either side |
 | A failed unit reports `state="failed"` = 1 | `FAILED` is distinguishable |
 | A stopped but still-loaded unit reports `state="inactive"` = 1 | `INACTIVE` is distinguishable from `FAILED` |
 | An allowlisted unit that does not exist produces **no series at all**, while `node_scrape_collector_success{collector="systemd"}` stays `1` | "Absent from a *successful* collection" — the unit is not loaded on this host. It must not be rendered `INACTIVE` |

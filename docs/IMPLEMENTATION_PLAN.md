@@ -497,7 +497,7 @@ backend/tests/dashboard/test_summary.py
 
 ## M2.4 — systemd service monitoring
 
-**Tasks:** enable `node_exporter`'s systemd collector (`TS-02`) with a unit allowlist generated from registered services, plus a systemd-running container as the integration fixture (the dev `node-exporter` has no system bus); state **normalisation** per [ARCHITECTURE.md §6.1](ARCHITECTURE.md#61-monitoring-read); endpoints 16.1–16.7 (reads); `services.last_observed_*` refresh job; dashboard failed-services panel; frontend service list and detail.
+**Tasks:** enable `node_exporter`'s systemd collector (`TS-02`) with a host-configured unit allowlist (DCP also filters on read to registered services), plus a systemd-running container as the integration fixture (the dev `node-exporter` has no system bus); state **normalisation** per [ARCHITECTURE.md §6.1](ARCHITECTURE.md#61-monitoring-read); endpoints 16.1–16.7 (reads); `services.last_observed_*` refresh job; dashboard failed-services panel; frontend service list and detail.
 
 **Acceptance (all PRD §4.5 criteria):** a failed service is identifiable without logging in; state is always shown with its collection timestamp; **an unreachable server does not render as all-services-inactive**; `UNSUPPORTED`, `UNCOLLECTED` and `FAILED` are distinct.
 

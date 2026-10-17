@@ -2625,8 +2625,9 @@ as expected (see issue 23).
    `node_exporter`'s systemd collector, so **there is no second target kind** — the
    systemd series arrive on the `node` job M2.3 already generates, and the work is the
    allowlist, the normalisation, and the read path. What to build around:
-   - the unit allowlist is generated from registered `services` rows, never a wildcard
-     (cardinality is `5 × units`);
+   - there are two allowlists: the exporter's `--collector.systemd.unit-include` is host
+     configuration (DCP cannot and must not set it; cardinality is `5 × units`), and
+     DCP's own is applied on read — queries name only registered `services` rows;
    - `UNCOLLECTED` = `node_scrape_collector_success{collector="systemd"}=0` **or** no
      systemd series at all; a unit missing from a *successful* collection is also not
      `INACTIVE` (verified: such a unit emits no series);
