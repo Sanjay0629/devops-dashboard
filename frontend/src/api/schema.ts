@@ -547,6 +547,98 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/servers/{server_id}/services': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Services on one server
+     * @description §16.2. An unknown or out-of-scope server is ``404``, not an empty page.
+     */
+    get: operations['list_server_services_api_v1_servers__server_id__services_get'];
+    put?: never;
+    /**
+     * Register a service
+     * @description §16.3. Registering adds a unit to the allowlist; it grants no action by itself.
+     */
+    post: operations['register_service_api_v1_servers__server_id__services_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/servers/{server_id}/services/{service_name}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Service detail (a live reading)
+     * @description §16.4. The one read that asks Prometheus now.
+     */
+    get: operations['read_service_api_v1_servers__server_id__services__service_name__get'];
+    put?: never;
+    post?: never;
+    /**
+     * Deregister a service (soft delete)
+     * @description §16.6. History is retained; the in-flight-operation guard arrives with ``operations``.
+     */
+    delete: operations['deregister_service_api_v1_servers__server_id__services__service_name__delete'];
+    options?: never;
+    head?: never;
+    /**
+     * Edit monitoring or action policy
+     * @description §16.5. Changing the action policy is Administrator-only and audited on its own.
+     */
+    patch: operations['update_service_api_v1_servers__server_id__services__service_name__patch'];
+    trace?: never;
+  };
+  '/api/v1/servers/{server_id}/services/{service_name}/logs': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Recent service logs
+     * @description §16.7 — validated now, answered by Loki from M3.1.
+     */
+    get: operations['service_logs_api_v1_servers__server_id__services__service_name__logs_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/services': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Cross-server service list
+     * @description §16.1. Scope-filtered in SQL; ``state`` filters on the state a row *shows*.
+     */
+    get: operations['list_services_api_v1_services_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/healthz': {
     parameters: {
       query?: never;
@@ -1963,6 +2055,215 @@ export interface components {
       status?: ('PENDING' | 'MANAGED' | 'RETIRED') | null;
     };
     /**
+     * ServiceDetail
+     * @description §16.4: the live reading, rather than the cache.
+     */
+    ServiceDetail: {
+      /** Allowed Actions */
+      allowed_actions: ('start' | 'stop' | 'restart' | 'status' | 'logs_tail')[];
+      /** Application Id */
+      application_id: string | null;
+      /** Approval Required */
+      approval_required: boolean;
+      /** Collected At */
+      collected_at: string | null;
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
+      /** Display Name */
+      display_name: string | null;
+      /** Enabled */
+      enabled: boolean | null;
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other';
+      /** Last State Change At */
+      last_state_change_at: string | null;
+      /** Load State */
+      load_state: string | null;
+      /** Main Pid */
+      main_pid: number | null;
+      /** Monitoring Enabled */
+      monitoring_enabled: boolean;
+      /** Restart Count */
+      restart_count: number | null;
+      /** Server Display Name */
+      server_display_name: string;
+      /**
+       * Server Id
+       * Format: uuid
+       */
+      server_id: string;
+      /** Server Reachable */
+      server_reachable: boolean | null;
+      /**
+       * Service Id
+       * Format: uuid
+       */
+      service_id: string;
+      /** Service Name */
+      service_name: string;
+      /** Started At */
+      started_at: string | null;
+      /**
+       * State
+       * @enum {string}
+       */
+      state:
+        | 'ACTIVE'
+        | 'INACTIVE'
+        | 'FAILED'
+        | 'ACTIVATING'
+        | 'DEACTIVATING'
+        | 'UNCOLLECTED'
+        | 'UNSUPPORTED'
+        | 'UNKNOWN';
+      /** Sub State */
+      sub_state: string | null;
+      /** Unavailable Reason */
+      unavailable_reason:
+        | (
+            | 'provider_timeout'
+            | 'provider_unreachable'
+            | 'provider_error'
+            | 'circuit_open'
+            | 'no_data'
+            | 'monitoring_disabled'
+            | 'no_metrics_instance'
+            | 'prometheus_not_configured'
+            | 'unsupported_os'
+          )
+        | null;
+    };
+    /**
+     * ServiceItem
+     * @description A §16.1/§16.2 row. ``state`` is the verdict; the rest is how to read it.
+     */
+    ServiceItem: {
+      /** Allowed Actions */
+      allowed_actions: ('start' | 'stop' | 'restart' | 'status' | 'logs_tail')[];
+      /** Application Id */
+      application_id: string | null;
+      /** Approval Required */
+      approval_required: boolean;
+      /** Collected At */
+      collected_at: string | null;
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
+      /** Display Name */
+      display_name: string | null;
+      /** Enabled */
+      enabled: boolean | null;
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other';
+      /** Last State Change At */
+      last_state_change_at: string | null;
+      /** Load State */
+      load_state: string | null;
+      /** Main Pid */
+      main_pid: number | null;
+      /** Monitoring Enabled */
+      monitoring_enabled: boolean;
+      /** Restart Count */
+      restart_count: number | null;
+      /** Server Display Name */
+      server_display_name: string;
+      /**
+       * Server Id
+       * Format: uuid
+       */
+      server_id: string;
+      /** Server Reachable */
+      server_reachable: boolean | null;
+      /**
+       * Service Id
+       * Format: uuid
+       */
+      service_id: string;
+      /** Service Name */
+      service_name: string;
+      /**
+       * State
+       * @enum {string}
+       */
+      state:
+        | 'ACTIVE'
+        | 'INACTIVE'
+        | 'FAILED'
+        | 'ACTIVATING'
+        | 'DEACTIVATING'
+        | 'UNCOLLECTED'
+        | 'UNSUPPORTED'
+        | 'UNKNOWN';
+      /** Sub State */
+      sub_state: string | null;
+      /** Unavailable Reason */
+      unavailable_reason:
+        | (
+            | 'provider_timeout'
+            | 'provider_unreachable'
+            | 'provider_error'
+            | 'circuit_open'
+            | 'no_data'
+            | 'monitoring_disabled'
+            | 'no_metrics_instance'
+            | 'prometheus_not_configured'
+            | 'unsupported_os'
+          )
+        | null;
+    };
+    /** ServiceList */
+    ServiceList: {
+      /** Demo Mode */
+      demo_mode: boolean;
+      /** Items */
+      items: components['schemas']['ServiceItem'][];
+      page: components['schemas']['CursorPage'];
+    };
+    /**
+     * ServiceRegisterRequest
+     * @description §16.3. ``action_policy_id`` omitted means **no actions are permitted**.
+     */
+    ServiceRegisterRequest: {
+      /** Action Policy Id */
+      action_policy_id?: string | null;
+      /** Application Id */
+      application_id?: string | null;
+      /** Display Name */
+      display_name?: string | null;
+      /**
+       * Monitoring Enabled
+       * @default true
+       */
+      monitoring_enabled: boolean;
+      /** Service Name */
+      service_name: string;
+    };
+    /**
+     * ServiceUpdateRequest
+     * @description §16.5. Only the fields present are changed; ``service_name`` is immutable.
+     */
+    ServiceUpdateRequest: {
+      /** Action Policy Id */
+      action_policy_id?: string | null;
+      /** Application Id */
+      application_id?: string | null;
+      /** Display Name */
+      display_name?: string | null;
+      /** Monitoring Enabled */
+      monitoring_enabled?: boolean | null;
+    };
+    /**
      * SessionResponse
      * @description The identity the UI renders from.
      *
@@ -3178,6 +3479,293 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['RangeMetrics'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_server_services_api_v1_servers__server_id__services_get: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string | null;
+        sort?: 'service_name' | 'server';
+        order?: 'asc' | 'desc';
+        state?:
+          | (
+              | 'ACTIVE'
+              | 'INACTIVE'
+              | 'FAILED'
+              | 'ACTIVATING'
+              | 'DEACTIVATING'
+              | 'UNCOLLECTED'
+              | 'UNSUPPORTED'
+              | 'UNKNOWN'
+            )[]
+          | null;
+        application_id?: string | null;
+        q?: string | null;
+      };
+      header?: never;
+      path: {
+        /** @description Server identifier */
+        server_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ServiceList'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  register_service_api_v1_servers__server_id__services_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Server identifier */
+        server_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ServiceRegisterRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ServiceItem'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  read_service_api_v1_servers__server_id__services__service_name__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Server identifier */
+        server_id: string;
+        /** @description Unit name */
+        service_name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ServiceDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  deregister_service_api_v1_servers__server_id__services__service_name__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Server identifier */
+        server_id: string;
+        /** @description Unit name */
+        service_name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_service_api_v1_servers__server_id__services__service_name__patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Server identifier */
+        server_id: string;
+        /** @description Unit name */
+        service_name: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ServiceUpdateRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ServiceItem'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  service_logs_api_v1_servers__server_id__services__service_name__logs_get: {
+    parameters: {
+      query?: {
+        limit?: number;
+        from?: string | null;
+        to?: string | null;
+        level?: ('debug' | 'info' | 'notice' | 'warning' | 'error' | 'critical') | null;
+      };
+      header?: never;
+      path: {
+        /** @description Server identifier */
+        server_id: string;
+        /** @description Unit name */
+        service_name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Log search is not configured (Loki arrives with M3.1). */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  list_services_api_v1_services_get: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string | null;
+        sort?: 'service_name' | 'server';
+        order?: 'asc' | 'desc';
+        state?:
+          | (
+              | 'ACTIVE'
+              | 'INACTIVE'
+              | 'FAILED'
+              | 'ACTIVATING'
+              | 'DEACTIVATING'
+              | 'UNCOLLECTED'
+              | 'UNSUPPORTED'
+              | 'UNKNOWN'
+            )[]
+          | null;
+        environment?: ('development' | 'staging' | 'production' | 'other')[] | null;
+        application_id?: string | null;
+        server_id?: string | null;
+        q?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ServiceList'];
         };
       };
       /** @description Validation Error */

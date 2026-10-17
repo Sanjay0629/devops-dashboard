@@ -139,14 +139,22 @@ def _unknown(
     return Normalised("UNKNOWN", data_state, reason, reachable, collected_at)
 
 
+def gate(os_family: str, monitoring_enabled: bool, has_metrics_instance: bool) -> Normalised | None:
+    """Rules 1–3: the answers that need no query, shared by the live and cached views."""
+    if os_family != LINUX:
+        return Normalised("UNSUPPORTED", "unsupported", "unsupported_os", None)
+    if not monitoring_enabled:
+        return _unknown("not_configured", "monitoring_disabled")
+    if not has_metrics_instance:
+        return _unknown("not_configured", "no_metrics_instance")
+    return None
+
+
 def _host_verdict(host: HostObservation, now: datetime) -> Normalised | None:
     """A verdict that stops the walk, or ``None`` if the host is fresh and up."""
-    if host.os_family != LINUX:
-        return Normalised("UNSUPPORTED", "unsupported", "unsupported_os", None)
-    if not host.monitoring_enabled:
-        return _unknown("not_configured", "monitoring_disabled")
-    if not host.has_metrics_instance:
-        return _unknown("not_configured", "no_metrics_instance")
+    gated = gate(host.os_family, host.monitoring_enabled, host.has_metrics_instance)
+    if gated is not None:
+        return gated
     if host.prometheus_failure is not None:
         if host.prometheus_failure == "prometheus_not_configured":
             return _unknown("not_configured", "prometheus_not_configured")
@@ -221,3 +229,57 @@ def normalise(
         restart_count=_count(unit.restart_total),
         started_at=_started_at(unit.start_time_seconds),
     )
+
+
+#: Age beyond which a cached verdict is no longer called current. Three refresh
+#: intervals (the refresh job runs every 60 s): one missed run is noise, three
+#: is a job that is not running — and the list must say so rather than keep
+#: showing the last answer as though it were this minute's (PRD §4.5).
+CACHE_STALE_AFTER_SECONDS: Final = 180
+
+_CACHED_PASSTHROUGH: Final[Mapping[str, ServiceState]] = {v: v for v in STATE_MAP.values()}
+
+
+def view_cached(
+    *,
+    os_family: str,
+    monitoring_enabled: bool,
+    has_metrics_instance: bool,
+    agent_status: str,
+    cached_state: str,
+    observed_at: datetime | None,
+    now: datetime,
+) -> Normalised:
+    """A list row from ``services.last_observed_*`` — the cache, honestly aged.
+
+    Lists read the cache so they do not fan out to Prometheus per row
+    (docs/DATABASE.md §4.5). The cost of that is that the cache can be old, so
+    this applies the same ordering as :func:`normalise`: the configuration
+    gates first, then **the host** (a probe that says it is unreachable beats
+    any cached unit state, which is how a dead host stays ``UNKNOWN`` rather
+    than showing the ``ACTIVE`` it had five minutes ago), then the age of the
+    cache itself, and only then the cached state.
+
+    A cached ``UNKNOWN`` or ``UNCOLLECTED`` stays what it was; it does not
+    become ``INACTIVE`` by being old. A cached ``UNSUPPORTED`` on a Linux host
+    is a row the gates would not have produced, so it is not believed.
+    """
+    gated = gate(os_family, monitoring_enabled, has_metrics_instance)
+    if gated is not None:
+        return gated
+    reachable = {"HEALTHY": True, "UNREACHABLE": False}.get(agent_status)
+    if observed_at is None:
+        return _unknown("unavailable", "no_data", reachable=reachable)
+    if reachable is False or is_stale_cache((now - observed_at).total_seconds()):
+        return _unknown("stale", "no_data", reachable=reachable, collected_at=observed_at)
+    passthrough = _CACHED_PASSTHROUGH.get(cached_state)
+    if passthrough is not None:
+        return Normalised(passthrough, "ok", None, reachable, collected_at=observed_at)
+    if cached_state == "UNCOLLECTED":
+        return Normalised("UNCOLLECTED", "unavailable", "no_data", reachable)
+    return _unknown("unavailable", "no_data", reachable=reachable)
+
+
+def is_stale_cache(age_seconds: float) -> bool:
+    """Strictly greater, like :func:`app.metrics.thresholds.is_stale`."""
+    return age_seconds > CACHE_STALE_AFTER_SECONDS
