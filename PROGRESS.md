@@ -1,8 +1,22 @@
 # PROGRESS — DevOps Control Plane
 
 **Purpose:** preserve development state between AI coding sessions. Read this first; update it last.
-**Last updated:** 2026-10-16
-**Updated by:** the **M2.3 implementation session (target discovery and agent
+**Last updated:** 2026-10-18
+**Updated by:** the **M3.1 implementation session (Alloy and Loki ingestion)** — read
+[§9](#9-next-recommended-task) first. The shortest version: a real Alloy now ships a managed
+server's logs (Nginx, PHP-FPM, syslog, a JSON application log, Docker, and a real systemd
+journal) into a real Loki with **exactly seven labels, closed values, redaction before
+storage, and a line with a bad identity dropped rather than stored** — all asserted by the
+smoke test (steps 18c–18e), not only observed. Eleven decisions were closed before code at
+the owner's instruction to take the recommended option. The things most worth knowing:
+**the first fail-closed check was vacuous** (a path-rewriting accident left the container
+dead, and "nothing stored" passed) and was caught only because the drop *counter* was
+missing; **a multi-line PEM key is not redacted and a test now pins that**; **Docker's log
+files are `root:root` `0640`, so a non-root shipper reads nothing and says nothing** (AD-22,
+issue 95); and an old M2.4 integration test with no headroom against the 120 s limit failed
+`check-all` three runs in five (issue 91). Nothing is pushed; hosted CI has not run.
+
+Before it, the **M2.3 implementation session (target discovery and agent
 health)**. Read [§3](#3-in-progress-milestone) first. The shortest version: registering
 a server now makes it a scraped Prometheus target with no config edit, and
 `agent_status` / `last_seen_at` are maintained from Prometheus's own `up` — proven
@@ -110,7 +124,7 @@ enforcement) and M1.3
 
 ## 1. Current project stage
 
-**Stage: Phase 2 — Monitoring. M1.1 – M1.7 and M2.1 – M2.5 complete (M2.5 locally; see issue 90). As of M2.4 a registered unit on a scraped host shows its real systemd state, host-aware: a dead host is `UNKNOWN`, never `INACTIVE`. The dashboard's `utilisation` section is still
+**Stage: Phase 3 — Logs and alerts, begun. M3.1 (Alloy and Loki ingestion) is complete locally; M3.2 (log search API and UI) is next, and until it lands there is no log endpoint — §16.7 still answers `503 not_configured`. Phase 2 (M2.1 – M2.5) is complete (M2.5 locally; see issue 90). As of M2.4 a registered unit on a scraped host shows its real systemd state, host-aware: a dead host is `UNKNOWN`, never `INACTIVE`. The dashboard's `utilisation` section is still
 `not_configured`.**
 
 **As of M2.1 (2026-10-16) the product reads something other than its own
@@ -234,6 +248,7 @@ writing.
 | **M2.2** — host metrics endpoints §15.1–§15.3, threshold classification, metric cards, range charts, server/environment comparison | **Complete** | 2026-10-16 | 539 unit + 272 integration + 170 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks; `scripts/smoke-test.sh` passes with step 18 extended to read **current values and a real range series through the new service against a real Prometheus and `node_exporter`**, with the scrape-timestamp assumption verified; both pages were then looked at in a real browser on the running stack ([§7](#7-tests-executed-and-their-actual-results)). Changed-line coverage 316/324 backend, 249/268 frontend |
 | **M2.3** — Prometheus target discovery (`OPEN-14`), agent-health probe, `agent_status` / `last_seen_at`, migration 0005 | **Complete** | 2026-10-16 | 586 unit + 296 integration + 176 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks; `scripts/smoke-test.sh` passes with step 18 **registering the exporter through the API, watching it become `HEALTHY`, stopping it until `UNREACHABLE`, and restarting it** — all read from a real Prometheus and `node_exporter`; the new UI row was viewed in a real browser through both transitions ([§7](#7-tests-executed-and-their-actual-results)). Changed-line coverage 213/215 backend |
 | **M2.5** — stale-data detection (AD-14, `OPEN-30`): per-environment `DCP_HEALTH_THRESHOLDS`, the status sweep, the Prometheus-answered reference, real health on the dashboard and server detail | **Complete locally, not yet pushed or run on hosted CI; the pages were not viewed in a real browser** | 2026-10-17 | 853 unit + 397 integration (real PostgreSQL 17.2 and Redis) + 227 frontend tests pass; `scripts/check-all.sh` passes all 18 checks; **`scripts/smoke-test.sh` passes from empty volumes** (step 18a drives a real silent host to `STALE` then `UNREACHABLE`, asserts two audited moves, an unchanged `updated_at`, and that a 90 s Prometheus outage ages nothing and recovers; 18b also ran). Details: [§9](#9-next-recommended-task), issues 88–90. |
+| **M3.1** — Alloy and Loki ingestion: Loki limits and 14 d retention, sample log producers, Alloy pipeline (closed label set, fail-closed identity, RE2 redaction), journald source, smoke steps 18c–18e | **Complete locally, not pushed or on hosted CI** | 2026-10-18 | `scripts/smoke-test.sh` passes from empty volumes with 18b and 18e run against the real systemd fixture; `check-all.sh` passes all 18 (unit 886, integration 397, frontend 227). Real Alloy 1.5.1 into real Loki 3.3.2: seven labels exactly, 8 canaries absent with the marker present in all 5 file sources, four bad-identity cases dropped and counted, a real journal read. Mutation-checked three ways. **Caveats:** multi-line PEM keys leak (issue 92); the Docker source was run against a real daemon once, by hand (issue 95); no log endpoint exists yet ([§9](#9-next-recommended-task)) |
 | **M2.4** — systemd service monitoring (`TS-02`, `OPEN-29`): state normalisation, endpoints §16.1–§16.7, refresh job, honest failed-services count, services pages | **Complete, with the caveats in [§6](#6-known-issues) issues 69–80** | 2026-10-17 | 777 unit + 365 integration + 211 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks with nothing skipped (changed-line coverage 585/638 backend and 69/73 frontend, both above the 80% floor and understated for the backend — issue 80); `scripts/smoke-test.sh` passes (20 steps, from empty volumes) with the new **step 18b driving real transitions on a real systemd** and asserting what the portal says: a killed unit is `FAILED`, a cleanly stopped one `INACTIVE`, a unit the host does not have `UNCOLLECTED`, a failing system bus `UNCOLLECTED` with the host still reachable, and **a stopped host `UNKNOWN` for every unit — none `INACTIVE`** ([§7](#7-tests-executed-and-their-actual-results)). **Not observed on a hosted CI runner, and the UI was not viewed in a real browser.** |
 
 **M1.3 caveat — the honest limit of what was verified.** Everything was tested
@@ -1586,6 +1601,16 @@ Once a decision is reviewed, record the date and the outcome here.
 
 **Verified on Linux, from a clean checkout, with the workflow's environment and real service containers:** 777 unit and 365 integration tests pass, migrations apply up/down/up on PostgreSQL 17.2, `pip-audit` is clean, the TypeScript API types regenerate **byte-identical** to the committed file, and `scripts/smoke-test.sh` passes (all 20 steps, including the systemd fixture in step 18b) — **also when `docker compose` is the hosted runner's own 2.38.2**. **The E2E suite passes 11/11 against a stack built the way the `e2e` job builds it** (clean checkout, the workflow's variables blanked, the bumped base images; Playwright from the Windows host). **Still not observed on a hosted runner:** the `e2e` job itself, the `compose` job's runtime, and whether the systemd fixture can start there (issue 69).
 
+### Implementation issues (found during M3.1, 2026-10-17/18)
+
+| # | Issue | Severity | Status |
+|---|---|---|---|
+| 92 | **A multi-line PEM private key is not redacted — by Alloy or by DCP's own pass.** Both layers match one log entry at a time, and a key written across lines arrives as several entries. A one-line (or JSON-escaped) key *is* redacted. Pinned: the canary corpus carries a `known_gap` multi-line key, and both `test_canary_corpus.py` and smoke 18d assert that it leaks, so the limit cannot be forgotten or quietly "fixed" on paper. The control is not emitting multi-line secrets. A `stage.multiline` join was considered and rejected as too fragile to trust. | Medium | Accepted, documented in SECURITY.md §17 |
+| 93 | **Nothing can tell a quiet host from a blind shipper.** A shipper that matches no files, or cannot read them, logs no error and sends nothing (issue 95 is the proven case), and a host with no log lines looks identical. Needs a per-server "last log received" signal — a freshness state in the style of AD-14 — before an empty log search can be called trustworthy. M3.2 must not render "no logs" for a server with no recent ingestion as though it were information. | High for M3.2 | Open; M3.2's plan |
+| 94 | **No per-server Alloy configuration exists.** Identity is five `ALLOY_*` environment variables; the sample stack uses a fixed synthetic server id that is **not a registered server**, so M3.2's scope-filtered UI will not show these lines until a server with that id is registered (or the id is made to match one). Rendering config from inventory — and getting it onto a host — is unbuilt and has no milestone yet; the agent work (`OPEN-05`, M6.1) is the likely home. | Medium | Open |
+| 95 | **The Docker source is proven against a real daemon only by one manual run, and it needs uid 0.** Docker keeps `/var/lib/docker/containers` as `root:root` `0710` with `0640` files. Alloy as uid 473 — even with gid 0, which can enter the directory but not list it — matches **no files and logs no error**. As uid 0 with `--cap-drop ALL`, `no-new-privileges` and a read-only mount it works: it took `service` from the container's `service` label, redacted a canary and kept only allowed labels (2026-10-18, a `docker run` on Docker Desktop's VM). That is an exception to SECURITY.md §23's non-root rule, now written there. Not in the smoke test: the Compose service reads the producer's files as uid 473, so it cannot prove this path. An ACL granting a non-root user list/read is the alternative and is untested. | Medium | Open; documented |
+| 96 | **Removing `stage.label_keep` fails the smoke ingestion assertion by timeout, not by a label message**, because Loki's seven-label limit then rejects every push and nothing arrives to inspect. Two layers hold, but a future failure of that shape reads as "timed out waiting for all five file sources". | Low | Noted |
+
 ### Implementation issues (found during M2.4, 2026-10-17)
 
 | # | Issue | Severity | Handling |
@@ -1628,6 +1653,17 @@ Once a decision is reviewed, record the date and the outcome here.
 
 All results below were produced by running the commands and reading the output.
 Nothing here is inferred.
+
+### Executed — M3.1 (2026-10-17/18)
+
+Per-commit results are in [§9](#9-next-recommended-task); the final ones:
+
+- **`scripts/smoke-test.sh`, from empty volumes: SMOKE TEST PASSED** (2026-10-18), no "incomplete" marker. Step 18c: Loki push/read-back, eighth-label and old-sample rejections, label allowlist, retention 14 d. Step 18d: Alloy non-root / unpublished / unprivileged / no Docker socket; 13 severity mappings; hostile container name → `other`; 8 canaries absent with the marker in all 5 sources; the multi-line PEM pinned as a leak; four bad-identity Alloys, each drop counted, three with nothing stored and one with a positive control. Step 18e: a real systemd journal through `alloy-journal`.
+- **`scripts/check-all.sh`: ALL CHECKS PASSED, all 18** (2026-10-18) — backend unit **886**, integration **397** (real PostgreSQL 17.2 and Redis; 541 s), frontend **227**. Backend changed-line coverage reports no coverable line changed; the new Python lives in `infra/` and `scripts/`, outside that gate, so its tests are the only check on it.
+- **Mutation checks, each seen failing:** AWS stage removed from `config.alloy` (3 unit tests + smoke 18d naming `aws_access_key_id`); `Bearer` removed from `redact_text`; `stage.label_keep` removed (smoke 18d, by timeout — issue 96).
+- **By hand, once:** Alloy against a real Docker daemon's `json-file` logs, as uid 473 (reads nothing), uid 473 + gid 0 (reads nothing), and uid 0 (works) — issue 95.
+
+**Not executed, and therefore not claimed:** the hosted CI run; a registered server's logs (issue 94); any DCP code reading Loki; the Docker source in the smoke test; the ACL alternative to uid 0.
 
 ### Executed — M2.4 (2026-10-17)
 
@@ -2693,8 +2729,8 @@ this table is unchanged: **not configured, not connected, not operational.**
 | Node Exporter | **Running and scraped** | prom/node-exporter 1.8.2 in the `observability` profile, host port 9100, loopback only. **Deliberately no host mounts**, so it reports the *container's* CPU, memory and filesystems rather than the Docker host's — mounting the host root into a container is a posture change a development convenience does not justify. It is a real exporter producing real `node_*` series, which is what the templates are verified against; host-level collection on registered servers is the agent's job (M6.1) |
 | systemd (unit state) | **Running and read — against a test fixture, not a production host** | `node_exporter`'s systemd collector (`TS-02`), so there is no separate exporter. Enabled only in the opt-in `fixtures` profile's `systemd-host` container (Debian + systemd + the pinned exporter), where step 18b of the smoke test reads it through Prometheus, the worker and the API. **Not enabled on the ordinary `node-exporter` service** (no system bus), and no production host runs it. The exporter-side unit allowlist is host configuration |
 | windows_exporter | **Not configured, and deliberately out of scope** | `OPEN-09` now has an implemented working default: **there are no Windows templates at all**, and a WINDOWS server resolves to the `UNSUPPORTED` data state. `windows_exporter` cannot run in a Linux container, so Windows PromQL would be strings never executed against anything — which looks like coverage and is not. The decision stays open |
-| Grafana Alloy | **Declared, never started** | Compose `logs` profile + placeholder `infra/alloy/config.alloy` that collects nothing (M3.1) |
-| Grafana Loki | **Declared, never started** | Compose service + minimal `infra/loki/loki-config.yaml`. No ingestion (M3.1). Still a placeholder *inside the same `observability` profile* as the now-real Prometheus, which is why `scripts/smoke-test.sh` starts `prometheus` and `node-exporter` by name rather than the whole profile |
+| Grafana Alloy | **Configured and verified (M3.1), against synthetic sources** | `infra/alloy/config.alloy` + `journal.alloy`; shipped the sample producer's files and a real systemd journal into a real Loki (smoke 18d, 18e). **Not verified:** a registered server (identity is a fixed sample id, nothing renders config per host — issue 94); the Docker source against anything but a one-off manual run (issue 95); hosted CI |
+| Grafana Loki | **Configured and verified (M3.1)** | 14 d retention, seven-label backstop, ingestion limits, usage reporting off; smoke 18c. **No DCP code queries it yet** (no client, no endpoint — M3.2). Single tenant, so nothing authenticates which shipper claims which `server_id` (`OPEN-31`, accepted for v1). `grafana` in the same profile is still a placeholder, which is why the smoke test starts Loki by name |
 | Alertmanager | **Not configured** | M3.3 |
 | Grafana | **Declared, never started** | In the `observability` profile; no dashboards and no provisioned data source. DCP renders its own charts (M2.2), so this is for ad-hoc exploration only |
 | AWS Systems Manager | **Not configured** | No account, no role, no SSM document, no credential. M4.3 |
@@ -2716,7 +2752,18 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-### M3.1 — PLAN PROPOSED 2026-10-17, awaiting approval. No code written; branch `phase-M3.1` (from `main` after PR #18) holds only the doc changes below, uncommitted.
+### M3.1 — COMPLETE LOCALLY 2026-10-18 (all five commits on `phase-M3.1`, cut from `main` after PR #18). Not pushed, not on hosted CI.
+
+**Next, in this order:**
+
+1. **Push `phase-M3.1`, open the PR and watch CI.** Unmeasured on a hosted runner: the smoke test is longer (18c–18e add a second systemd-fixture start, four throwaway Alloys and two image pulls), and 18e is NOT RUN wherever 18b is (issue 69). The `compose` job also validates the `logs` and `fixtures` profiles.
+2. **M3.2 — log search API and UI** ([IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md#m32--log-search-api-and-ui)). Read **issue 93 first**: an empty result for a server with no recent ingestion must not read as "no errors". Also inherited: `POST` only (`OPEN-20`, closed), `logs:query` is the seeded spelling of `logs:read:system` and §16.7 is routed and answers `503 not_configured` until the Loki client exists; the label contract and closed enums are in [ARCHITECTURE.md §5](docs/ARCHITECTURE.md#5-centralized-logging-architecture); DCP's own outbound redaction pass must be written and tested against `canaries.json` (the same corpus), and will not catch a multi-line key (issue 92); the sample identity is not a registered server (issue 94).
+3. **`OPEN-28` is closed** (per-environment `DCP_UTILISATION_THRESHOLDS`, rule file generated from it) but **how utilisation moves the `warning`/`critical` health state is not decided** and belongs in M3.3's plan.
+4. Leftovers from earlier hand-overs: a registration/edit screen for services (issue 72); E2E path 3 (issue 60).
+
+**What M3.2 should not re-litigate:** the seven labels and their closed values (`AD-21`); server-side LogQL only; Alloy drops a bad identity rather than storing it; Loki stays single-tenant for v1 (`OPEN-31`); the canary corpus is the contract between the two redaction layers.
+
+**Traps this milestone paid for:** Git Bash rewrites any `/path` argument to a Windows path — use `MSYS_NO_PATHCONV=1` for `docker run`/`compose run` arguments, and a rewrite can make a container exit at once so that "nothing stored" passes vacuously (**assert a counter, never only an absence**); the Edit tool converts a typed `\r\n` into real CR/LF characters (write escapes through a script and check the bytes); `sleep` followed by a command is blocked in this environment; an Alloy `loki.process` receives labels but not the extracted map, so normalisation lives in one shared stage; a missing journal path makes `/-/ready` fail, so the journal source is its own file.
 
 **Decisions closed before M3.1, at the owner's instruction to take the recommended option** (all recorded in the documents, which are the record): `OPEN-03` file-managed alert rules; `OPEN-08` Loki 14 d / Prometheus 30 d / alerts 180 d / audit 400 d, no disk quota in v1; `OPEN-13` notification channels in DB tables; `OPEN-16` log access is scoped permission only, no extra approval; `OPEN-20` `POST` only for log queries; `OPEN-28` per-environment `DCP_UTILISATION_THRESHOLDS` with the M3.3 rule file *generated* from it (one copy of the numbers; how utilisation maps to `warning`/`critical` *health* is left to M3.3's plan). **New, raised by this plan:** `AD-21` (closed label set and closed label values, enforced at Alloy; bad identity labels drop the line), `AD-22` (Docker logs from `json-file` files, never the Docker socket), `OPEN-31` (nothing authenticates which shipper claims which `server_id`/`environment` — accepted for v1, closed by a per-environment-tenant gateway in Phase 6). **Deliberately not closed:** `OPEN-01`, `05`, `06`, `07`, `10`, `11`, `12`, `15`, `17`–`19`, `21`–`27`, `29`, `TS-03`, `TS-04` — later phases, and several need facts only the organisation has (IdP, RPO/RTO, topology, sandbox owner).
 
@@ -2751,9 +2798,9 @@ Real results (2026-10-18): `scripts/smoke-test.sh` from empty volumes **SMOKE TE
 
 **Not run / not claimed:** the hosted CI run (nothing is pushed). The smoke test now takes noticeably longer (two more steps, four extra containers, a second fixture start); its duration on a two-core runner is unmeasured. The `alloy-journal` `group_add: 999` is the `systemd-journal` gid of the fixture's Debian image and would differ on another distribution.
 
-**Not M3.1:** any backend or frontend code (no Loki client, no endpoints, no migration — §16.7 stays `503 not_configured`), DCP's outbound redaction (M3.2), deployment logs (M5), rendering Alloy config per managed server (parameterised by environment variables here; enrolment tooling is later).
+**Not M3.1 (and not done in it):** any backend or frontend code (no Loki client, no endpoints, no migration — §16.7 stays `503 not_configured`), DCP's outbound redaction (M3.2), deployment logs (M5), rendering Alloy config per managed server (parameterised by environment variables here; enrolment tooling is later).
 
-**Risks stated up front:** a multi-line PEM block cannot be matched by a per-line redaction stage (documented gap, tested as a known limit); the Docker bind mount may not work under Docker Desktop (fallback: verify the pipeline on a fixture file and say the real-daemon path was not run); ingestion from a *real* journal is time-boxed, and if it cannot be shared from the `systemd-host` fixture it is recorded as NOT RUN; images are still not digest-pinned (issue 21).
+**Risks stated up front:** a multi-line PEM block cannot be matched by a per-line redaction stage (documented gap, tested as a known limit); the Docker bind mount may not work under Docker Desktop — **outcome: the mount works, but the files are `root:root` `0640`, so a non-root shipper reads nothing and says nothing (issue 95)**; ingestion from a *real* journal — **outcome: shared from the `systemd-host` fixture and asserted in smoke step 18e**; images are still not digest-pinned (issue 21).
 
 ### M2.5 — COMPLETE LOCALLY 2026-10-17 (all five commits); D1–D4 approved as written. Not pushed, not on hosted CI.
 

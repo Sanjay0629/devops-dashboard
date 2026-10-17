@@ -496,7 +496,8 @@ An inbound path from a lower-trust component ([ARCHITECTURE.md §11](ARCHITECTUR
 - Base images pinned **by digest** and rebuilt on base-image security updates.
 - Images scanned (Trivy/Grype) in CI and before any production deploy; high/critical findings block with a documented, time-boxed exception process.
 - No secret in an image layer, `ENV`, or build arg. Secrets are injected at runtime.
-- The Docker socket is never mounted into an application container.
+- The Docker socket is never mounted into an application container, **nor into the log shipper** (AD-22).
+- **One documented exception to non-root (M3.1, tested against a real daemon):** Alloy reading Docker container logs. Docker keeps them `root:root` `0640` in a `0710` directory, so a non-root shipper sees *nothing and reports no error* (its file glob simply matches no files). On a host with Docker sources it runs as uid 0 with `cap_drop: ALL`, `no-new-privileges` and the directory mounted read-only. The reference Compose service stays non-root (uid 473) because it reads the sample producer's files, which is exactly why that stack cannot prove this path: the real-daemon run was made once, by hand, with `docker run`. The consequence worth planning for is the silent failure, not the uid: nothing in DCP can yet tell a quiet host from a blind shipper until log freshness is tracked (PROGRESS issue 93).
 - Only required ports exposed; `HEALTHCHECK` on every service.
 
 ---
