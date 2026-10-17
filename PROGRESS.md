@@ -2711,6 +2711,36 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
+### M2.5 plan — PROPOSED 2026-10-17, awaiting the owner's approval of D1–D4 (no M2.5 code exists yet)
+
+Read PRD §4.2, [ARCHITECTURE.md §4 point 5](docs/ARCHITECTURE.md#4-metrics-collection-architecture) (AD-14) and [IMPLEMENTATION_PLAN.md M2.5](docs/IMPLEMENTATION_PLAN.md#m25--stale-data-detection) first. Branch `phase-M2.5` was cut from `main` after PR #17; the next session starts there.
+
+**What exists:** `servers.last_seen_at` and `agent_status` (M2.3 probe); one global `server_stale_after_seconds` that only drives a computed `stale` flag; `servers.status` already allows `STALE`/`UNREACHABLE` but **nothing sets them**; the dashboard and server-detail `health` sections are still `not_configured` ("M2.5"). AD-14 defaults: warning 2× the scrape interval (30 s), stale 5 min, unreachable 15 min, per environment.
+
+**Four problems the documents do not answer, each of which the plan resolves:**
+
+1. **A Prometheus outage would look like a fleet outage.** `last_seen_at` only advances on a successful read, so 15 minutes of Prometheus downtime would age every host to `UNREACHABLE`. This is issue 67, which M2.5 was asked to decide.
+2. **Who owns `MANAGED`?** [DATABASE.md §servers](docs/DATABASE.md) says the system owns `MANAGED`/`STALE`/`UNREACHABLE`; the M1.5 API lets an administrator set `MANAGED` (`SettableServerStatus`).
+3. **A sweep flip must not break an admin's edit.** Migration 0005 deliberately left `status` inside the `updated_at` trigger ("M2.5 owns that decision"); a silent flip to `STALE` would make an open edit form fail with `409`.
+4. **Thresholds cannot go in `system_settings`**: that table accepts exactly one key (read-only mode), so they belong in configuration.
+
+**Five commits (the shape M2.4 used):**
+
+1. **Pure classifier + settings.** `classify()` takes thresholds, `last_seen_at` and a reference time → health state + `data_state`. Unit-tested across the full matrix: never-seen, fresh, warning, stale, unreachable, every boundary ±1 s, per-environment values. One validated `DCP_HEALTH_THRESHOLDS` setting (`.env.example` + Compose passthrough — issue 54's two-halves trap). `server_stale_after_seconds` is removed.
+2. **Sweep job + migration 0006.** `dcp.monitoring.sweep_status` (beat, 60 s) over `discovery.select_targets` (the one predicate). Moves only `MANAGED` ↔ `STALE` ↔ `UNREACHABLE`; never `PENDING`/`RETIRED`, never demo or unscraped servers. Each transition audited as `SERVER_STATUS_CHANGED` with a named system actor (rule 7; add it to the API_CONTRACTS audit vocabulary). Migration 0006 stops `updated_at` moving when `status` changes **between those three states only**; an admin `PENDING`→`MANAGED` still moves it.
+3. **Read path.** Real `health_state` + `data_state` on server detail and the dashboard; the rollup and the `health_status` filter use a SQL `CASE` translation of `classify()` **with a parity test, as `displayed_state` has** (`app/services/listing.py`); "stale servers" counter.
+4. **Frontend.** Health on the dashboard and server detail, last-collected times, a distinct never-seen state; tests incl. axe; mutation-check the key rule.
+5. **Smoke + docs.** Smoke step 18 gets tight thresholds for the run: marks the server `MANAGED` (admin), stops the exporter, expects `STALE` then `UNREACHABLE`, restarts, expects `MANAGED`. Contract/AD-14 amendments; PROGRESS with real results.
+
+**Decisions awaiting the owner (defaults first):**
+
+- **D1 — status ownership:** administrators own `PENDING`→`MANAGED` and `RETIRED`; the sweep owns the three-way `MANAGED`/`STALE`/`UNREACHABLE`. Record as `OPEN-30` and amend the DATABASE.md sentence.
+- **D2 — Prometheus-outage guard:** age is measured against the last time Prometheus *answered* (a Redis marker the probe writes), not the wall clock; during an outage the clock stops and nothing ages. Marker missing ⇒ health reads `unknown`, **never** stale/unreachable. Resolves issue 67.
+- **D3 — thresholds:** one `DCP_HEALTH_THRESHOLDS` JSON setting with per-environment overrides.
+- **D4 — `recent_health_changes`:** built from the audit rows the sweep writes anyway (no new table). PRD §4.2 requires it and the code text promises it for M2.5, though the plan does not list it.
+
+**Explicitly not M2.5:** utilisation-driven `warning`/`critical` health (`OPEN-28`; `critical` reports as unknown, never `0`); alerts on stale hosts (M3.3). **Also open, separate from M2.5:** step 18b is NOT RUN on the hosted runner (issue 69) — reading the fixture's log from that job would say why.
+
 **After M2.4 (2026-10-17), in this order:**
 
 1. **~~Push and watch CI~~ — done 2026-10-17: all ten jobs green on PR #17**, after two rounds that found seven causes ([§6, issues 81–87](#6-known-issues)). The `compose` job takes about three minutes. **The systemd fixture cannot start on the hosted runner, so step 18b is NOT RUN there and the job ends `PASSED, BUT INCOMPLETE`** (issue 69): the next useful CI work is reading *why* from that job's log, not switching `SMOKE_SYSTEMD` to `require`.
