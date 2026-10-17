@@ -231,11 +231,14 @@ def normalise(
     )
 
 
+#: How often the refresh job (``dcp.monitoring.refresh_services``) runs.
+REFRESH_INTERVAL_SECONDS: Final = 60
+
 #: Age beyond which a cached verdict is no longer called current. Three refresh
-#: intervals (the refresh job runs every 60 s): one missed run is noise, three
-#: is a job that is not running — and the list must say so rather than keep
-#: showing the last answer as though it were this minute's (PRD §4.5).
-CACHE_STALE_AFTER_SECONDS: Final = 180
+#: intervals: one missed run is noise, three is a job that is not running — and
+#: the list must say so rather than keep showing the last answer as though it
+#: were this minute's (PRD §4.5). Derived, so the two cannot drift apart.
+CACHE_STALE_AFTER_SECONDS: Final = 3 * REFRESH_INTERVAL_SECONDS
 
 _CACHED_PASSTHROUGH: Final[Mapping[str, ServiceState]] = {v: v for v in STATE_MAP.values()}
 

@@ -307,7 +307,7 @@ Also `403` + `LOGIN_DENIED` (M1.3, assumption A-05): a **new** identity whose em
     "collected_at": null,
     "source": "prometheus"
   },
-  "failed_services": { "count": 0, "data_state": "ok", "collected_at": "2026-01-15T09:29:00Z", "source": "postgresql" },
+  "failed_services": { "count": 0, "unobserved": 0, "data_state": "ok", "collected_at": "2026-01-15T09:29:00Z", "source": "postgresql" },
   "active_alerts": { "critical": null, "warning": null, "info": null, "data_state": "not_configured" },
   "recent_deployments": { "items": null, "data_state": "not_configured" },
   "recent_operations": { "items": null, "data_state": "not_configured" },
@@ -324,6 +324,8 @@ The `utilisation` block illustrates the required behaviour: Prometheus is down, 
 
 1. **`server_health` is a sibling section, not three fields inside `servers`.** `total`, `pending`, `managed`, `stale`, `unreachable` and `retired` are counts of the `servers.status` column — a real source, `data_state: "ok"`. `healthy`, `warning` and `critical` are a *health* rollup with no source until M2.1. One envelope carries one `data_state` (§4), and a block that mixed the two would have to claim either that the status counts are unavailable or that the health counts are collected. Both are false. The field names are unchanged, so a client reads `summary.server_health.healthy` instead of `summary.servers.healthy`.
 2. **`recent_deployments`, `recent_operations` and `recent_health_changes` are `DataSection`s carrying `items: null`, not bare arrays.** There is no deployments table, no operations table and no health-event table. `[]` asserts "nothing happened recently", which is a claim this product cannot make before M5.1, M4.2 and M2.5 respectively — and §4 rule 2 plus PRD §4.2 forbid a substitute value for an absent one just as firmly for an empty list as for a zero. Each carries an `unavailable_reason` naming the milestone that will fill it.
+
+**`failed_services` counts what units *show*, and says how many it could not read (M2.4).** `count` is the number of registered units on readable servers whose displayed state is `FAILED` — the §16.1 state, host-aware, not the raw `services.last_observed_state` column — so a unit cached `FAILED` on a host that has since gone quiet is not counted as failed. The new **`unobserved`** is the number that show `UNKNOWN` or `UNCOLLECTED` (including a cache that has not been refreshed in 180 s). It exists so `count: 0` beside `unobserved: 12` cannot be read as `0` of `12`; a client must show both. `data_state` stays `ok`: both numbers are exact counts of a real table.
 
 `stale` and `unreachable` under `servers` are the stored statuses. AD-14's sweep, which recomputes them from `last_seen_at`, is M2.5; until then nothing moves a server into them automatically, so the counts report what registration and administration set — an accurate count of a real column, not an observation of the host.
 

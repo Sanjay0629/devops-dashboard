@@ -62,12 +62,15 @@ function Card({
   value,
   section,
   to,
+  note,
 }: {
   label: string;
   value: number | null | undefined;
   section: DataSection;
   /** Summary cards link to the relevant detail view (PRD §4.2). */
   to?: string;
+  /** Qualifies the number, e.g. how much of it could not be read. */
+  note?: string | undefined;
 }): React.JSX.Element {
   const body =
     value == null ? (
@@ -85,6 +88,11 @@ function Card({
         {to === undefined ? label : <Link to={to}>{label}</Link>}
       </h3>
       <p className="mt-1">{body}</p>
+      {note === undefined ? null : (
+        <p className="mt-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+          {note}
+        </p>
+      )}
     </div>
   );
 }
@@ -262,6 +270,11 @@ export function Dashboard(): React.JSX.Element {
               label="Failed services"
               value={summary.value.failed_services.count}
               section={summary.value.failed_services}
+              note={
+                summary.value.failed_services.unobserved
+                  ? `${String(summary.value.failed_services.unobserved)} not observed`
+                  : undefined
+              }
             />
           </div>
 

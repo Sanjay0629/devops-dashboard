@@ -70,6 +70,7 @@ const SUMMARY = {
   },
   failed_services: {
     count: 0,
+    unobserved: 0,
     data_state: 'ok',
     collected_at: '2026-10-15T09:30:00Z',
     source: 'postgresql',
@@ -233,6 +234,29 @@ describe('Dashboard', () => {
     const card = screen.getByRole('heading', { name: 'Failed services' }).parentElement;
     expect(card).toHaveTextContent('0');
     expect(card).not.toHaveTextContent(/Not configured/);
+  });
+
+  it('says how many services could not be read beside a zero failed', async () => {
+    // 0 failed of 0 registered is good news; 0 failed of 12 nobody could read
+    // is not, and the card must not let the first stand in for the second.
+    mockApi({
+      summary: {
+        ...SUMMARY,
+        failed_services: { ...SUMMARY.failed_services, count: 0, unobserved: 12 },
+      },
+    });
+    renderDashboard();
+    await screen.findByText('6');
+    const card = screen.getByRole('heading', { name: 'Failed services' }).parentElement;
+    expect(card).toHaveTextContent('12 not observed');
+  });
+
+  it('adds no qualifier when every service was read', async () => {
+    mockApi();
+    renderDashboard();
+    await screen.findByText('6');
+    const card = screen.getByRole('heading', { name: 'Failed services' }).parentElement;
+    expect(card).not.toHaveTextContent(/not observed/);
   });
 
   it('never shows an unmonitored server as healthy', async () => {

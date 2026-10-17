@@ -12,6 +12,8 @@ a missed enqueue.
   lost message costs minutes of staleness rather than a permanent gap.
 * ``probe_agents`` reads ``up`` from Prometheus and records
   ``agent_status`` / ``last_seen_at``.
+* ``refresh_services`` (M2.4) reads each registered unit's state and records
+  ``services.last_observed_*``, the cache the service lists read.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.session import get_sync_engine
 from app.metrics import agents, discovery
+from app.services import refresh
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -52,4 +55,12 @@ def probe_agents() -> dict[str, Any]:
     settings = get_settings()
     summary = agents.probe(get_sync_engine(), settings)
     logger.info("agents_probed", **summary)
+    return dict(summary)
+
+
+@celery_app.task(name="dcp.monitoring.refresh_services", queue="integrations")
+def refresh_services() -> dict[str, Any]:
+    """Record each registered unit's state from Prometheus."""
+    summary = refresh.refresh(get_sync_engine(), get_settings())
+    logger.info("services_refreshed", **summary)
     return dict(summary)

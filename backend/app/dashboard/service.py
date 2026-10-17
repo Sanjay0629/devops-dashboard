@@ -66,6 +66,7 @@ from app.dashboard.schemas import (
 from app.inventory.models import CloudAccount, Server, Service
 from app.inventory.queries import SERVER_SORTS, server_filter_conditions
 from app.inventory.schemas import CursorPage
+from app.services.listing import displayed_state
 
 logger = get_logger(__name__)
 
@@ -211,29 +212,36 @@ async def _status_counts(
     return {status: int(count) for status, count in rows}
 
 
-async def _failed_service_count(
+async def _failed_service_counts(
     db: AsyncSession, grants: Sequence[Grant], filters: DashboardFilterSet
-) -> int:
-    """Failed registered units, over the same readable servers.
+) -> tuple[int, int]:
+    """``(failed, unobserved)`` over the registered units on the readable servers.
+
+    Counted by the state a row **shows** (``services.listing.displayed_state``),
+    not by the raw cache column. A unit cached ``FAILED`` on a host that has
+    since gone quiet is not a failed service, it is an unknown one — and
+    counting it as failed would be as wrong as the reverse. The other half is
+    ``unobserved``: units that show ``UNKNOWN`` or ``UNCOLLECTED``. Without it,
+    a ``0`` over a registry nobody has been able to read would sit on the page
+    looking like good news (PRD §2: never healthy merely because nothing said
+    otherwise).
 
     Scope reaches a service through its server: a service row carries no scope
     dimensions of its own, and counting one whose host the caller cannot see
     would leak the host.
     """
-    return int(
-        (
-            await db.execute(
-                select(func.count())
-                .select_from(Service)
-                .join(Server, Server.id == Service.server_id)
-                .where(
-                    Service.deleted_at.is_(None),
-                    Service.last_observed_state == "FAILED",
-                    *_readable(grants, filters),
-                )
-            )
-        ).scalar_one()
-    )
+    shown = displayed_state(datetime.now(UTC))
+    rows = (
+        await db.execute(
+            select(shown, func.count())
+            .select_from(Service)
+            .join(Server, Server.id == Service.server_id)
+            .where(Service.deleted_at.is_(None), *_readable(grants, filters))
+            .group_by(shown)
+        )
+    ).all()
+    counts = {state: int(count) for state, count in rows}
+    return counts.get("FAILED", 0), counts.get("UNKNOWN", 0) + counts.get("UNCOLLECTED", 0)
 
 
 def _unknown_health() -> ServerHealthRollup:
@@ -254,7 +262,7 @@ async def summary(
     """§13.1, computed fresh from PostgreSQL."""
     settings = get_settings()
     counts = await _status_counts(db, grants, filters)
-    failed = await _failed_service_count(db, grants, filters)
+    failed, unobserved = await _failed_service_counts(db, grants, filters)
     # Stamped after the reads, so it describes the data rather than the request.
     collected_at = datetime.now(UTC)
 
@@ -278,6 +286,7 @@ async def summary(
         ),
         failed_services=FailedServicesSection(
             count=failed,
+            unobserved=unobserved,
             data_state="ok",
             collected_at=collected_at,
             source="postgresql",

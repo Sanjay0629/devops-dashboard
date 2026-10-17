@@ -1129,7 +1129,13 @@ export interface components {
     };
     /**
      * FailedServicesSection
-     * @description A real count: ``services`` is the allowlist, and it is queryable now.
+     * @description Units that *show* ``FAILED``, and how many could not be read at all.
+     *
+     *     ``count`` is a real count over the registry (``services`` is the allowlist),
+     *     but it is a count of what is **known**: a unit whose host is silent, or whose
+     *     exporter reports nothing, shows ``UNKNOWN`` or ``UNCOLLECTED`` and is not in
+     *     it. ``unobserved`` is how many such units there are, so ``0`` failed beside
+     *     ``12`` unobserved cannot be mistaken for ``0`` failed of ``12``.
      */
     FailedServicesSection: {
       /** Collected At */
@@ -1147,6 +1153,8 @@ export interface components {
       stale_after_seconds?: number | null;
       /** Unavailable Reason */
       unavailable_reason?: string | null;
+      /** Unobserved */
+      unobserved?: number | null;
     };
     /**
      * GrantRoleRequest
