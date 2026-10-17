@@ -46,4 +46,44 @@ describe('StatusBadge', () => {
     render(<StatusBadge value="SOMETHING_NEW" />);
     expect(screen.getByText('SOMETHING_NEW')).toBeInTheDocument();
   });
+
+  it('draws every service state with its own word and its own shape', () => {
+    // PRD §4.5. A dead host must never look like stopped services, so UNKNOWN,
+    // INACTIVE and UNCOLLECTED are three different pictures and three different
+    // words — and none of them is the word for a healthy unit.
+    const states = [
+      'ACTIVE',
+      'INACTIVE',
+      'FAILED',
+      'ACTIVATING',
+      'DEACTIVATING',
+      'UNCOLLECTED',
+      'UNSUPPORTED',
+      'UNKNOWN',
+    ];
+    const words = new Map<string, string>();
+    const glyphs = new Map<string, string>();
+    for (const state of states) {
+      const { container, unmount } = render(<StatusBadge value={state} />);
+      const glyph = container.querySelector('[aria-hidden="true"]')?.textContent ?? '';
+      expect(glyph).toBeTruthy();
+      glyphs.set(state, glyph);
+      words.set(state, container.textContent.replace(glyph, ''));
+      unmount();
+    }
+    expect(new Set(words.values()).size).toBe(states.length);
+    // Shapes may repeat only where the meaning does not collide: the three
+    // that must never be confused are pairwise different.
+    const trio = ['INACTIVE', 'UNKNOWN', 'UNCOLLECTED'].map((state) => glyphs.get(state));
+    expect(new Set(trio).size).toBe(3);
+    expect(words.get('FAILED')).toBe('Failed');
+    expect(words.get('INACTIVE')).toBe('Inactive');
+    expect(words.get('UNKNOWN')).toBe('Unknown');
+  });
+
+  it('does not use the raw enum name for a service state', () => {
+    render(<StatusBadge value="UNCOLLECTED" />);
+    expect(screen.queryByText('UNCOLLECTED')).toBeNull();
+    expect(screen.getByText('Not collected')).toBeInTheDocument();
+  });
 });

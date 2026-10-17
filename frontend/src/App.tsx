@@ -13,6 +13,9 @@ import { ServerEditForm, ServerForm } from '@/pages/servers/ServerForm';
 import { Compare } from '@/pages/metrics/Compare';
 import { ServerList } from '@/pages/servers/ServerList';
 import { ServerMetrics } from '@/pages/servers/ServerMetrics';
+import { ServerServices } from '@/pages/services/ServerServices';
+import { ServiceDetailPage } from '@/pages/services/ServiceDetailPage';
+import { ServiceList } from '@/pages/services/ServiceList';
 
 /**
  * Composition root, session gate and routing shell.
@@ -38,6 +41,7 @@ function Navigation(): React.JSX.Element {
   const links = [
     { to: '/dashboard', label: 'Dashboard' },
     { to: '/servers', label: 'Servers' },
+    { to: '/services', label: 'Services' },
     { to: '/compare', label: 'Compare' },
     { to: '/applications', label: 'Applications' },
   ];
@@ -122,9 +126,10 @@ function Shell(): React.JSX.Element {
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M2.2 — inventory, a PostgreSQL dashboard and per-server host metrics from
-            Prometheus. Logs, alerting, operations and deployments are not implemented yet, and
-            every section that depends on them says so rather than showing a zero.
+            Milestone M2.4 — inventory, a PostgreSQL dashboard, per-server host metrics and systemd
+            service state from Prometheus. Logs, alerting, operations and deployments are not
+            implemented yet, and every section that depends on them says so rather than showing a
+            zero.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -196,6 +201,9 @@ function Shell(): React.JSX.Element {
         <Route path="/servers/:serverId" element={<ServerDetail />} />
         <Route path="/servers/:serverId/edit" element={<ServerEditForm />} />
         <Route path="/servers/:serverId/metrics" element={<ServerMetrics />} />
+        <Route path="/servers/:serverId/services" element={<ServerServices />} />
+        <Route path="/servers/:serverId/services/:serviceName" element={<ServiceDetailPage />} />
+        <Route path="/services" element={<ServiceList />} />
         <Route path="/compare" element={<Compare />} />
         <Route path="/applications" element={<ApplicationList />} />
         <Route path="/applications/:applicationId" element={<ApplicationDetail />} />
