@@ -1604,7 +1604,7 @@ Once a decision is reviewed, record the date and the outcome here.
 |---|---|---|---|
 | 65 | **RESOLVED 2026-10-16 (found and fixed by M2.3). `scripts/check_coverage_diff.py` crashed on Windows instead of giving a verdict.** It ran `git diff` with `text=True` and no encoding, so the output was decoded with the locale code page (cp1252), which cannot decode some bytes of a perfectly good UTF-8 diff; the reader thread died, `stdout` came back as `None`, and the script ended with `AttributeError: 'NoneType' object has no attribute 'splitlines'`. Both coverage gates failed in `check-all.sh` for a reason unrelated to coverage. It had not appeared before because earlier diffs happened not to contain the offending byte. | Medium: a gate that crashes is not a gate, and the failure looks like a coverage failure | **Fixed:** `encoding="utf-8", errors="replace"` (only line *numbers* are read from the diff). The floor was not touched. |
 | 66 | **The frontend changed-line gate cannot see a JSX-only edit inside an existing component.** This milestone's `ServerDetail.tsx` and `StatusBadge.tsx` changes were reported as "no coverable line changed", because v8 coverage attributes those lines to a block already counted. They *are* tested (`ServerDetail.test.tsx`, six new cases). | Low | Open, understood. The gate remains useful for new files and new logic; it should not be read as saying a JSX change is covered. |
-| 67 | **During a Prometheus outage every monitored server is reported `UNKNOWN`.** Deliberate (a status must not outlive its evidence), but a 30-second Prometheus restart makes the whole fleet flap to `UNKNOWN` and back. | Low | Accepted, recorded in `app/metrics/agents.py`. Revisit when M2.5 decides how long a status may be trusted. |
+| 67 | ~~**During a Prometheus outage every monitored server is reported `UNKNOWN`.**~~ **Partly resolved 2026-10-17 (M2.5 commit 2, D2):** the *status sweep* no longer ages anything during an outage (it measures against the last time Prometheus answered). `agent_status` still flaps to `UNKNOWN` for the outage's duration, deliberately (`app/metrics/agents.py`). | Low | Open for `agent_status` only |
 | 68 | **The target file is delivered over a shared Docker volume**, which only works when the worker and Prometheus share a host. | Medium for production | Open, tied to `OPEN-12` (production topology). |
 
 ### Implementation issues (found during M2.2, 2026-10-16)
@@ -2711,9 +2711,9 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-### M2.5 plan — D1–D4 APPROVED 2026-10-17 as written; commit 1 of 5 done, commits 2–5 not started
+### M2.5 plan — D1–D4 APPROVED 2026-10-17 as written; commits 1–2 of 5 done, commits 3–5 not started
 
-**Commit 1 (pure classifier + `DCP_HEALTH_THRESHOLDS`) — done, committed.** `app/monitoring/health.py` holds `HealthThresholds`, `HealthThresholdTable` (a `default` plus the four `servers.environment` values, `extra="forbid"`, every merged resolution validated at startup) and `classify_health(thresholds, last_seen_at, reference) -> HostHealth(state, data_state)`. Tests: `backend/tests/monitoring/test_health_classifier.py` (40). Real results: unit **817 passed**; integration **365 passed** against real PostgreSQL/Redis; `ruff check`, `ruff format --check`, `mypy app` clean; `generate-api-types.sh` leaves `schema.ts` unchanged. A mutation check (`>` → `>=` on the stale line) fails `test_the_time_matrix[300-warning-ok]`. **Not run:** `check-all.sh` in full, the smoke test, the frontend suite (nothing there changed).
+**Commit 1 (pure classifier + `DCP_HEALTH_THRESHOLDS`) — done, committed.** `app/monitoring/health.py` holds `HealthThresholds`, `HealthThresholdTable` (a `default` plus the four `servers.environment` values, `extra="forbid"`, every merged resolution validated at startup) and `classify_health(thresholds, last_seen_at, reference) -> HostHealth(state, data_state)`. Tests: `backend/tests/monitoring/test_health_classifier.py` (40). Real results: unit **817 passed**; integration **365 passed** against real PostgreSQL/Redis; `ruff check`, `ruff format --check`, `mypy app` clean; `generate-api-types.sh` leaves `schema.ts` unchanged. A mutation check (`>` → `>=` on the stale line) fails `test_the_time_matrix[300-warning-ok]`. **Not run at the time:** `check-all.sh` — and when it was run for commit 2 it caught a real mismatch from this commit (`.env.example` said `{}`, Compose defaults to empty; fixed in commit 2).
 
 Assumptions to review, none of them in the PRD:
 
@@ -2724,7 +2724,25 @@ Assumptions to review, none of them in the PRD:
 - **Compose trap:** the default is empty, not `{}` — Compose ends `${VAR:-...}` at the first `}` and would append a stray one to any real value. The setting treats empty as `{}`.
 - `HealthState` now lives in `app/monitoring/health.py` (re-imported by the schemas), because `core.config` imports it and the schemas import `core.config`.
 
-**Next: commit 2 (sweep job + migration 0006).** Still to do from the plan: D1's `OPEN-30` entry and the DATABASE.md sentence, D2's Redis marker, the audit vocabulary entry.
+**Commit 2 (sweep job + migration 0006 + D2 marker + D1 docs) — done, committed.**
+
+- `app/monitoring/sweep.py`: `sweep(engine, settings, reference)` moves a **scraped** (`discovery.select_targets`) server between `MANAGED`, `STALE` and `UNREACHABLE` only; the SELECT is limited to those three and the UPDATE is `WHERE status = <the one read>`, so a person's change made mid-sweep wins. `warning` stays `MANAGED` (no such status). Each move inserts a `SERVER_STATUS_CHANGED` audit row (`SYSTEM`, `system:health-sweep`, metadata `{from, to, health_state, age_seconds, reference_at}`) in the same transaction.
+- **D2:** `agents.probe` writes the Redis marker `dcp:monitoring:prometheus_answered_at` after its DB write, **only when Prometheus answered**. The sweep ages hosts against it. Missing, unreadable, naive or non-Redis ⇒ `outcome: no_reference` and **no move at all, including recovery**. Marker writes are best effort (a failure only makes the sweep more conservative).
+- `dcp.monitoring.sweep_status` task + beat `sweep-server-status` every 60 s on `integrations`.
+- Migration `0006`: `set_servers_updated_at()` also ignores `status`, **only when old and new are both in the three sweep states**.
+- Docs: `OPEN-30` (ARCHITECTURE §19), DATABASE.md §4.2 (two paragraphs), API_CONTRACTS §14.4 and the audit catalogue.
+
+Real results (2026-10-17): `scripts/check-all.sh` **ALL CHECKS PASSED, all 18** — unit **826 passed**, integration **388 passed** against real PostgreSQL 17.2 and real Redis, frontend 211 passed, changed-line coverage backend 160/162 (uncovered: `dashboard/service.py` 320–321, commit 1's per-environment stale line on the dashboard rows — commit 3 rewrites that path). Mutation checks fail the expected tests: dropping the owned-status filter, ignoring a missing reference, and putting `PENDING` into the migration's rule. **Not run:** `scripts/smoke-test.sh` (nothing in the stack was exercised; the beat entry, the Compose passthrough and the marker against a real Prometheus are unverified until commit 5's step 18). The rollback is exercised: `test_migrations` has a downgrade/upgrade round trip and a full downgrade to base, both in the 388, and `0006 → 0005 → 0006` was also run by hand on a scratch database.
+
+Assumptions and consequences to review:
+
+- **Never-seen stays as it is.** A `MANAGED` host with `last_seen_at IS NULL` is not moved: no evidence is not old evidence. It reads `unknown` health (commit 3), not `UNREACHABLE`.
+- **A host that stops being a target keeps its last status.** A `STALE` server whose monitoring is switched off stays `STALE` until an administrator sets it. Silence nobody is listening to is not judged either way.
+- **An administrator's `STALE`→`MANAGED` does not move `updated_at`** (the trigger cannot tell who wrote the row; DATABASE.md says so). The sweep reverts it if the host is still quiet.
+- **Issue 67 is resolved by D2**, not by a longer threshold: a Prometheus outage freezes the marker, so nothing ages. A *Redis* flush also freezes everything until the next probe rewrites the marker (≤ `agent_probe_interval_seconds`).
+- The sweep reads `last_seen_at` as written by the probe, which only moves forward; the sweep does not read `agent_status`.
+
+**Next: commit 3 (read path).** Real `health_state`/`data_state` on server detail and the dashboard, a SQL `CASE` twin of `classify_health` with a parity test, the `health_status` filter and rollup, the stale-servers counter, and `recent_health_changes` from the `SERVER_STATUS_CHANGED` rows (D4). The read path must take its reference from the same Redis marker and report `unknown` when it is missing.
 
 
 Read PRD §4.2, [ARCHITECTURE.md §4 point 5](docs/ARCHITECTURE.md#4-metrics-collection-architecture) (AD-14) and [IMPLEMENTATION_PLAN.md M2.5](docs/IMPLEMENTATION_PLAN.md#m25--stale-data-detection) first. Branch `phase-M2.5` was cut from `main` after PR #17; the next session starts there.

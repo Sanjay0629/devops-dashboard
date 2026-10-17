@@ -1,6 +1,6 @@
 """Monitoring tasks on the ``integrations`` queue (M2.3, ``OPEN-14``).
 
-Two tasks, both **idempotent and argument-free**. CLAUDE.md §5 says a task
+Four tasks, all **idempotent and argument-free**. CLAUDE.md §5 says a task
 receives ids, never credentials, commands, URLs or domain objects; these take
 nothing at all, because each rebuilds the whole picture from the database. That
 is what makes them safe to run on any schedule, to run twice, and to run after
@@ -12,6 +12,8 @@ a missed enqueue.
   lost message costs minutes of staleness rather than a permanent gap.
 * ``probe_agents`` reads ``up`` from Prometheus and records
   ``agent_status`` / ``last_seen_at``.
+* ``sweep_status`` (M2.5) moves ``servers.status`` between ``MANAGED``,
+  ``STALE`` and ``UNREACHABLE`` from ``last_seen_at``.
 * ``refresh_services`` (M2.4) reads each registered unit's state and records
   ``services.last_observed_*``, the cache the service lists read.
 """
@@ -25,6 +27,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.session import get_sync_engine
 from app.metrics import agents, discovery
+from app.monitoring import sweep
 from app.services import refresh
 from app.workers.celery_app import celery_app
 
@@ -55,6 +58,13 @@ def probe_agents() -> dict[str, Any]:
     settings = get_settings()
     summary = agents.probe(get_sync_engine(), settings)
     logger.info("agents_probed", **summary)
+    return dict(summary)
+
+
+@celery_app.task(name="dcp.monitoring.sweep_status", queue="integrations")
+def sweep_status() -> dict[str, Any]:
+    """Recompute each scraped server's status from how long ago it was seen."""
+    summary = sweep.run(get_sync_engine(), get_settings())
     return dict(summary)
 
 
