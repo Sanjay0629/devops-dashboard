@@ -737,10 +737,10 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 |---|---|---|
 | ~~OPEN-02~~ | Is an application per-environment (PRD §4.9) or environment-agnostic (PRD §6 implication)? | **RESOLVED 2026-10-14: environment-agnostic**, confirming `AD-12` — which is what M1.2 already built, so no migration and no API change. Closed before M1.5, as required |
 | ~~OPEN-04~~ | Durable `user_sessions` table, or Redis-only? | **RESOLVED 2026-10-13 (M1.3): Redis-only.** No `user_sessions` table. Login, logout and denial are still audited in PostgreSQL, so the authentication record survives a flushed Redis even though live sessions do not. Accepted cost: a Redis restart logs everyone out. |
-| OPEN-08 | Retention durations for audit, alerts, metrics, logs | 400 d / 180 d / 30 d / 14 d placeholders |
+| ~~OPEN-08~~ | Retention durations for audit, alerts, metrics, logs | **RESOLVED 2026-10-17: 400 d / 180 d / 30 d / 14 d adopted as the v1 values**, no disk quota; byte budget sized from measured volume in Phase 6 ([ARCHITECTURE.md §19](ARCHITECTURE.md#19-open-decisions)) |
 | OPEN-10 | `required_approvals > 1`, and self-approval policy | 1 approval; self-approval denied |
 | OPEN-11 | `owner_team` free text vs a `teams` table with scoping | Free text |
-| OPEN-13 | Notification channel config in DB or environment | DB (tables above), Phase 3 |
+| ~~OPEN-13~~ | Notification channel config in DB or environment | **RESOLVED 2026-10-17: DB (tables above), M3.4**; the secret is a reference into the secret store, never a column value |
 | OPEN-15 | Is audit export to an independent store required for v1? | Phase 6, before production rollout |
 | OPEN-17 | Do service state transitions need a history table, or is Prometheus sufficient? | Prometheus only; PRD §4.5 says "where collection is supported" |
 | OPEN-18 | Multiple `deployment_targets` per application+environment (e.g. canary vs full) | One per pair for v1 |

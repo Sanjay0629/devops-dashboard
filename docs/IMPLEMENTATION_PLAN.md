@@ -852,17 +852,19 @@ backend/tests/dashboard/test_summary.py
 |---|---|
 | OPEN-01 IdP | M1.3 hardening |
 | ~~OPEN-02 application↔environment~~ | **Resolved 2026-10-14 — environment-agnostic** |
-| OPEN-03 alert rule authoring | M3.3 |
+| ~~OPEN-03 alert rule authoring~~ | **Resolved 2026-10-17** — file-managed in git; numbers generated from `DCP_UTILISATION_THRESHOLDS` |
 | OPEN-04 session durability | M1.3 |
 | OPEN-05 restricted agent | M4.1, M6.1 |
 | OPEN-06 secret store | M1.1 config |
 | OPEN-07 RPO/RTO | M6.4 |
-| OPEN-08 retention | M2.1, M3.1 |
+| ~~OPEN-08 retention~~ | **Resolved 2026-10-17** — Loki 14 d, Prometheus 30 d, no disk quota in v1 |
 | OPEN-09 Windows scope | M2.4 |
 | OPEN-10 approval policy | M4.5 |
 | OPEN-11 teams model | M6.6 |
 | OPEN-12 production topology | M6.5 |
-| OPEN-13 notification config | M3.4 |
+| ~~OPEN-13 notification config~~ | **Resolved 2026-10-17** — DB tables, M3.4 |
+| ~~OPEN-16 log classification~~ · ~~OPEN-20 `POST` for logs~~ · ~~OPEN-28 threshold home~~ | **Resolved 2026-10-17** — scoped permission only · `POST` only · per-environment `DCP_UTILISATION_THRESHOLDS` ([API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions)) |
+| **OPEN-31 log-push provenance** (new in M3.1) | **Accepted for v1**; closed by a per-environment-tenant gateway before production rollout (Phase 6) |
 | ~~OPEN-14 target discovery~~ | M2.3 — **resolved 2026-10-16**: DCP-generated `file_sd`, no reload call |
 | OPEN-15 audit export | M6.2 |
 | **OPEN-27 scoping a dimension-less resource** (new in M1.5) | **Not M1.6.** Corrected 2026-10-15 after M1.6 was built: §13.1 counts servers, failed services, alerts and recent activity — `application_id` appears only as a *filter*, and it resolves through `application_servers` to servers, which are already scope-filtered. The first milestone genuinely blocked is one that lists or counts applications in their own right. Working default in place: applications are not scope-filtered ([API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions)) |

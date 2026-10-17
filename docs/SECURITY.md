@@ -594,7 +594,8 @@ Required runbooks (to be written in Phase 6, [IMPLEMENTATION_PLAN.md](IMPLEMENTA
 | OPEN-07 | RPO/RTO | Undefined — blocker for production rollout |
 | OPEN-10 | Approval granularity; may an Administrator ever self-approve? | Per environment + action; self-approval denied |
 | OPEN-15 | Is audit export to an independent store mandatory for v1 or Phase 6? | Phase 6, required before production rollout |
-| OPEN-16 | Data classification of log content, and whether production application logs need an additional approval to read | Scoped permission only |
+| ~~OPEN-16~~ | Data classification of log content, and whether production application logs need an additional approval to read | **RESOLVED 2026-10-17 (before M3.1): scoped permission only.** No additional approval to read logs in v1. Log content is treated as *potentially sensitive* (it is never assumed clean): `logs:read:system` is kept apart from `logs:read:application`, production access needs a grant scoped to `production`, both redaction layers apply, and every denial is audited. If the organisation's own data-classification policy later requires an approval step for production logs, it is added as an approval-policy row — no code path changes |
+| OPEN-31 | Log-push provenance: nothing authenticates which shipper may claim which `server_id` / `environment` | **Accepted for v1; closed by a gateway with per-environment Loki tenants in Phase 6, before production rollout.** Full text: [ARCHITECTURE.md §19](ARCHITECTURE.md#19-open-decisions) |
 
 ---
 
