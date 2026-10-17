@@ -390,3 +390,108 @@ describe('ServerDetail monitoring agent', () => {
     expect(row.queryByText(/Not observed yet/)).not.toBeInTheDocument();
   });
 });
+
+describe('ServerDetail health (M2.5)', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const withHealth = (health: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+    ...SERVER,
+    ...extra,
+    health: {
+      collected_at: null,
+      source: 'prometheus',
+      stale_after_seconds: 300,
+      unavailable_reason: null,
+      ...health,
+    },
+  });
+
+  async function row(label: string): Promise<HTMLElement> {
+    const term = await screen.findByText(label, { selector: 'dt' });
+    return term.parentElement as HTMLElement;
+  }
+
+  it('shows a verdict with the line it was judged against', async () => {
+    mockApi(
+      { status: 200 },
+      withHealth(
+        { state: 'healthy', data_state: 'ok', collected_at: '2026-10-16T09:00:00Z' },
+        { last_seen_at: '2026-10-16T09:00:00Z', stale: false },
+      ),
+    );
+    renderDetail();
+    const health = await row('Health');
+    expect(within(health).getByText('Healthy')).toBeInTheDocument();
+    expect(health).toHaveTextContent('Stale after 300 s without a scrape');
+    expect(await row('Stale')).toHaveTextContent('No');
+  });
+
+  it('says a stale host is stale', async () => {
+    mockApi(
+      { status: 200 },
+      withHealth(
+        { state: 'unreachable', data_state: 'stale', collected_at: '2026-10-16T08:00:00Z' },
+        { last_seen_at: '2026-10-16T08:00:00Z', stale: true },
+      ),
+    );
+    renderDetail();
+    expect(within(await row('Health')).getByText('Unreachable')).toBeInTheDocument();
+    expect(await row('Stale')).toHaveTextContent('Yes');
+  });
+
+  it('keeps "never seen", "not evaluated" and "unknown" apart', async () => {
+    // Evaluated, nothing known: a verdict, with the reason, and not "false".
+    mockApi(
+      { status: 200 },
+      withHealth({
+        state: 'unknown',
+        data_state: 'unavailable',
+        unavailable_reason: 'This server has not been scraped yet.',
+      }),
+    );
+    const first = renderDetail();
+    const health = await row('Health');
+    expect(within(health).getByText('Unknown')).toBeInTheDocument();
+    expect(health).toHaveTextContent('This server has not been scraped yet.');
+    expect(await row('Last seen')).toHaveTextContent('Never seen');
+    const stale = await row('Stale');
+    expect(stale).toHaveTextContent('Not determined');
+    expect(stale).not.toHaveTextContent(/\b(Yes|No)\b/);
+    first.unmount();
+
+    // Nothing evaluated: no badge, and the reason says why.
+    mockApi(
+      { status: 200 },
+      withHealth({
+        state: null,
+        data_state: 'unavailable',
+        unavailable_reason: 'Prometheus has not answered yet, so health cannot be evaluated.',
+      }),
+    );
+    renderDetail();
+    const unevaluated = await row('Health');
+    expect(unevaluated).toHaveTextContent('Not evaluated');
+    expect(unevaluated).toHaveTextContent('Prometheus has not answered yet');
+    expect(within(unevaluated).queryByText('Unknown')).toBeNull();
+    expect(within(unevaluated).queryByText('Healthy')).toBeNull();
+  });
+
+  it('has no axe violations with a verdict showing', async () => {
+    mockApi(
+      { status: 200 },
+      withHealth(
+        { state: 'stale', data_state: 'stale', collected_at: '2026-10-16T09:00:00Z' },
+        { last_seen_at: '2026-10-16T09:00:00Z', stale: true },
+      ),
+    );
+    const { container } = renderDetail();
+    await row('Health');
+    const results = await axe.run(container, {
+      runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] },
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    expect(results.violations.map((violation) => violation.id)).toEqual([]);
+  });
+});

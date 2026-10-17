@@ -28,6 +28,7 @@ import { DataStateBanner } from '@/components/DataStateBanner';
 import { EmptyState, LoadingState } from '@/components/EmptyState';
 import { ErrorState, type Failed } from '@/components/ErrorState';
 import { Pager } from '@/components/Pager';
+import { HealthBadge, LastSeen } from '@/components/HealthCell';
 import { StatusBadge } from '@/components/StatusBadge';
 import { useCursorPaging } from '@/components/useCursorPaging';
 import { useLatestResponse } from '@/components/useLatestResponse';
@@ -339,17 +340,35 @@ export function ServerDetail(): React.JSX.Element {
         </Row>
         <Row label="Last seen">
           {/* Never seen is not the same as stale, and neither is a zero. */}
-          {server.last_seen_at ?? <span style={{ color: 'var(--c-text-muted)' }}>Never seen</span>}
+          <LastSeen at={server.last_seen_at} />
         </Row>
         <Row label="Stale">
-          {server.stale === null ? (
-            <span style={{ color: 'var(--c-text-muted)' }}>Unknown — never seen</span>
+          {server.stale == null ? (
+            // Not "false": nothing says it is fresh. The reason is the health
+            // section's — never scraped, monitoring off, or no evaluation.
+            <span style={{ color: 'var(--c-text-muted)' }}>
+              Not determined
+              {server.health.unavailable_reason ? ` — ${server.health.unavailable_reason}` : ''}
+            </span>
+          ) : server.stale ? (
+            'Yes'
           ) : (
-            String(server.stale)
+            'No'
           )}
         </Row>
         <Row label="Health">
-          {server.health.state ?? <DataStateBanner section={server.health} />}
+          <HealthBadge state={server.health.state} />
+          {/* A verdict is dated by the scrape it came from; the lines it was
+              judged against are the environment's, not a global. */}
+          {server.health.state == null || server.health.state === 'unknown' ? (
+            <p className="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              <DataStateBanner section={server.health} inline />
+            </p>
+          ) : (
+            <p className="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              Stale after {String(server.health.stale_after_seconds)} s without a scrape
+            </p>
+          )}
         </Row>
         <Row label="Open alerts">
           {/* `== null` catches both: the generated type makes a field with a

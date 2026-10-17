@@ -2711,7 +2711,7 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-### M2.5 plan — D1–D4 APPROVED 2026-10-17 as written; commits 1–3 of 5 done, commits 4–5 not started
+### M2.5 plan — D1–D4 APPROVED 2026-10-17 as written; commits 1–4 of 5 done, commit 5 not started
 
 **Commit 1 (pure classifier + `DCP_HEALTH_THRESHOLDS`) — done, committed.** `app/monitoring/health.py` holds `HealthThresholds`, `HealthThresholdTable` (a `default` plus the four `servers.environment` values, `extra="forbid"`, every merged resolution validated at startup) and `classify_health(thresholds, last_seen_at, reference) -> HostHealth(state, data_state)`. Tests: `backend/tests/monitoring/test_health_classifier.py` (40). Real results: unit **817 passed**; integration **365 passed** against real PostgreSQL/Redis; `ruff check`, `ruff format --check`, `mypy app` clean; `generate-api-types.sh` leaves `schema.ts` unchanged. A mutation check (`>` → `>=` on the stale line) fails `test_the_time_matrix[300-warning-ok]`. **Not run at the time:** `check-all.sh` — and when it was run for commit 2 it caught a real mismatch from this commit (`.env.example` said `{}`, Compose defaults to empty; fixed in commit 2).
 
@@ -2754,13 +2754,24 @@ Real results (2026-10-17): `check-all.sh` — 17 of 18 checks passed in the full
 
 Consequences and assumptions to review:
 
-- **The dashboard page (commit 4) has not been updated.** It still renders Healthy / Warning / Critical cards and a banner for Health changes; with real data the rollup shows numbers for the first two, there are no cards yet for `stale` / `unreachable` / `unknown`, and a `recent_health_changes` section that is `ok` has no list rendering. Nothing was viewed in a browser.
+- ~~The dashboard page has not been updated.~~ Done in commit 4 (below).
 - **`stale` on a row/detail changed meaning slightly:** it now follows the *health verdict* (`null` for `unknown`, including a monitoring-disabled server with an old `last_seen_at`; before, it was `age > stale line` for any seen host). At defaults the numbers agree for every monitored host.
 - **A stale reference hides health everywhere**, including per-server detail, rather than showing a frozen last-known state with a stale label. Chosen for the simplest rule that obeys §4 rule 2; a "last known" display could be added without a contract change.
 - **The rollup's `servers.stale`/`unreachable` and `server_health.stale`/`unreachable` are different numbers** (stored status vs computed health) and the UI must label them so.
 - The dashboard cache (15 s) is not keyed on the reference, so a marker change shows up after the entry expires, like any other write.
 
-**Next: commit 4 (frontend).** Health on the dashboard and server detail (cards for the five states labelled apart from the status counts, last-collected times, a distinct never-seen state, the `recent_health_changes` list), tests incl. axe, mutation-check the key rule (`null` is never rendered as `0`). Then commit 5 (smoke step 18 with tight thresholds, contract/AD-14 amendments, PROGRESS).
+**Commit 4 (frontend) — done, committed.**
+
+- `components/HealthCell.tsx`: `HealthBadge` keeps three facts apart that shared one grey "Unknown" — `null` is **"Not evaluated"** (no badge: a badge is a verdict), `unknown` is an evaluated "Unknown" badge, and a real state is a badge; `LastSeen` renders **"Never seen"** (not a time, not "stale") for a null.
+- Dashboard: three labelled groups — **Registration status** (`servers.status`, links to the server list), **Health** (five computed counts plus `critical`, dated by when Prometheus last answered) and **Services**. A null in an `ok` section (`critical`) says "Not evaluated — utilisation is not assessed", never `0` and never "Collected". Unusable rollups (unavailable, stale, not configured) show the reason in every card and no digit. New "Last seen" column, a **Health status** filter that goes to the list only, and a "Health changes" list (empty = "none recorded in the last 30 days", null = the section's reason). The reason banner above the table appears only when the rollup has no counts.
+- Server detail: health badge with the line it was judged against ("Stale after N s without a scrape"), the reason when unknown or not evaluated, `Stale` as Yes / No / "Not determined — reason" (never "No" for an unknown), `Last seen` via `LastSeen`.
+- Tests: frontend **227 passed** (was 211): the never-0 rules for every card in the unusable states, the three-way distinction in the table and on detail, the filter's request, the changes list's three states, and axe on both pages with real health data. Mutation checks (null rendered as `0`; the `ok`-but-null branch removed; `null` rendered as a badge) each fail the expected tests.
+
+Real results (2026-10-17): `scripts/check-all.sh` **ALL CHECKS PASSED, all 18** — backend unit 848, integration 397 (real PostgreSQL 17.2 and Redis), frontend 227, changed-line coverage frontend 23/23, backend 290/303 (the uncovered lines are async-handler under-reporting, issue 80). **Not done: the pages were not viewed in a real browser** — jsdom has no layout or contrast, so spacing, wrapping at six health cards and the palette are unchecked; and the smoke test was not run.
+
+Notes: the health cards are not links (the Health status filter is the drill-through), the registration-status cards still are. The server *list* page still shows only the registration status; it has no health column. Neither was asked for in the plan.
+
+**Next: commit 5 (smoke + docs).** Smoke step 18 with tight `DCP_HEALTH_THRESHOLDS`: mark the server `MANAGED` (admin), stop the exporter, expect `STALE` then `UNREACHABLE` and the matching health on the API, restart it, expect `MANAGED`/`healthy`; AD-14 and contract amendments; PROGRESS with real results. That is the first time the beat entry, the Compose passthrough and the marker run against a real Prometheus.
 
 
 Read PRD §4.2, [ARCHITECTURE.md §4 point 5](docs/ARCHITECTURE.md#4-metrics-collection-architecture) (AD-14) and [IMPLEMENTATION_PLAN.md M2.5](docs/IMPLEMENTATION_PLAN.md#m25--stale-data-detection) first. Branch `phase-M2.5` was cut from `main` after PR #17; the next session starts there.
