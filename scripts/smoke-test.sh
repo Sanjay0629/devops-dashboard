@@ -13,6 +13,10 @@
 #          ("accepts a push and returns it") is still uncovered: Loki ingests
 #          nothing until M3.1, so asserting it would be asserting a
 #          placeholder (CLAUDE.md §7).
+#   step 18b (M2.4, TS-02) goes beyond §11: unit state against a REAL systemd
+#          in a fixture container (profile `fixtures`) -- see its header.
+#          SMOKE_SYSTEMD=auto|require|skip; a fixture that cannot start is
+#          reported as NOT RUN, never as a pass.
 #   §11.12 "resource limits present in the production overlay" — there is no
 #          production overlay in infra/compose yet. What exists is checked:
 #          non-root, no privileged flags, no added capabilities, and limits
@@ -37,7 +41,7 @@ COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks)
 OBSERVABILITY=(docker compose -f "$COMPOSE_FILE" --profile observability)
 # Everything, for teardown: `down` only reaches services in the profiles it is
 # given, so the core-and-mocks invocation would leave Prometheus running.
-ALL_PROFILES=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks --profile observability)
+ALL_PROFILES=(docker compose -f "$COMPOSE_FILE" --profile core --profile mocks --profile observability --profile fixtures)
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-240}"
 # M2.3, step 18: tight agent-health timing for this run only, so "a stopped
 # exporter becomes UNREACHABLE within the configured window" is asserted in
@@ -51,6 +55,9 @@ BACKEND="http://localhost:${BACKEND_HOST_PORT:-8000}"
 IDP="http://localhost:${MOCK_IDP_HOST_PORT:-9000}"
 ADMIN_EMAIL="admin@example.invalid"
 JAR="$(mktemp)"
+# Steps that could not run on this machine, reported at the end so a partial pass
+# never reads as a complete one (the same reason check-all.sh lists what it skipped).
+NOT_RUN=()
 
 log()  { printf '\n=== %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
@@ -495,6 +502,187 @@ printf '  UNREACHABLE after the configured window\n'
 await_agent_status HEALTHY 150
 printf '  HEALTHY again once the exporter returned\n'
 
+log "18b. systemd unit state against a real systemd, exporter and Prometheus (TS-02, M2.4)"
+# The ordinary node-exporter container has no system bus, so nothing in the
+# normal stack can produce node_systemd_* series. This step starts a host that
+# runs systemd (infra/compose/systemd-host, profile `fixtures`) and drives
+# *real* transitions on it, asserting what the portal says through the API:
+#
+#   kill a unit            -> FAILED          (a stop is INACTIVE: a different fact)
+#   stop a unit cleanly    -> INACTIVE
+#   a unit never loaded    -> UNCOLLECTED     (the exporter reports no series)
+#   the system bus fails   -> UNCOLLECTED     (host up, collector failing)
+#   the host stops         -> UNKNOWN, never INACTIVE, for EVERY unit
+#
+# "Stop the exporter" and "stop the host" are one observable here: with the
+# systemd collector inside node_exporter there is no separate systemd exporter
+# to stop, so a stopped exporter IS an unreachable host to Prometheus. What the
+# plan called UNCOLLECTED (host answers, no unit data) is the collector failing,
+# which is what stopping the bus does. Recorded in docs/TESTING.md.
+#
+# SMOKE_SYSTEMD=auto (default)  run it; if the fixture cannot start on this
+#                               machine, say so loudly and list it as NOT RUN.
+#                  require      a fixture that cannot start is a failure.
+#                  skip         do not run it; listed as NOT RUN.
+# 'auto' exists because the fixture needs SYS_ADMIN and a writable cgroup tree,
+# which not every Docker host grants. It never turns a failed ASSERTION into a
+# pass: once the fixture is up, every check below must hold.
+SMOKE_SYSTEMD="${SMOKE_SYSTEMD:-auto}"
+FIXTURES=(docker compose -f "$COMPOSE_FILE" --profile fixtures)
+systemd_host="systemd-host:9100"
+systemd_server=""
+
+in_host()   { "${FIXTURES[@]}" exec -T systemd-host "$@"; }
+unit_json() { api "/servers/$systemd_server/services/$1" || true; }
+# `{ ...; } || true`: under `set -e -o pipefail` a grep -o with no match would
+# otherwise end the script with no message at all.
+unit_state() { { unit_json "$1" | grep -o '"state":"[A-Z]*"' | head -1 | cut -d'"' -f4; } || true; }
+await_unit() {
+  local unit="$1" want="$2" limit="$3" got=""
+  local deadline=$((SECONDS + limit))
+  while (( SECONDS < deadline )); do
+    got="$(unit_state "$unit")"
+    [[ "$got" == "$want" ]] && return 0
+    sleep 4
+  done
+  fail "$unit never became $want within ${limit}s (last: ${got:-<none>})"
+}
+refresh_services_now() {
+  "${COMPOSE[@]}" exec -T worker python -c \
+    "from app.workers.tasks.monitoring import refresh_services; print('  refresh:', refresh_services())" \
+    || fail "the service refresh task failed"
+}
+# state -> the service_names the list returns for the fixture host, sorted.
+listed_names() {
+  { api "/services?server_id=$systemd_server&state=$1&limit=200" \
+      | grep -o '"service_name":"[^"]*"' | cut -d'"' -f4 | sort | tr '\n' ' '; } || true
+}
+post_json() {
+  curl -sS -c "$JAR" -b "$JAR" --max-time 20 -X POST \
+    -H 'Content-Type: application/json' -H "X-CSRF-Token: $csrf" -H "Origin: $FRONTEND" \
+    --data "$2" "$FRONTEND/api/v1$1"
+}
+
+systemd_assertions() {
+  printf '  registering %s through the API, then four units on it\n' "$systemd_host"
+  local created
+  created="$(curl -sS -c "$JAR" -b "$JAR" --max-time 20 -X POST \
+    -H 'Content-Type: application/json' -H "X-CSRF-Token: $csrf" -H "Origin: $FRONTEND" \
+    -H "Idempotency-Key: smoke-m24-$RANDOM$RANDOM" \
+    --data "{\"cloud_account_id\":\"$account_id\",\"provider_resource_id\":\"smoke-systemd-host\",\"hostname\":\"smoke-systemd.internal.example\",\"display_name\":\"Smoke systemd host\",\"operating_system\":\"LINUX\",\"environment\":\"staging\",\"management_method\":\"RESTRICTED_AGENT\",\"monitoring_enabled\":true,\"metrics_instance\":\"$systemd_host\"}" \
+    "$FRONTEND/api/v1/servers")"
+  grep -q "\"metrics_instance\":\"$systemd_host\"" <<<"$created" \
+    || fail "registering the systemd host failed: $created"
+  systemd_server="$(grep -o '"id":"[^"]*"' <<<"$created" | head -1 | cut -d'"' -f4)"
+  [[ -n "$systemd_server" ]] || fail "could not read the systemd host's id"
+  local unit reg
+  for unit in dcp-fixture-app dcp-fixture-stoppable dcp-fixture-broken dcp-fixture-missing; do
+    reg="$(post_json "/servers/$systemd_server/services" "{\"service_name\":\"$unit.service\"}")"
+    grep -q "\"service_name\":\"$unit.service\"" <<<"$reg" || fail "registering $unit failed: $reg"
+  done
+
+  # An unregistered unit is not queried and not shown, whatever the exporter
+  # reports: it must be a 404 (docs/SECURITY.md §15).
+  local code
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -c "$JAR" -b "$JAR" --max-time 20 \
+    "$FRONTEND/api/v1/servers/$systemd_server/services/systemd-journald.service")"
+  [[ "$code" == "404" ]] || fail "an unregistered unit answered $code, expected 404"
+  printf '  an unregistered unit is 404\n'
+
+  printf '  waiting for the target to be scraped and the first unit to read ACTIVE\n'
+  await_unit dcp-fixture-app.service ACTIVE 180
+  local detail fragment
+  detail="$(unit_json dcp-fixture-app.service)"
+  for fragment in '"restart_count":0' '"sub_state":null' '"load_state":null' \
+                  '"enabled":null' '"main_pid":null' '"server_reachable":true' '"data_state":"ok"'; do
+    grep -q "$fragment" <<<"$detail" || fail "the app unit lacks $fragment: $detail"
+  done
+  grep -q '"started_at":"20' <<<"$detail" || fail "a running unit has no started_at: $detail"
+  printf '  app: ACTIVE, restart_count 0, started_at set, the four unsupplied fields null\n'
+
+  [[ "$(unit_state dcp-fixture-broken.service)" == "FAILED" ]] \
+    || fail "a unit that failed at boot is not FAILED"
+  [[ "$(unit_state dcp-fixture-stoppable.service)" == "ACTIVE" ]] || fail "stoppable is not ACTIVE"
+  [[ "$(unit_state dcp-fixture-missing.service)" == "UNCOLLECTED" ]] \
+    || fail "a unit the host does not have is not UNCOLLECTED (it must never read INACTIVE)"
+  printf '  broken: FAILED   missing: UNCOLLECTED (not INACTIVE)\n'
+
+  printf '  killing the app unit (SIGKILL) and stopping another cleanly\n'
+  in_host systemctl kill -s KILL dcp-fixture-app.service
+  in_host systemctl stop dcp-fixture-stoppable.service
+  await_unit dcp-fixture-app.service FAILED 90
+  await_unit dcp-fixture-stoppable.service INACTIVE 90
+  printf '  killed -> FAILED, stopped -> INACTIVE: two different facts, two different states\n'
+
+  # The list path: the cache the refresh job writes, aged and host-checked.
+  refresh_services_now
+  local failed inactive unknown dash
+  failed="$(listed_names FAILED)"
+  [[ "$failed" == "dcp-fixture-app.service dcp-fixture-broken.service " ]] \
+    || fail "the failed-service view is wrong: '$failed'"
+  inactive="$(listed_names INACTIVE)"
+  [[ "$inactive" == "dcp-fixture-stoppable.service " ]] || fail "the inactive list is wrong: '$inactive'"
+  printf '  the failed-service view lists exactly: %s\n' "$failed"
+  # The summary is cached for 15 s (DCP_DASHBOARD_CACHE_TTL_SECONDS), so an
+  # answer from before the kill may still be served: poll rather than assert once.
+  local counted=0 try
+  for try in 1 2 3 4 5 6; do
+    dash="$(api /dashboard/summary || true)"
+    if grep -Eq '"failed_services":\{[^}]*"count":[1-9]' <<<"$dash"; then counted=1; break; fi
+    sleep 5
+  done
+  (( counted )) || fail "the dashboard does not count the failed services: $dash"
+  printf '  the dashboard counts them\n'
+
+  printf '  breaking the system bus: the host answers, the collector cannot\n'
+  in_host systemctl stop dbus.socket dbus.service
+  await_unit dcp-fixture-app.service UNCOLLECTED 90
+  grep -q '"server_reachable":true' <<<"$(unit_json dcp-fixture-app.service)" \
+    || fail "a failing collector made the host look unreachable"
+  printf '  UNCOLLECTED, host still reachable\n'
+  in_host systemctl start dbus.socket
+  await_unit dcp-fixture-app.service FAILED 90
+  printf '  and back to FAILED once the bus returned\n'
+
+  printf '  stopping the host\n'
+  "${FIXTURES[@]}" stop systemd-host >/dev/null
+  for unit in dcp-fixture-app dcp-fixture-stoppable dcp-fixture-broken dcp-fixture-missing; do
+    await_unit "$unit.service" UNKNOWN 120
+  done
+  grep -q '"server_reachable":false' <<<"$(unit_json dcp-fixture-stoppable.service)" \
+    || fail "an unreachable host is not reported unreachable"
+  refresh_services_now
+  [[ -z "$(listed_names INACTIVE)" ]] \
+    || fail "a dead host's units were listed INACTIVE: '$(listed_names INACTIVE)'"
+  [[ -z "$(listed_names FAILED)" ]] || fail "a dead host's units were listed FAILED"
+  unknown="$(listed_names UNKNOWN)"
+  [[ "$unknown" == "dcp-fixture-app.service dcp-fixture-broken.service dcp-fixture-missing.service dcp-fixture-stoppable.service " ]] \
+    || fail "the dead host's units are not all UNKNOWN: '$unknown'"
+  printf '  all four units UNKNOWN on the detail page and in the list; none INACTIVE (PRD §4.5)\n'
+  printf '  systemd: unit state observed end to end against a real systemd\n'
+}
+
+case "$SMOKE_SYSTEMD" in
+  skip)
+    NOT_RUN+=("18b systemd unit state (SMOKE_SYSTEMD=skip)")
+    printf 'NOT RUN: SMOKE_SYSTEMD=skip\n' ;;
+  auto|require)
+    if "${FIXTURES[@]}" up -d --build --wait --wait-timeout 180 systemd-host; then
+      systemd_assertions
+    elif [[ "$SMOKE_SYSTEMD" == "require" ]]; then
+      "${FIXTURES[@]}" logs --tail=40 systemd-host || true
+      fail "the systemd fixture did not start and SMOKE_SYSTEMD=require"
+    else
+      "${FIXTURES[@]}" logs --tail=40 systemd-host || true
+      NOT_RUN+=("18b systemd unit state (the fixture could not start on this Docker host)")
+      printf '\n*** NOT RUN: the systemd fixture could not start here (it needs SYS_ADMIN and a\n'
+      printf '*** writable cgroup tree). Unit-state behaviour is covered by the unit and integration\n'
+      printf '*** suites against scripted Prometheus answers, NOT against a real systemd. This run\n'
+      printf '*** is reported as incomplete below.\n\n'
+    fi ;;
+  *) fail "SMOKE_SYSTEMD must be auto, require or skip (got: $SMOKE_SYSTEMD)" ;;
+esac
+
 log "19. A database outage degrades honestly, with no zeros (§11.10)"
 "${COMPOSE[@]}" stop postgres >/dev/null
 # Poll rather than sleep: the readiness probe has its own per-check deadline,
@@ -537,6 +725,11 @@ grep -q '"broker":true'     <<<"$readyz" || fail "broker not ready after recreat
 grep -q '"migrations":true' <<<"$readyz" || fail "migrations not applied after recreate"
 printf 'stack returned to the same healthy state from empty volumes\n'
 
-printf '\nSMOKE TEST PASSED\n'
+if (( ${#NOT_RUN[@]} > 0 )); then
+  printf '\nSMOKE TEST PASSED, BUT INCOMPLETE: %s step(s) NOT RUN\n' "${#NOT_RUN[@]}"
+  printf '  NOT RUN: %s\n' "${NOT_RUN[@]}"
+else
+  printf '\nSMOKE TEST PASSED\n'
+fi
 printf 'Covered docs/TESTING.md §11 steps 1-12, with step 8 partial:\n'
 printf '  its Prometheus half is asserted (step 18); its Loki half needs M3.1.\n'

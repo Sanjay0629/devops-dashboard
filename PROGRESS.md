@@ -110,8 +110,7 @@ enforcement) and M1.3
 
 ## 1. Current project stage
 
-**Stage: Phase 2 — Monitoring. M1.1 – M1.7 and M2.1 – M2.3 complete. M2.4 (systemd) is next; its gate `TS-02` is resolved (2026-10-17). As of M2.2 a server with a registered `metrics_instance` shows
-real current values and history; the dashboard's `utilisation` section is still
+**Stage: Phase 2 — Monitoring. M1.1 – M1.7 and M2.1 – M2.4 complete. M2.5 (stale-data detection) is next. As of M2.4 a registered unit on a scraped host shows its real systemd state, host-aware: a dead host is `UNKNOWN`, never `INACTIVE`. The dashboard's `utilisation` section is still
 `not_configured`.**
 
 **As of M2.1 (2026-10-16) the product reads something other than its own
@@ -234,6 +233,7 @@ writing.
 | **M2.1** — Prometheus client, metric template catalogue, query guards, `GET /metrics/templates`, §26.1 integration status | **Complete** | 2026-10-16 | 496 unit + 237 integration + 115 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks with nothing skipped; `scripts/smoke-test.sh` passes with **§11 step 8's Prometheus half now asserted** — the exporter target `up` and **all ten templates executed**, read **through the backend's own client against a real Prometheus and a real `node_exporter`** ([§7](#7-tests-executed-and-their-actual-results)). Changed-line coverage **388/388 (100 %)** after the gate's own blind spot was fixed (issue 56) |
 | **M2.2** — host metrics endpoints §15.1–§15.3, threshold classification, metric cards, range charts, server/environment comparison | **Complete** | 2026-10-16 | 539 unit + 272 integration + 170 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks; `scripts/smoke-test.sh` passes with step 18 extended to read **current values and a real range series through the new service against a real Prometheus and `node_exporter`**, with the scrape-timestamp assumption verified; both pages were then looked at in a real browser on the running stack ([§7](#7-tests-executed-and-their-actual-results)). Changed-line coverage 316/324 backend, 249/268 frontend |
 | **M2.3** — Prometheus target discovery (`OPEN-14`), agent-health probe, `agent_status` / `last_seen_at`, migration 0005 | **Complete** | 2026-10-16 | 586 unit + 296 integration + 176 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks; `scripts/smoke-test.sh` passes with step 18 **registering the exporter through the API, watching it become `HEALTHY`, stopping it until `UNREACHABLE`, and restarting it** — all read from a real Prometheus and `node_exporter`; the new UI row was viewed in a real browser through both transitions ([§7](#7-tests-executed-and-their-actual-results)). Changed-line coverage 213/215 backend |
+| **M2.4** — systemd service monitoring (`TS-02`, `OPEN-29`): state normalisation, endpoints §16.1–§16.7, refresh job, honest failed-services count, services pages | **Complete, with the caveats in [§6](#6-known-issues) issues 69–80** | 2026-10-17 | 777 unit + 365 integration + 211 frontend tests pass against **real PostgreSQL 17.2 and real Redis**; `scripts/check-all.sh` passes all 18 checks with nothing skipped (changed-line coverage 585/638 backend and 69/73 frontend, both above the 80% floor and understated for the backend — issue 80); `scripts/smoke-test.sh` passes (20 steps, from empty volumes) with the new **step 18b driving real transitions on a real systemd** and asserting what the portal says: a killed unit is `FAILED`, a cleanly stopped one `INACTIVE`, a unit the host does not have `UNCOLLECTED`, a failing system bus `UNCOLLECTED` with the host still reachable, and **a stopped host `UNKNOWN` for every unit — none `INACTIVE`** ([§7](#7-tests-executed-and-their-actual-results)). **Not observed on a hosted CI runner, and the UI was not viewed in a real browser.** |
 
 **M1.3 caveat — the honest limit of what was verified.** Everything was tested
 against the **mock** OIDC provider in `infra/compose/mock-idp/`, which checks no
@@ -261,7 +261,42 @@ development aid and is labelled as one in its own README, in the Compose file an
 
 ## 3. In-progress milestone
 
-**None.** M2.3 is finished. M2.4 has not begun. See [§9](#9-next-recommended-task).
+**None.** M2.4 is finished. M2.5 has not begun. See [§9](#9-next-recommended-task).
+
+### What M2.4 implemented (2026-10-17)
+
+A pure normalisation module, a read path, a 60-second refresh job, an honest dashboard count, three pages, and a container that runs systemd. **No migration**: the `services` columns M1.2 created were enough. Seven commits on `phase-M2.4`.
+
+#### The decisions closed before code
+
+1. **`TS-02` → `node_exporter`'s systemd collector with a unit allowlist**, chosen after **testing it against a real systemd 255** (pinned `node-exporter:v1.8.2`, non-root, system bus mounted read-only) rather than from documentation — the way `TS-01` was. No new component, port, scrape job or `file_sd` kind; `node_scrape_collector_success{collector="systemd"}` is the signal for a collector that is not working. `systemd_exporter` was rejected (same series, a second container and discovery kind, all 19 metrics documented UNSTABLE, last release 2025-03-14); the agent was rejected as out of proportion ([TECH_STACK.md §5.3](docs/TECH_STACK.md#53-systemd-metrics-integration)).
+2. **`OPEN-29` → `sub_state`, `load_state`, enabled state and main PID are `null`.** The test found that **no exporter exposes them**, though ARCHITECTURE §6.1 and PRD §4.5 name them. Agreed with the product owner: `null` (never `0`, `""` or a guess), `active/exited` reads `ACTIVE`, and the UI says "not collected by this source". The restricted agent (`OPEN-05`) fills them later with no API change. `last_state_change_at` is `null` for the same reason; the exporter's start time is exposed as **`started_at`** under its own name.
+3. **Lists read a cache; detail reads Prometheus** (agreed: no migration). `restart_count` is `null` on lists.
+4. **§16.7 is routed and validated and answers `503 not_configured`** until Loki exists (M3.1). An empty page would read as "no errors". The permission is `logs:query`, the seeded spelling of `logs:read:system`.
+5. **An action policy is a privilege**: assigning or changing one is Administrator-only and audited as `SERVICE_ACTION_POLICY_CHANGED` as well as `SERVICE_UPDATED`.
+
+#### What was built
+
+- `app/services/normalise.py` — [ARCHITECTURE §6.1](docs/ARCHITECTURE.md#61-monitoring-read) as a pure function with an explicit order: unsupported platform → monitoring gates → Prometheus failure → **the host (overrides unit state)** → collector/unit not reporting (`UNCOLLECTED`) → `active_state`. A malformed unit (none, two or an unknown label set to 1, a `NaN`) fails closed to `UNKNOWN`. `view_cached` is the same order for the list path.
+- `queries.py`, `reader.py` — allowlisted PromQL (unit names come only from registered rows, validated with a **full match**, refused rather than escaped); absence stays absence; a unit registered on one host cannot leak into another's reading; scrape age is measured against **Prometheus's** clock, not ours.
+- `router.py`, `service.py`, `schemas.py`, `listing.py` — endpoints 16.1–16.7. `displayed_state` is `view_cached` as a SQL `CASE`, so `?state=FAILED` filters on what a row *shows*; **a parity test runs 1 152 generated rows through both and fails if they ever disagree**.
+- `refresh.py` + `dcp.monitoring.refresh_services` (beat, 60 s) — reads every registered unit on the hosts Prometheus scrapes (the one `select_targets` predicate), writes `services.last_observed_*`, never moves a row backwards, writes `UNKNOWN` over an old `FAILED` when Prometheus cannot be asked. The cache goes stale at 3× the interval, derived from it.
+- **Dashboard `failed_services` was wrong since M1.6 and is fixed.** It counted the raw cache column, so a dead host's cached `FAILED` still counted, and an empty cache read as a real zero. It now counts what rows *show* and reports **`unobserved`** beside it, so `0` failed of `12` unread cannot be read as `0` of `12`. The card shows "N not observed".
+- Frontend: `/services` (with a state filter sent to the backend), `/servers/:id/services`, `/servers/:id/services/:name`; every row shows its state **and its evidence** (collection time, or why none); an unreachable server renders `Unknown` + "Host unreachable", never `Inactive`; the four unsupplied fields read "Not collected by this source".
+- `infra/compose/systemd-host/` + the `fixtures` Compose profile — Debian with systemd as PID 1, the *same pinned exporter binary*, the systemd collector, and four units. Its security exception is written down in [SECURITY.md §7](docs/SECURITY.md#7-network-isolation).
+- `scripts/smoke-test.sh` **step 18b** with `SMOKE_SYSTEMD=auto|require|skip`; a fixture that cannot start ends the run as `PASSED, BUT INCOMPLETE … NOT RUN`, never as a plain pass.
+
+#### What M2.4 found, and what became of each
+
+| Found | Handling |
+|---|---|
+| **No exporter exposes `sub_state`/`load_state`/enabled/PID** | `OPEN-29`, above |
+| **`TS-02` text said DCP generates the exporter's allowlist.** It cannot: it has no write path to a host's `node_exporter` flags and must not gain one | Corrected in TECH_STACK §5.3 and the plan before any code; the exporter-side allowlist is host configuration, DCP filters on read |
+| **The unit-name pattern's `$` accepts a trailing newline** with `re.match` | `fullmatch` in the query renderer and the request schema; tested with `"a.service\n"` |
+| **A stopped unit and a failed unit report different things; a start time of `0` means "not running"**, not 1970 | `INACTIVE` ≠ `FAILED`; `0` is `null`; both asserted against a real systemd |
+| **The plan's "stop the exporter ⇒ `UNCOLLECTED`" cannot happen** with the collector inside `node_exporter`: a stopped exporter *is* an unreachable host to Prometheus | `UNCOLLECTED` is the collector failing (stopping the system bus); recorded in [TESTING.md §11](docs/TESTING.md#11-docker-compose-smoke-tests) |
+| **systemd in a container needs `SYS_ADMIN`, `cgroup: host` and a writable `/sys/fs/cgroup`** — four weaker combinations were tried and exit at boot | Confined to an opt-in profile; documented as an exception (issue 69) |
+| **M1.6's dashboard count read the raw cache column** | Fixed above |
 
 ### What M2.3 implemented (2026-10-16)
 
@@ -1348,7 +1383,7 @@ Per [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). **All pending 
 | Phase | Milestones | Status |
 |---|---|---|
 | 1 — Foundation | ~~M1.1 skeleton + Compose + CI~~ **done** · ~~M1.2 schema + migrations~~ **done** · ~~M1.3 OIDC auth~~ **done** · ~~M1.4 RBAC~~ **done** · ~~M1.5 inventory~~ **done** · ~~M1.6 dashboard shell~~ **done** · ~~M1.7 consolidation~~ **done** | **Phase 1 COMPLETE** 2026-10-15 |
-| 2 — Monitoring | ~~M2.1 Prometheus client~~ **done** · ~~M2.2 host metrics + charts~~ **done** · ~~M2.3 target discovery~~ **done** · M2.4 systemd monitoring · M2.5 stale detection | **In progress.** M2.1 – M2.3 complete 2026-10-16; M2.4 ([§9](#9-next-recommended-task)) is next; `TS-02` resolved 2026-10-17 |
+| 2 — Monitoring | ~~M2.1 Prometheus client~~ **done** · ~~M2.2 host metrics + charts~~ **done** · ~~M2.3 target discovery~~ **done** · ~~M2.4 systemd monitoring~~ **done** · M2.5 stale detection | **In progress.** M2.1 – M2.3 complete 2026-10-16, M2.4 2026-10-17; M2.5 ([§9](#9-next-recommended-task)) is next |
 | 3 — Logs and alerts | M3.1 Alloy + Loki · M3.2 log search · M3.3 alert rules + lifecycle · M3.4 notifications | Pending |
 | 4 — Controlled operations | M4.1 adapter interface · M4.2 operation lifecycle · M4.3 AWS SSM · M4.4 Azure · M4.5 approvals · M4.6 audit API | Pending |
 | 5 — Deployments | M5.1 targets + Jenkins client · M5.2 lifecycle · M5.3 build logs · M5.4 production approvals · M5.5 health checks + rollback | Pending |
@@ -1529,6 +1564,23 @@ Once a decision is reviewed, record the date and the outcome here.
 | 58 | **The circuit-breaker state that §26.1 reports is per-process, so with more than one backend replica the page reports whichever replica answered.** `app/metrics/client._BREAKER` is a module-level instance. `last_success_at`, `last_error_at` and `circuit_state` are therefore that worker's view, and two polls of `/api/v1/integrations/status` can legitimately disagree. In the local stack there is exactly one backend container, so it is currently invisible. | Accepted for now, and marked in code with a `ponytail:` comment naming the ceiling. It is also not concurrency-exact *within* a process: two coroutines can both pass `allow()` in the half-open state, which costs one extra probe against a monitoring server | A Redis-backed breaker, which the project already has the client for, shared per integration. Worth doing when there is more than one replica or when §26.1 gets a UI — a status page that flickers between `ok` and `open` depending on which worker answered is worse than one that is occasionally stale. Related: §26.1's `degraded` state is **not emitted at all** today, because deciding it honestly needs failure-rate history over a window that nobody has specified (see [§3](#3-in-progress-milestone)) |
 | 59 | **MITIGATED 2026-10-16 (M2.2) — it recurred, was reproduced and was fixed the way this row predicted; see the end of this row.** **One frontend vitest test failed once, under load, and was not identified.** Observed during M2.1's verification: a `scripts/check-all.sh` run reported `Test Files 1 failed | 12 passed (13)` / `Tests 1 failed | 114 passed (115)`, which also failed the frontend changed-line coverage gate as a **consequence** (a failed vitest run leaves no usable Cobertura report, so the gate exits 2). **The test's name was not captured** — the run's output was filtered to the per-check summary lines, and by the time that was noticed the output was gone. It did not reproduce: five subsequent runs were clean (one plain `vitest run`, three `vitest run --coverage`, and one more full `check-all.sh`, all 115 passed). The run that failed was the most loaded of the set — it followed a two-minute backend integration suite with the whole Compose stack running, on a Windows machine — and the frontend suite sets no `testTimeout`, so vitest's 5 s default and Testing Library's 1 s `waitFor` default both apply to nine test files that use `waitFor`. A contention-induced timeout is the plausible mechanism, which is a hypothesis and not a diagnosis. | **Unknown, and deliberately recorded as unknown.** M2.1 changed no frontend source — the only frontend file in its diff is the regenerated `src/api/schema.ts` — so a new defect introduced by this milestone is the least likely explanation; but "probably a flake" is exactly the conclusion that let issue 51 live for five milestones | **Capture the output next time rather than hunting for it now.** Concretely: run `check-all.sh` with its full output kept (it is already one stream; the mistake was filtering it at the call site), and if it recurs, the file and assertion will be in it. If it recurs more than once, the candidates are the nine `waitFor` files, and the fix is an explicit `testTimeout` in `frontend/vite.config.ts` rather than a retry — a retried flake is a flake that still fails in CI. Worth noting for M2.2, which adds chart tests to the same suite. **Update, M2.2:** it recurred — three of five full parallel runs failed, with a *different* test each time. `ServerForm.test.tsx` (about 45 characters typed per test through `userEvent`; 18–23 s as a file under load) hit vitest's 5 s limit, and once that was raised, `findBy*`/`waitFor` hit Testing Library's separate 1 s default in two more tests (one this milestone's own). Each passes alone, which confirms contention. Fixed as predicted, with no retry: `testTimeout: 15_000` in `frontend/vite.config.ts` and `configure({ asyncUtilTimeout: 5_000 })` in `frontend/src/test/setup.ts`; four consecutive full runs then passed 170/170. A passing assertion is not slowed; a failing one takes 5 s to fail. **Mitigated, not eliminated** — pasting rather than typing in `ServerForm.test.tsx` is the real cure and touches tests M2.2 did not own |
 
+### Implementation issues (found during M2.4, 2026-10-17)
+
+| # | Issue | Severity | Handling |
+|---|---|---|---|
+| 69 | **The systemd fixture has been observed on exactly one Docker host** (WSL2, Docker 29.8, cgroup v2). It needs `cap_add: SYS_ADMIN`, `cgroup: host` and a writable `/sys/fs/cgroup`, runs without `no-new-privileges`, and can modify the host's cgroup tree. It has **not** been run on a hosted CI runner, its runtime on a two-core runner is unmeasured, and it is the one service in the file that breaks the hardening rules. | Medium | Opt-in `fixtures` profile; exception written into SECURITY.md §7. CI runs `SMOKE_SYSTEMD=auto`, so a runner that cannot start it ends `PASSED, BUT INCOMPLETE … NOT RUN`. **Once a hosted run has been observed, set it to `require`** (comment in `.github/workflows/ci.yml`) |
+| 70 | **The fixture's base image is the floating tag `debian:bookworm-slim`** and `apt-get` runs at build time, so it is not digest-pinned (AD-16) and `scripts/pin-digests.sh` does not read Dockerfile `FROM` lines | Low | Fixture only, never shipped. Pin when the script learns Dockerfiles |
+| 71 | **`services.updated_at` moves on every refresh** (the trigger fires on each `UPDATE`, every 60 s per monitored unit). Nothing reads it for concurrency — §16.5 has no `If-Unmodified-Since` — so it costs only the meaning of that column | Low | Recorded in `app/services/refresh.py`. If §16.5 ever gains the precondition, do what migration 0005 did for `servers` |
+| 72 | **There is no screen to register, edit or deregister a service.** §16.3, §16.5 and §16.6 exist and are tested over HTTP, but a unit can only be registered through the API (the smoke test does exactly that) | Medium | Not in the plan's M2.4 frontend scope ("service list and detail"). Needs a form and its error mapping |
+| 73 | **`UNCOLLECTED` merges three causes**: the collector is not enabled, the collector is failing (no system bus), and the unit is not on the host. The fix is exporter-side in all three, but an operator cannot tell a typo in a registered name from a broken exporter | Low | By design for now; `sub_state` and friends cannot help either (`OPEN-29`). Worth a per-host rollup in M2.5 |
+| 74 | **The dashboard's failed-services count is scoped by `server:read`**, as it was in M1.6, not by `service:read` | Low | Every seeded role that holds one holds both. Revisit if roles become configurable |
+| 75 | **Lists show `restart_count: null`** (the cache holds a state and a time); only §16.4 knows it | Low | Agreed trade-off (no migration). Add cache columns if the failed-service view needs it |
+| 76 | **The refresh job rewrites every monitored row every 60 s**, because `last_observed_at` is the product. Thousands of services is thousands of `UPDATE`s a minute; unmeasured | Low | Batched 500 per statement. Measure at M6.3 |
+| 77 | **`server_reachable` can disagree for up to a minute**: lists derive it from the agent probe (30 s), the detail page from the live `up` | Low | Both are `UNKNOWN`-safe; only the explanatory line can lag |
+| 78 | **The smoke test needs a fresh database.** Step 18's registration answers `422` if a server already claims `node-exporter:9100` — found when it was first run against a dev stack with leftover rows. Also, the frontend build context is ~200 MB over the WSL file bridge (3 minutes) | Low | Run after `down -v`. A `.dockerignore` for `node_modules` would fix the second |
+| 79 | **The 18b step takes several minutes** (a scrape is 15 s and each transition waits for one, plus the unreachable window) | Low | Unmeasured on a CI runner; the deadlines are generous multiples |
+| 80 | **The changed-line coverage gate under-reports async handler code.** `coverage` is configured without `concurrency = ["thread", "greenlet"]`, so lines that run after a SQLAlchemy async call lose their trace. Verified: a passing paging test walks `services/router.py` lines 122–130, yet the gate lists them uncovered; re-measured with a greenlet-aware config they are covered. M2.4's gate numbers (585/638 backend, 91.7%) are therefore a **floor**, not the truth — and earlier milestones' were understated the same way | Low | Not fixed here (a project-wide measurement change, out of M2.4's scope). The fix is one line in `[tool.coverage.run]`; it can only raise the reported numbers |
+
 ### Implementation issues (found during M2.3, 2026-10-16)
 
 | # | Issue | Severity | Handling |
@@ -1554,6 +1606,33 @@ Once a decision is reviewed, record the date and the outcome here.
 
 All results below were produced by running the commands and reading the output.
 Nothing here is inferred.
+
+### Executed — M2.4 (2026-10-17)
+
+All against **real PostgreSQL 17.2 and real Redis** (Compose, WSL2 Docker 29.8) except where stated.
+
+| Command | Result |
+|---|---|
+| `uv run pytest -m "not integration"` | **777 passed** |
+| `uv run pytest -m integration` | **365 passed** (69 of them new this milestone: `test_services_api.py` 58 incl. the SQL-vs-Python parity test, `test_services_refresh.py` 8, and 3 dashboard) |
+| frontend `vitest run` | **211 passed** (axe on the list and detail pages) |
+| `uv run ruff check`, `ruff format --check`, `mypy` | clean |
+| frontend `eslint`, `prettier --check`, `tsc --noEmit`, `npm run build` | clean |
+| `./scripts/check-all.sh` | `scripts/check-all.sh` passes all 18 checks with nothing skipped (changed-line coverage 585/638 backend and 69/73 frontend, both above the 80% floor and understated for the backend — issue 80) |
+| `./scripts/smoke-test.sh` (WSL, from empty volumes) | **PASSED, exit 0, all 20 steps including 18b** |
+
+**Step 18b, as it ran:** registered `systemd-host:9100` and four units through the API; an unregistered unit (`systemd-journald.service`) was `404`; `dcp-fixture-app` read `ACTIVE` with `restart_count` 0, a `started_at`, and the four unsupplied fields `null`; the unit that fails at boot read `FAILED` and the unit the host does not have read `UNCOLLECTED`. `systemctl kill -s KILL` ⇒ `FAILED` and `systemctl stop` of another ⇒ `INACTIVE`. After the refresh task the failed-service view listed **exactly** the two failed units and the dashboard counted them. Stopping the system bus ⇒ `UNCOLLECTED` with `server_reachable: true`; starting it ⇒ `FAILED` again. Stopping the host ⇒ **all four units `UNKNOWN`** on the detail page and in the list, `server_reachable: false`, and **none** listed `INACTIVE` or `FAILED`.
+
+**Executed — `TS-02` itself (scratch runs, 2026-10-17, not kept in the repository as scripts):** the pinned exporter against a real systemd 255 showed the series shapes in [TECH_STACK.md §5.3](docs/TECH_STACK.md#53-systemd-metrics-integration), including the three that drove decisions: an unknown unit emits no series, a not-running unit reports start time `0`, and a failing bus leaves the exporter at HTTP 200 with `collector_success=0`. Step 18b is the standing version of that test.
+
+**Mutation checks (tests proven able to fail):** skipping the host check when the collector fails in `normalise`, accepting a start time of `0`, ignoring `UNREACHABLE` in the SQL `CASE`, and dropping the SQL `UNSUPPORTED` rule each made the suites fail (the last two by the parity test and the state-filter test); rendering `UNKNOWN` as `Inactive` in the frontend failed three tests. One mutation (accepting two active states) survived because the following check already rejects it — redundancy, not a gap.
+
+### Not executed in M2.4, and therefore not claimed
+
+- **A hosted CI run.** Nothing from M2.1 – M2.4 has been pushed and watched; the `compose` job's runtime on a two-core runner, and whether it can start the systemd fixture at all (issue 69), are unknown.
+- **The new pages in a real browser.** They are tested in jsdom with axe, and the backend behind them is tested end to end, but nobody has looked at `/services` against the live stack.
+- **A real (non-fixture) host.** `TS-02` was tested against a systemd in WSL and in a container. A production host installing `node_exporter` with `--collector.systemd` is documented, not exercised.
+- **The 18b step on a Docker host other than WSL2.**
 
 ### Executed — M2.3 (2026-10-16)
 
@@ -2590,7 +2669,7 @@ this table is unchanged: **not configured, not connected, not operational.**
 | Redis | **Running and in use** | redis 7.4.1-alpine via Compose on host port 6380. Now carries the session store, the single-use OIDC login state and the rate-limit counters (database `0`; the integration suite uses `1`). Verified by the live login flow |
 | Prometheus | **Running, scraped and read by the backend — the first real integration in this table** | prom/prometheus 3.0.1 via Compose (`observability` profile) on host port 9090, loopback only. `infra/prometheus/prometheus.yml` is a real config: 15 s scrape interval, two jobs (`prometheus` self-scrape, `node`), 30-day retention. The backend reads it through `app/metrics/client.py` at `DCP_PROMETHEUS_URL` (default `http://prometheus:9090`). Verified by smoke-test step 18, which asserts the exporter target `up` and executes **all ten templates** **through that client** — five with their values asserted in range, five asserted to be valid PromQL (see [§7](#7-tests-executed-and-their-actual-results) for why the split, and for what each returned). Still: **targets are static** — generating them from inventory is `OPEN-14`/M2.3 — and **no alert rules exist** (M3.3). This is a local stack, not a production Prometheus; nothing has been deployed anywhere |
 | Node Exporter | **Running and scraped** | prom/node-exporter 1.8.2 in the `observability` profile, host port 9100, loopback only. **Deliberately no host mounts**, so it reports the *container's* CPU, memory and filesystems rather than the Docker host's — mounting the host root into a container is a posture change a development convenience does not justify. It is a real exporter producing real `node_*` series, which is what the templates are verified against; host-level collection on registered servers is the agent's job (M6.1) |
-| systemd exporter | **Not configured** | Source selected 2026-10-17 (`TS-02`): `node_exporter`'s systemd collector, so there is no separate exporter. **Selected and tested in a scratch run, not configured in Compose** — nothing in the repository enables it yet (M2.4) |
+| systemd (unit state) | **Running and read — against a test fixture, not a production host** | `node_exporter`'s systemd collector (`TS-02`), so there is no separate exporter. Enabled only in the opt-in `fixtures` profile's `systemd-host` container (Debian + systemd + the pinned exporter), where step 18b of the smoke test reads it through Prometheus, the worker and the API. **Not enabled on the ordinary `node-exporter` service** (no system bus), and no production host runs it. The exporter-side unit allowlist is host configuration |
 | windows_exporter | **Not configured, and deliberately out of scope** | `OPEN-09` now has an implemented working default: **there are no Windows templates at all**, and a WINDOWS server resolves to the `UNSUPPORTED` data state. `windows_exporter` cannot run in a Linux container, so Windows PromQL would be strings never executed against anything — which looks like coverage and is not. The decision stays open |
 | Grafana Alloy | **Declared, never started** | Compose `logs` profile + placeholder `infra/alloy/config.alloy` that collects nothing (M3.1) |
 | Grafana Loki | **Declared, never started** | Compose service + minimal `infra/loki/loki-config.yaml`. No ingestion (M3.1). Still a placeholder *inside the same `observability` profile* as the now-real Prometheus, which is why `scripts/smoke-test.sh` starts `prometheus` and `node-exporter` by name rather than the whole profile |
@@ -2614,6 +2693,20 @@ as expected (see issue 23).
 ---
 
 ## 9. Next recommended task
+
+**After M2.4 (2026-10-17), in this order:**
+
+1. **Push, open the PR, and watch CI — now overdue by four milestones.** Two things only a hosted run can tell us: how long the `compose` job takes on a two-core runner (step 18 has grown twice, and 18b adds several minutes), and **whether the systemd fixture can start there at all** (issue 69). If it can, switch `SMOKE_SYSTEMD` to `require` in `.github/workflows/ci.yml`; if not, the job ends `PASSED, BUT INCOMPLETE` and the unit and integration suites are the only coverage of unit state in CI.
+2. **M2.5 — stale-data detection.** It builds on `agent_status` and now on `services.last_observed_at`, and should decide issue 67 (how long a status may be trusted) and issue 73 (a per-host rollup for `UNCOLLECTED`). The cache's three-interval staleness bound (`normalise.CACHE_STALE_AFTER_SECONDS`) is the pattern.
+3. **A registration/edit screen for services** (issue 72), unless the plan assigns it elsewhere.
+4. **`OPEN-28` before M3.3**, unchanged.
+5. **E2E path 3** (issue 60) now has three real things to assert: a registered server becomes `HEALTHY`, a stopped exporter becomes `UNREACHABLE`, and a failed unit is visible in the failed-service view.
+
+**What M2.5 should not re-litigate:** the node-exporter systemd collector (`TS-02`); `null` for the four unsupplied fields (`OPEN-29`); lists from the cache and detail from Prometheus; the host-first order in `normalise.py` and its SQL twin in `listing.py` (change one, the parity test fails until you change the other); and that an absent series is never a zero.
+
+**Traps this milestone paid for:** `re.match` with a `$` pattern accepts a trailing newline (use `fullmatch`); an integration test over a global list sees every earlier test's rows (scope to your own servers, as `own()` does); `isolated_fleet` in `test_monitoring.py` is how to keep a job that reads *every* monitored host from naming hosts the test never scripted; `roles.name` is a CHECK-constrained set, so a test cannot invent a role; editing `scripts/smoke-test.sh` while it is running corrupts the run (bash reads it incrementally); and a smoke run ends in `down -v`, so bring Postgres and Redis back before `check-all.sh`.
+
+**The M2.3 hand-over, kept because the first item is still true:**
 
 **After M2.3 (2026-10-16), in this order:**
 

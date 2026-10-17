@@ -497,6 +497,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M2.4 — systemd service monitoring
 
+**Status: complete (2026-10-17).** Evidence in [`PROGRESS.md`](../PROGRESS.md) §3 and §7. Two things the plan below says were done differently, each for a reason found by testing: **"stop the exporter ⇒ `UNCOLLECTED`" is not observable** with the collector inside `node_exporter` (a stopped exporter is an unreachable host, so `UNKNOWN`; `UNCOLLECTED` is the collector failing, produced by stopping the system bus — [TESTING.md §11](TESTING.md#11-docker-compose-smoke-tests)), and **`sub_state`, `load_state`, enabled state and main PID are `null`** because no exporter exposes them (`OPEN-29`). Endpoint 16.7 is routed and validated but answers `503 not_configured` until Loki (M3.1). Registration, edit and deregistration (16.3, 16.5, 16.6) exist on the backend with no screen yet (PROGRESS issue 72).
+
 **Tasks:** enable `node_exporter`'s systemd collector (`TS-02`) with a host-configured unit allowlist (DCP also filters on read to registered services), plus a systemd-running container as the integration fixture (the dev `node-exporter` has no system bus); state **normalisation** per [ARCHITECTURE.md §6.1](ARCHITECTURE.md#61-monitoring-read); endpoints 16.1–16.7 (reads); `services.last_observed_*` refresh job; dashboard failed-services panel; frontend service list and detail.
 
 **Acceptance (all PRD §4.5 criteria):** a failed service is identifiable without logging in; state is always shown with its collection timestamp; **an unreachable server does not render as all-services-inactive**; `UNSUPPORTED`, `UNCOLLECTED` and `FAILED` are distinct.

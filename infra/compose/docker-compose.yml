@@ -4,6 +4,8 @@
 #   core          frontend, backend, worker, beat, postgres, redis   (M1.1)
 #   observability prometheus, grafana, loki, node-exporter           (M2.1, M3.1)
 #   logs          alloy                                             (M3.1)
+#   fixtures      systemd-host: a host that runs systemd (M2.4). OPT-IN, and the
+#                 only service here that needs SYS_ADMIN — see its comment.
 #   mocks         mock-idp (M1.3), mock-jenkins (M5.1, not yet implemented)
 #
 # Run from the repository root:
@@ -416,6 +418,50 @@ services:
       - "127.0.0.1:3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
+
+  # --- fixtures profile (M2.4) ----------------------------------------------
+  # A host that runs systemd as PID 1, with node_exporter's systemd collector
+  # (TS-02). It exists because nothing in the ordinary stack can produce
+  # `node_systemd_*` series: the `node-exporter` service above has no system
+  # bus and no systemd, so "stop a unit and see FAILED" cannot be shown against
+  # it. Started and asserted by scripts/smoke-test.sh step 18b; to poke at it:
+  #   docker compose -f infra/compose/docker-compose.yml   #     --profile fixtures up -d --build systemd-host
+  #
+  # **THIS IS THE ONE SERVICE IN THIS FILE THAT BREAKS THE HARDENING RULES, and
+  # it is a test fixture, never a deployment artefact.** systemd needs a
+  # writable cgroup tree to start, and on cgroup v2 that took exactly this and
+  # nothing less (each of these was tried; the weaker combinations exit at boot):
+  #   * `cap_add: SYS_ADMIN`, `cgroup: host` and a read-write /sys/fs/cgroup —
+  #     which lets the container modify the host's cgroup tree. It is NOT
+  #     `privileged`: no devices, no other capabilities, default seccomp.
+  #   * no `no-new-privileges`: systemd's service sandboxing needs it off.
+  # It is in its own profile so a plain `up`, `--profile core` or
+  # `--profile observability` never starts it, publishes no port (Prometheus
+  # reaches it as systemd-host:9100 over the project network), and the smoke
+  # test's core-service checks (steps 9-11) do not include it. Where the host
+  # cannot run it, step 18b says so and records the step as NOT RUN rather than
+  # passing without it.
+  systemd-host:
+    profiles: [fixtures]
+    build:
+      context: ./systemd-host
+    image: dcp-systemd-host:local
+    cap_add: [SYS_ADMIN]
+    cgroup: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs: [/run, /tmp]
+    # systemd shuts down cleanly on SIGRTMIN+3 and ignores SIGTERM.
+    stop_signal: SIGRTMIN+3
+    healthcheck:
+      test: ["CMD-SHELL", "systemctl is-active --quiet node-exporter.service"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
 
   # --- mocks profile (M1.3 / M5.1) ------------------------------------------
   # DEVELOPMENT AIDS. Passing against these is not evidence that a real
