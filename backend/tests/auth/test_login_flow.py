@@ -206,8 +206,9 @@ def test_rate_limit_failure_is_closed_for_auth() -> None:
 def test_rate_limit_fails_closed_when_redis_is_unreachable(client: TestClient) -> None:
     """Observed, not asserted structurally.
 
-    The unit-test environment points DCP_REDIS_URL at an unreachable
-    placeholder, so this exercises the real failure path: the counter store is
+    The unit-test environment points DCP_REDIS_URL at a port nothing listens
+    on (`tests/conftest.UNREACHABLE`) — whatever else the machine or the CI job
+    is running — so this exercises the real failure path: the counter store is
     down and the authentication endpoint refuses rather than opening a
     brute-force window (docs/SECURITY.md §13, mandatory rule 6). Note the
     status is 429 rather than 503 — the client is told to retry, not that an
@@ -223,5 +224,5 @@ def test_rate_limit_fails_closed_when_redis_is_unreachable(client: TestClient) -
 def test_rate_limited_response_leaks_no_backend_detail(client: TestClient) -> None:
     response = client.get("/api/v1/auth/login", follow_redirects=False)
     body = response.text.lower()
-    for leak in ("redis", "localhost", "6379", "timeout", "connect"):
+    for leak in ("redis", "localhost", "127.0.0.1", "6379", "timeout", "connect"):
         assert leak not in body
