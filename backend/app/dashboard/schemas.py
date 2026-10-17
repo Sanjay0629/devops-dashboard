@@ -39,7 +39,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from app.inventory.schemas import CursorPage, DataSection, HealthState
+from app.inventory.schemas import CursorPage, DataSection
+from app.monitoring.health import HealthState
 
 #: Which milestone each absent source is waiting for. Named here rather than
 #: written at each call site so the dashboard cannot tell an operator two

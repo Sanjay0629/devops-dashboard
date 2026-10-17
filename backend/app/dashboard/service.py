@@ -307,7 +307,7 @@ async def summary(
     )
 
 
-def _is_stale(last_seen_at: datetime | None) -> bool | None:
+def _is_stale(last_seen_at: datetime | None, environment: str) -> bool | None:
     """``None`` when the host has never been seen — that is not staleness.
 
     The same rule as ``app/inventory/service._is_stale``; that one takes a
@@ -317,7 +317,8 @@ def _is_stale(last_seen_at: datetime | None) -> bool | None:
     if last_seen_at is None:
         return None
     age = datetime.now(UTC) - last_seen_at
-    return age.total_seconds() > get_settings().server_stale_after_seconds
+    stale_after = get_settings().health_thresholds.for_environment(environment).stale_after_seconds
+    return age.total_seconds() > stale_after
 
 
 def health_rows_query(
@@ -406,7 +407,7 @@ async def health_list(
                 status=server.status,
                 health_state=None,
                 last_seen_at=server.last_seen_at,
-                stale=_is_stale(server.last_seen_at),
+                stale=_is_stale(server.last_seen_at, server.environment),
                 failed_service_count=int(failed_count),
                 active_alert_count=None,
             )

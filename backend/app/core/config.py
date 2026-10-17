@@ -19,6 +19,7 @@ implementation is scaffolding. It lands with the first real provider (M4.x).
 from __future__ import annotations
 
 import functools
+import json
 import os
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -26,6 +27,8 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings.exceptions import SettingsError
+
+from app.monitoring.health import HealthThresholdTable
 
 Environment = Literal["local", "development", "staging", "production"]
 
@@ -152,12 +155,12 @@ class Settings(BaseSettings):
 
     # --- tunables ------------------------------------------------------------
     database_statement_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
-    #: How long after ``servers.last_seen_at`` a host counts as stale, for the
-    #: computed ``stale`` flag on server detail (docs/API_CONTRACTS.md §14.3).
-    #: One global value: AD-14 gives the per-environment thresholds and the
-    #: sweep that recomputes ``status`` to M2.5, and inventing them here would
-    #: pre-empt that milestone.
-    server_stale_after_seconds: int = Field(default=300, ge=30, le=86_400)
+    #: Host-health lines (AD-14): how old ``servers.last_seen_at`` may be before
+    #: a host is ``warning``, ``stale`` and ``unreachable``. JSON, with a
+    #: ``default`` and per-environment overrides; see
+    #: ``app/monitoring/health.HealthThresholdTable``. Not in ``system_settings``,
+    #: which accepts exactly one key.
+    health_thresholds: Annotated[HealthThresholdTable, NoDecode] = HealthThresholdTable()
     #: How long a dashboard aggregate may be served from Redis (§13).
     #: Short by design: the dashboard is a polled view, so the cache exists to
     #: absorb a refresh interval rather than to hold data. ``0`` disables
@@ -175,6 +178,23 @@ class Settings(BaseSettings):
         """Accept a comma-separated string, because that is what env vars carry."""
         if isinstance(value, str):
             return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
+
+    @field_validator("health_thresholds", mode="before")
+    @classmethod
+    def _parse_health_thresholds(cls, value: object) -> object:
+        """JSON from the environment; empty means the defaults.
+
+        ``NoDecode`` because Compose passes an unset variable as the empty
+        string, which pydantic-settings' own JSON decoding would reject.
+        """
+        if isinstance(value, str):
+            if not value.strip():
+                return {}
+            try:
+                return json.loads(value)
+            except ValueError:
+                raise ValueError("must be valid JSON") from None
         return value
 
     @field_validator("metrics_target_ports", mode="before")

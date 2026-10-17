@@ -60,13 +60,18 @@ x-backend-env: &backend-env
   DCP_METRICS_TARGET_PORTS: ${DCP_METRICS_TARGET_PORTS:-9100}
   DCP_AGENT_PROBE_INTERVAL_SECONDS: ${DCP_AGENT_PROBE_INTERVAL_SECONDS:-30}
   DCP_AGENT_UNREACHABLE_AFTER_SECONDS: ${DCP_AGENT_UNREACHABLE_AFTER_SECONDS:-60}
+  # M2.5. JSON; empty is the AD-14 defaults (the default is deliberately not
+  # `{}`: Compose ends `${VAR:-...}` at the first `}`, which would append a
+  # stray one to any real value). Passed through to every service because the
+  # API reads it for the stale flag and the worker's sweep for the status it
+  # writes — one half without the other would disagree.
+  DCP_HEALTH_THRESHOLDS: ${DCP_HEALTH_THRESHOLDS:-}
   #
   # NOTE: this block enumerates the settings the stack passes through, so a
   # setting that exists on the Settings model but is absent here keeps its
-  # application default no matter what .env says. Eleven such settings remain
+  # application default no matter what .env says. Ten such settings remain
   # today (PROGRESS issue 54) — every OIDC tunable, both read-rate-limit
-  # values, both SSRF lists and DCP_SERVER_STALE_AFTER_SECONDS. They all have
-  # correct defaults, so nothing is broken, but a developer who sets one in
+  # values and both SSRF lists. They all have correct defaults, so nothing is broken, but a developer who sets one in
   # .env would see no effect.
   DCP_CORS_ORIGINS: ${DCP_CORS_ORIGINS:-}
   # M1.3. Defaults point at the mock-idp service, which only exists in the

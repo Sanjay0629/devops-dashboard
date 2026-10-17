@@ -2711,7 +2711,21 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-### M2.5 plan — PROPOSED 2026-10-17, awaiting the owner's approval of D1–D4 (no M2.5 code exists yet)
+### M2.5 plan — D1–D4 APPROVED 2026-10-17 as written; commit 1 of 5 done, commits 2–5 not started
+
+**Commit 1 (pure classifier + `DCP_HEALTH_THRESHOLDS`) — done, committed.** `app/monitoring/health.py` holds `HealthThresholds`, `HealthThresholdTable` (a `default` plus the four `servers.environment` values, `extra="forbid"`, every merged resolution validated at startup) and `classify_health(thresholds, last_seen_at, reference) -> HostHealth(state, data_state)`. Tests: `backend/tests/monitoring/test_health_classifier.py` (40). Real results: unit **817 passed**; integration **365 passed** against real PostgreSQL/Redis; `ruff check`, `ruff format --check`, `mypy app` clean; `generate-api-types.sh` leaves `schema.ts` unchanged. A mutation check (`>` → `>=` on the stale line) fails `test_the_time_matrix[300-warning-ok]`. **Not run:** `check-all.sh` in full, the smoke test, the frontend suite (nothing there changed).
+
+Assumptions to review, none of them in the PRD:
+
+- **Boundaries are strict (`age > line`).** Exactly on a line is still the better state, matching the existing `stale` flag and `is_stale`, so no host crosses a line it was already inside. `metrics.thresholds.classify` uses `>=` (a value against a drawn line); the two are deliberately different and the module docstring says so.
+- **`data_state`:** `healthy`/`warning` → `ok`; `stale`/`unreachable` → `stale` (a number exists and `last_seen_at` dates it, API_CONTRACTS §4 rule 3); never seen or no reference time → `unknown` + `unavailable`.
+- **`reference=None` ⇒ `unknown`** (D2's "marker missing"); `last_seen_at` after the reference is clamped to age 0.
+- **`DCP_SERVER_STALE_AFTER_SECONDS` is removed**, so a deployment that still sets it now fails startup (the unknown-`DCP_*` guard). The server-detail `stale` flag and `health.stale_after_seconds` now read the server's environment `stale` line; behaviour at the defaults is unchanged. Compose now passes `DCP_HEALTH_THRESHOLDS` through and the unlisted-settings count in its comment drops from eleven to ten.
+- **Compose trap:** the default is empty, not `{}` — Compose ends `${VAR:-...}` at the first `}` and would append a stray one to any real value. The setting treats empty as `{}`.
+- `HealthState` now lives in `app/monitoring/health.py` (re-imported by the schemas), because `core.config` imports it and the schemas import `core.config`.
+
+**Next: commit 2 (sweep job + migration 0006).** Still to do from the plan: D1's `OPEN-30` entry and the DATABASE.md sentence, D2's Redis marker, the audit vocabulary entry.
+
 
 Read PRD §4.2, [ARCHITECTURE.md §4 point 5](docs/ARCHITECTURE.md#4-metrics-collection-architecture) (AD-14) and [IMPLEMENTATION_PLAN.md M2.5](docs/IMPLEMENTATION_PLAN.md#m25--stale-data-detection) first. Branch `phase-M2.5` was cut from `main` after PR #17; the next session starts there.
 

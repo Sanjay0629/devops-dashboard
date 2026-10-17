@@ -180,12 +180,17 @@ def server_summary(server: Server) -> ServerSummary:
     )
 
 
+def _stale_after(environment: str) -> int:
+    """This environment's ``stale`` line (AD-14, ``DCP_HEALTH_THRESHOLDS``)."""
+    return get_settings().health_thresholds.for_environment(environment).stale_after_seconds
+
+
 def _is_stale(server: Server) -> bool | None:
     """``None`` when the host has never been seen — that is not staleness."""
     if server.last_seen_at is None:
         return None
     age = datetime.now(UTC) - server.last_seen_at
-    return age.total_seconds() > get_settings().server_stale_after_seconds
+    return age.total_seconds() > _stale_after(server.environment)
 
 
 async def server_detail(db: AsyncSession, server: Server) -> ServerDetail:
@@ -217,7 +222,7 @@ async def server_detail(db: AsyncSession, server: Server) -> ServerDetail:
         health=HealthSection(
             state=None,
             data_state="not_configured",
-            stale_after_seconds=get_settings().server_stale_after_seconds,
+            stale_after_seconds=_stale_after(server.environment),
             unavailable_reason="Server health evaluation is not implemented yet (M2.5).",
         ),
         applications=[
