@@ -44,3 +44,6 @@ Thumbs.db
 
 # Local data volumes
 .data/
+
+# Smoke-test generated alert rules (scripts/smoke-test.sh step 18)
+infra/prometheus/rules-smoke/

@@ -333,6 +333,32 @@ jobs:
         # that moved cannot escape the check (M1.7).
         run: uv run python ../scripts/check_env_example.py
 
+  alert-rules:
+    name: Alert rules are current and pass promtool
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+        working-directory: backend
+      - name: The committed rule file is what the generator produces
+        # The rules are generated from DCP_UTILISATION_THRESHOLDS, DCP_HEALTH_THRESHOLDS and
+        # the metric catalogue (M3.3, OPEN-46), so a hand edit or a changed threshold that
+        # was not regenerated is a second copy of the numbers.
+        working-directory: backend
+        run: uv run python ../scripts/gen_alert_rules.py --check
+      - name: promtool checks and tests the rule file
+        # From the pinned image, so the rules are checked by the version that loads them:
+        # `check rules` for syntax, `test rules` against seeded series.
+        run: |
+          docker run --rm --entrypoint promtool -v "$PWD/infra/prometheus:/p:ro" \
+            prom/prometheus:v3.0.1 check rules /p/rules/dcp-alerts.yml
+          docker run --rm --entrypoint promtool -v "$PWD/infra/prometheus:/p:ro" \
+            prom/prometheus:v3.0.1 test rules /p/tests/dcp-alerts.test.yml
+
   e2e:
     name: End-to-end (Playwright)
     runs-on: ubuntu-latest

@@ -392,6 +392,11 @@ services:
       # Written by the worker, read-only here: Prometheus cannot alter the list
       # of what it is told to scrape.
       - prometheus-targets:/prometheus-targets:ro
+      # The alert rules (M3.3, OPEN-46): generated from the threshold settings by
+      # scripts/gen_alert_rules.py and committed. Overlaid on the directory above so
+      # the smoke test can mount a file generated with its own, faster thresholds
+      # (ALERT_RULES_DIR) without touching the committed one.
+      - ${ALERT_RULES_DIR:-../prometheus/rules}:/etc/prometheus/rules:ro
     healthcheck:
       # `-/healthy` rather than a query: this answers "is the server up",
       # which is what `--wait` should block on. Whether anything is being
@@ -405,6 +410,38 @@ services:
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 1g }
+
+  # M3.3 (OPEN-47). Groups and deduplicates what Prometheus fires and POSTs it to DCP's
+  # webhook; it has no external receivers (delivery is DCP's own, M3.4). UNPUBLISHED:
+  # nothing outside the project network needs Alertmanager, and its UI can silence alerts.
+  # The shared secret is written to a file from DCP_ALERT_WEBHOOK_SECRET at start-up, so
+  # there is one copy of it and Alertmanager's config file carries none.
+  alertmanager:
+    <<: *hardening
+    profiles: [observability]
+    image: prom/alertmanager:v0.27.0
+    environment:
+      DCP_ALERT_WEBHOOK_SECRET: ${DCP_ALERT_WEBHOOK_SECRET:-local-development-alert-webhook-secret-0123456789}
+    # The image's entrypoint is the binary, and a secret file has to exist before it
+    # reads its config; `exec` so the binary is PID 1 and receives the stop signal.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        umask 077
+        printf '%s' "$$DCP_ALERT_WEBHOOK_SECRET" > /tmp/dcp-webhook-secret
+        exec /bin/alertmanager --config.file=/etc/alertmanager/alertmanager.yml           --storage.path=/alertmanager --web.listen-address=:9093
+    volumes:
+      - ../alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9093/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
 
   node-exporter:
     <<: *hardening
@@ -686,6 +723,7 @@ volumes:
   redis-data:
   prometheus-data:
   prometheus-targets:
+  alertmanager-data:
   loki-data:
   grafana-data:
   sample-logs:

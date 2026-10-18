@@ -30,8 +30,20 @@ global:
   external_labels:
     environment: local
 
-# Alert rules land in M3.3 and are version-controlled here (AD-06).
-rule_files: []
+# Alert rules (M3.3, AD-06): file-managed in git, and *generated* -- from the metric
+# catalogue's PromQL and DCP_UTILISATION_THRESHOLDS / DCP_HEALTH_THRESHOLDS -- by
+# scripts/gen_alert_rules.py, so there is one copy of the numbers (OPEN-46). `check-all.sh`
+# fails when infra/prometheus/rules/dcp-alerts.yml is stale; `promtool test rules` runs it
+# against seeded series (infra/prometheus/tests/).
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# Where fired alerts go (M3.3, OPEN-47). Alertmanager groups, deduplicates and POSTs them to
+# DCP's webhook. The target is the Compose service name on the project network.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
 
 scrape_configs:
   # Prometheus scraping itself. Cheap, and it is what makes "is Prometheus
