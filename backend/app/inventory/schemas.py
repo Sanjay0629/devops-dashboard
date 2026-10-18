@@ -483,8 +483,9 @@ class ApplicationCreateRequest(BaseModel):
 
 
 class ApplicationUpdateRequest(BaseModel):
-    """§18.4. ``slug`` is immutable: it is the Loki ``application_id`` label
-    source, so changing it would orphan every log line already shipped."""
+    """§18.4. ``slug`` is immutable: it is how an application is addressed in a URL
+    and in configuration. (It is not the Loki ``application_id`` label, which is the
+    application's UUID -- ``OPEN-33``.)"""
 
     model_config = ConfigDict(extra="forbid")
 

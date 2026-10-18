@@ -106,7 +106,7 @@ function isPage(value: unknown): boolean {
   return isRecord(value) && Array.isArray(value.items) && isRecord(value.page);
 }
 
-async function resultOf<T>(
+export async function resultOf<T>(
   response: Response,
   isExpected: (value: unknown) => boolean,
 ): Promise<Result<T>> {

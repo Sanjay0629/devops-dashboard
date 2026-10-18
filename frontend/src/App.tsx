@@ -3,6 +3,7 @@ import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react
 import { BackendStatus } from '@/components/BackendStatus';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { SessionProvider } from '@/auth/SessionProvider';
+import { PERMISSIONS, canRender } from '@/auth/permissions';
 import { useIsReadOnly, useSession } from '@/auth/useSession';
 import { Login } from '@/pages/Login';
 import { Dashboard } from '@/pages/dashboard/Dashboard';
@@ -10,6 +11,7 @@ import { ApplicationDetail } from '@/pages/applications/ApplicationDetail';
 import { ApplicationList } from '@/pages/applications/ApplicationList';
 import { ServerDetail } from '@/pages/servers/ServerDetail';
 import { ServerEditForm, ServerForm } from '@/pages/servers/ServerForm';
+import { LogSearch } from '@/pages/logs/LogSearch';
 import { Compare } from '@/pages/metrics/Compare';
 import { ServerList } from '@/pages/servers/ServerList';
 import { ServerMetrics } from '@/pages/servers/ServerMetrics';
@@ -38,11 +40,14 @@ import { ServiceList } from '@/pages/services/ServiceList';
 
 function Navigation(): React.JSX.Element {
   const { pathname } = useLocation();
+  const { state } = useSession();
   const links = [
     { to: '/dashboard', label: 'Dashboard' },
     { to: '/servers', label: 'Servers' },
     { to: '/services', label: 'Services' },
     { to: '/compare', label: 'Compare' },
+    // Advisory, like every nav decision: the backend answers 403 on its own account.
+    ...(canRender(state, PERMISSIONS.logsReadApplication) ? [{ to: '/logs', label: 'Logs' }] : []),
     { to: '/applications', label: 'Applications' },
   ];
   return (
@@ -205,6 +210,7 @@ function Shell(): React.JSX.Element {
         <Route path="/servers/:serverId/services/:serviceName" element={<ServiceDetailPage />} />
         <Route path="/services" element={<ServiceList />} />
         <Route path="/compare" element={<Compare />} />
+        <Route path="/logs" element={<LogSearch />} />
         <Route path="/applications" element={<ApplicationList />} />
         <Route path="/applications/:applicationId" element={<ApplicationDetail />} />
         <Route

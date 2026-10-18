@@ -13,8 +13,10 @@
  * activation, not the last change of state.
  *
  * `null` is unknown and is never rendered as `0`, `false` or an empty string.
- * Log tail (§16.7) is not on this page: it answers `503 not_configured` until
- * Loki exists (M3.1), and a panel that always shows an error is noise.
+ * Logs (§16.7, §19.1) are one link away rather than a panel here: the link opens the
+ * log search pre-filled with this server and unit, through the router's history
+ * state and not the URL (`OPEN-20`, `OPEN-38`), and the search says what it found
+ * or why it could not.
  */
 
 import { Link, useParams } from 'react-router-dom';
@@ -79,6 +81,19 @@ export function ServiceDetailPage(): React.JSX.Element {
         </div>
         <ServiceStatus item={service} />
       </header>
+
+      <p className="mb-4 text-sm">
+        <Link
+          to="/logs"
+          state={{
+            servers: [{ id: service.server_id, label: service.server_display_name }],
+            service: service.service_name,
+          }}
+          className="underline"
+        >
+          View logs for {service.service_name}
+        </Link>
+      </p>
 
       <dl className="text-sm">
         <Row label="Server">
