@@ -1,0 +1,212 @@
+# `promtool test rules` for the generated rule file (M3.3, docs/TESTING.md §11).
+#
+# Run (needs Docker; the prometheus image carries promtool):
+#   MSYS_NO_PATHCONV=1 docker run --rm --entrypoint promtool \
+#     -v "$PWD/infra/prometheus:/p:ro" prom/prometheus:v3.0.1 test rules /p/tests/dcp-alerts.test.yml
+#
+# These run the REAL rule file against seeded series with the shipped default
+# thresholds. They prove the rules say what DCP thinks they say -- including that a
+# warning and a critical are mutually exclusive, and that one environment's series
+# cannot fire another environment's rules. They do not prove Alertmanager delivers
+# anything: smoke step 18g does.
+rule_files:
+  - ../rules/dcp-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # --- server stopped reporting: fires after production's stale line (300 s) ------
+  - interval: 1m
+    input_series:
+      - series: 'up{job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '1 1 0x14'
+      - series: 'up{job="node",environment="production",instance="b:9100",server_id="s2"}'
+        values: '1x16'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HostNotReporting
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: HostNotReporting
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              condition: host_not_reporting
+              environment: production
+              job: node
+              instance: "a:9100"
+              server_id: s1
+            exp_annotations:
+              summary: "Host a:9100 has stopped reporting"
+
+  # --- CPU: 85 % busy is a warning and NOT a critical -----------------------------
+  - interval: 1m
+    input_series:
+      # idle counter rising 9 s per 60 s => 0.15 idle => 85 % busy
+      - series: 'node_cpu_seconds_total{mode="idle",cpu="0",job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '0+9x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: HostCpuWarning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              condition: cpu
+              environment: production
+              job: node
+              instance: "a:9100"
+              server_id: s1
+            exp_annotations:
+              summary: "CPU on a:9100 is at 85.0% (warning at 80%)"
+      - eval_time: 25m
+        alertname: HostCpuCritical
+        exp_alerts: []
+
+  # --- CPU: 95 % busy is a critical and NOT a warning (mutually exclusive) --------
+  - interval: 1m
+    input_series:
+      - series: 'node_cpu_seconds_total{mode="idle",cpu="0",job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '0+3x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: HostCpuCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              condition: cpu
+              environment: production
+              job: node
+              instance: "a:9100"
+              server_id: s1
+            exp_annotations:
+              summary: "CPU on a:9100 is at 95.0% (critical at 90%)"
+      - eval_time: 25m
+        alertname: HostCpuWarning
+        exp_alerts: []
+
+  # --- CPU: just under the line does not fire; a staging host never fires
+  #     production's rule, and fires staging's own ---------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'node_cpu_seconds_total{mode="idle",cpu="0",job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '0+13x40'   # 78.3 % busy
+      - series: 'node_cpu_seconds_total{mode="idle",cpu="0",job="node",environment="staging",instance="c:9100",server_id="s3"}'
+        values: '0+9x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: HostCpuWarning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              condition: cpu
+              environment: staging
+              job: node
+              instance: "c:9100"
+              server_id: s3
+            exp_annotations:
+              summary: "CPU on c:9100 is at 85.0% (warning at 80%)"
+
+  # --- memory: 90 % used is a warning; 97 % is a critical -------------------------
+  - interval: 1m
+    input_series:
+      - series: 'node_memory_MemTotal_bytes{job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '100x20'
+      - series: 'node_memory_MemAvailable_bytes{job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '10x20'
+      - series: 'node_memory_MemTotal_bytes{job="node",environment="production",instance="b:9100",server_id="s2"}'
+        values: '100x20'
+      - series: 'node_memory_MemAvailable_bytes{job="node",environment="production",instance="b:9100",server_id="s2"}'
+        values: '3x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HostMemoryWarning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              condition: memory
+              environment: production
+              job: node
+              instance: "a:9100"
+              server_id: s1
+            exp_annotations:
+              summary: "Memory on a:9100 is at 90.0% (warning at 85%)"
+      - eval_time: 10m
+        alertname: HostMemoryCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              condition: memory
+              environment: production
+              job: node
+              instance: "b:9100"
+              server_id: s2
+            exp_annotations:
+              summary: "Memory on b:9100 is at 97.0% (critical at 95%)"
+
+  # --- disk: the fullest real filesystem counts; a full tmpfs does not ------------
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_size_bytes{fstype="ext4",mountpoint="/",device="/dev/a",job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '100x20'
+      - series: 'node_filesystem_avail_bytes{fstype="ext4",mountpoint="/",device="/dev/a",job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '4x20'
+      - series: 'node_filesystem_size_bytes{fstype="tmpfs",mountpoint="/run",device="tmpfs",job="node",environment="production",instance="b:9100",server_id="s2"}'
+        values: '100x20'
+      - series: 'node_filesystem_avail_bytes{fstype="tmpfs",mountpoint="/run",device="tmpfs",job="node",environment="production",instance="b:9100",server_id="s2"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HostDiskCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              condition: disk
+              environment: production
+              job: node
+              instance: "a:9100"
+              server_id: s1
+            exp_annotations:
+              summary: "Disk on a:9100 is at 96.0% (critical at 95%)"
+      - eval_time: 10m
+        alertname: HostDiskWarning
+        exp_alerts: []
+
+  # --- failed systemd unit: services only, one alert per unit --------------------
+  - interval: 1m
+    input_series:
+      - series: 'node_systemd_unit_state{name="nginx.service",state="failed",type="service",job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '1x10'
+      - series: 'node_systemd_unit_state{name="backup.timer",state="failed",type="timer",job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '1x10'
+      - series: 'node_systemd_unit_state{name="sshd.service",state="failed",type="service",job="node",environment="production",instance="a:9100",server_id="s1"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SystemdUnitFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              condition: unit_failed
+              environment: production
+              job: node
+              instance: "a:9100"
+              server_id: s1
+              name: nginx.service
+              state: failed
+              type: service
+            exp_annotations:
+              summary: "Unit nginx.service on a:9100 has failed"
+
+  # --- the watchdog always fires --------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'up{job="prometheus"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DcpWatchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+            exp_annotations:
+              summary: "Always firing: proves rule evaluation and delivery work"

@@ -19,6 +19,7 @@ implementation is scaffolding. It lands with the first real provider (M4.x).
 from __future__ import annotations
 
 import functools
+import ipaddress
 import json
 import os
 from typing import Annotated, Literal
@@ -29,6 +30,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings.exceptions import SettingsError
 
 from app.monitoring.health import HealthThresholdTable
+from app.monitoring.utilisation import UtilisationThresholdTable
 
 Environment = Literal["local", "development", "staging", "production"]
 
@@ -138,6 +140,20 @@ class Settings(BaseSettings):
     #: because an empty answer for a range Loki no longer holds reads as "no logs".
     log_retention_days: int = Field(default=14, ge=1, le=3_650)
 
+    # --- Alertmanager and the alert webhook (M3.3, OPEN-43, OPEN-47) ----------
+    #: Base URL of Alertmanager, used only for the §26.1 readiness probe. Optional:
+    #: unset, the integration row says ``not_configured``. Deployment configuration
+    #: like ``prometheus_url`` and for the same reasons not SSRF-checked.
+    alertmanager_url: str | None = None
+    #: Shared secret Alertmanager presents as ``Authorization: Bearer`` on
+    #: ``POST /webhooks/alerts`` (SECURITY.md §21). **Unset means the endpoint
+    #: answers ``503 not_configured``** -- never open. At least 32 characters.
+    alert_webhook_secret: SecretStr | None = None
+    #: Peer addresses allowed to call the webhook. **Empty denies everything**
+    #: (fail closed). The TCP peer is the only thing consulted: a forwarded-for
+    #: header is attacker-controlled and is never read.
+    alert_webhook_allowed_cidrs: Annotated[tuple[str, ...], NoDecode] = ()
+
     # --- Target discovery and agent health (M2.3, OPEN-14) -------------------
     #: Where DCP writes the Prometheus ``file_sd`` target file. Unset means
     #: discovery is **off**: nothing is written and the regeneration task says
@@ -175,6 +191,15 @@ class Settings(BaseSettings):
     #: ``app/monitoring/health.HealthThresholdTable``. Not in ``system_settings``,
     #: which accepts exactly one key.
     health_thresholds: Annotated[HealthThresholdTable, NoDecode] = HealthThresholdTable()
+    #: CPU / memory / disk warning and critical lines (``OPEN-28``, ``OPEN-46``):
+    #: JSON, a ``default`` and per-environment overrides over the metric
+    #: catalogue's shipped values. The Prometheus rule file is generated from
+    #: this and ``health_thresholds``; ``check-all.sh`` fails if it is stale.
+    #: A factory, not an instance: building the table reads the metric catalogue,
+    #: which imports this module, so it cannot run while this class is defined.
+    utilisation_thresholds: Annotated[UtilisationThresholdTable, NoDecode] = Field(
+        default_factory=UtilisationThresholdTable
+    )
     #: How long a dashboard aggregate may be served from Redis (§13).
     #: Short by design: the dashboard is a polled view, so the cache exists to
     #: absorb a refresh interval rather than to hold data. ``0`` disables
@@ -186,7 +211,13 @@ class Settings(BaseSettings):
     # and fails before the validator below ever runs.
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
 
-    @field_validator("cors_origins", "ssrf_host_allowlist", "ssrf_insecure_hosts", mode="before")
+    @field_validator(
+        "cors_origins",
+        "ssrf_host_allowlist",
+        "ssrf_insecure_hosts",
+        "alert_webhook_allowed_cidrs",
+        mode="before",
+    )
     @classmethod
     def _split_origins(cls, value: object) -> object:
         """Accept a comma-separated string, because that is what env vars carry."""
@@ -194,9 +225,9 @@ class Settings(BaseSettings):
             return tuple(part.strip() for part in value.split(",") if part.strip())
         return value
 
-    @field_validator("health_thresholds", mode="before")
+    @field_validator("health_thresholds", "utilisation_thresholds", mode="before")
     @classmethod
-    def _parse_health_thresholds(cls, value: object) -> object:
+    def _parse_threshold_tables(cls, value: object) -> object:
         """JSON from the environment; empty means the defaults.
 
         ``NoDecode`` because Compose passes an unset variable as the empty
@@ -209,6 +240,26 @@ class Settings(BaseSettings):
                 return json.loads(value)
             except ValueError:
                 raise ValueError("must be valid JSON") from None
+        return value
+
+    @field_validator("alert_webhook_allowed_cidrs")
+    @classmethod
+    def _check_cidrs(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Each entry a network; ``0.0.0.0/0`` and ``::/0`` are not an allowlist."""
+        for entry in value:
+            try:
+                network = ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                raise ValueError("every entry must be an IP network such as 10.0.0.0/8") from None
+            if network.prefixlen == 0:
+                raise ValueError("an all-addresses network is not a source restriction")
+        return value
+
+    @field_validator("alert_webhook_secret")
+    @classmethod
+    def _check_webhook_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and len(value.get_secret_value()) < 32:
+            raise ValueError("must be at least 32 characters")
         return value
 
     @field_validator("metrics_target_ports", mode="before")
@@ -231,7 +282,9 @@ class Settings(BaseSettings):
             return tuple(part for part in value.replace(",", " ").split() if part)
         return value
 
-    @field_validator("oidc_issuer", "oidc_redirect_url", "prometheus_url", "loki_url")
+    @field_validator(
+        "oidc_issuer", "oidc_redirect_url", "prometheus_url", "loki_url", "alertmanager_url"
+    )
     @classmethod
     def _check_absolute_http_url(cls, value: str | None) -> str | None:
         """Reject anything that is not a plain absolute http(s) URL.
@@ -299,7 +352,13 @@ class Settings(BaseSettings):
             # field comment), so the remaining honest rule is: https outside
             # 'local'. An internal Prometheus without TLS has to be fronted
             # by something that has it.
-            for name in ("oidc_issuer", "oidc_redirect_url", "prometheus_url", "loki_url"):
+            for name in (
+                "oidc_issuer",
+                "oidc_redirect_url",
+                "prometheus_url",
+                "loki_url",
+                "alertmanager_url",
+            ):
                 url = getattr(self, name)
                 if url is not None and not url.startswith("https://"):
                     raise ValueError(f"{name} must use https outside the 'local' environment")
@@ -335,6 +394,10 @@ class Settings(BaseSettings):
     @property
     def loki_configured(self) -> bool:
         return self.loki_url is not None
+
+    @property
+    def alertmanager_configured(self) -> bool:
+        return self.alertmanager_url is not None
 
     @property
     def cookie_secure(self) -> bool:

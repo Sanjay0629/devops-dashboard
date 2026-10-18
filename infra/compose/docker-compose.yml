@@ -73,6 +73,16 @@ x-backend-env: &backend-env
   # API reads it for the stale flag and the worker's sweep for the status it
   # writes — one half without the other would disagree.
   DCP_HEALTH_THRESHOLDS: ${DCP_HEALTH_THRESHOLDS:-}
+  # M3.3 (OPEN-46). JSON, empty is the catalogue defaults; same trap as above.
+  # Read by the metrics API (so a card and an alert use one set of numbers) and
+  # by scripts/gen_alert_rules.py.
+  DCP_UTILISATION_THRESHOLDS: ${DCP_UTILISATION_THRESHOLDS:-}
+  # M3.3 (OPEN-43, OPEN-47). The secret's default is a local-development
+  # placeholder, the precedent being DCP_OIDC_CLIENT_SECRET above; Alertmanager
+  # reads the same variable, so the two ends cannot disagree.
+  DCP_ALERTMANAGER_URL: ${DCP_ALERTMANAGER_URL:-http://alertmanager:9093}
+  DCP_ALERT_WEBHOOK_SECRET: ${DCP_ALERT_WEBHOOK_SECRET:-local-development-alert-webhook-secret-0123456789}
+  DCP_ALERT_WEBHOOK_ALLOWED_CIDRS: ${DCP_ALERT_WEBHOOK_ALLOWED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
   #
   # NOTE: this block enumerates the settings the stack passes through, so a
   # setting that exists on the Settings model but is absent here keeps its
