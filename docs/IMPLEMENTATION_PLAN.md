@@ -573,15 +573,25 @@ backend/tests/dashboard/test_summary.py
 
 ## M3.3 — Alert rules and lifecycle
 
-**Tasks:** Prometheus rule files for the PRD §4.8 conditions (server stopped reporting, CPU/memory/disk thresholds, failed unit, failed health check, failed deployment, operation timeout); Alertmanager routing; the webhook receiver with shared-secret auth, schema validation and source restriction; `alert_events` upsert with `dedup_key`; endpoints 20.1–20.5; frontend alert list, detail, acknowledge and assign.
+**Status: complete locally (2026-10-18); not pushed, not on hosted CI.** Decisions `OPEN-39` – `OPEN-47` closed before code (see [ARCHITECTURE.md §19](ARCHITECTURE.md#19-open-decisions)); evidence in [`PROGRESS.md`](../PROGRESS.md) §9. Five of PRD §4.8's eight conditions are produced; failed application health check, failed deployment and operation timeout have **no producer yet** and arrive with M5, M5 and M4 (`OPEN-40`) — the alert list says so rather than implying they are watched.
 
-**Acceptance (PRD §4.8 criteria):** a configured condition produces an alert event; repeats are grouped/deduplicated; resolved alerts retain history; **acknowledgement does not mark the underlying problem resolved**.
+**Tasks**
 
-**Tests:** *Unit* — `dedup_key` computation; status transition legality; label→target resolution including the unmatched case. *Integration* — post webhook payloads (new, repeat, resolved, malformed, unmatched labels, batch with one bad entry); acknowledge and assert `resolved_at` stays null; rule evaluation against seeded series using `promtool`.
+- [x] Prometheus rule file for server stopped reporting, CPU, memory, disk and failed unit: **generated** by `scripts/gen_alert_rules.py` from the metric catalogue's PromQL and `DCP_UTILISATION_THRESHOLDS` / `DCP_HEALTH_THRESHOLDS` (`OPEN-46`), committed at `infra/prometheus/rules/dcp-alerts.yml`, kept current by `check-all.sh`, and run against seeded series by `promtool test rules`.
+- [x] Alertmanager in Compose (`observability` profile, unpublished), routing to the webhook only; the always-firing watchdog proves the pipeline alive (`OPEN-47`).
+- [x] The webhook receiver (§20.5): shared secret in constant time, peer-address allowlist, rate limit, strict schema with length caps, per-alert rejection inside a `202`, one transaction per alert, refusal counters, audit as `system:alertmanager`.
+- [x] `alert_events` (monthly partitions) and `alert_open_keys` — the one-open-row-per-`dedup_key` invariant as a database constraint, because the documented partitioned unique index could not enforce it (`OPEN-42`); `DCP_SYSTEM` source; the `EXPIRED` task; the partition-runway monitor wired to alerting.
+- [x] Endpoints 20.1 – 20.5, scoped in SQL through the server an alert is about.
+- [x] Frontend alert list, detail, acknowledge, "assign to me" / unassign; the dashboard's `active_alerts`, per-row counts and the server page's `open_alerts` read real rows.
+- [ ] *Deferred, with reasons:* an assignee picker (needs a user directory an operator may not read, `OPEN-44`); alerts on the server and service pages (the API's `target_id` filter and `links` are there); the 180-day partition drop, which is not built for `audit_events` either (PROGRESS issue 107).
 
-**Security:** shared secret verified in constant time; source restriction and rate limiting enforced; **a crafted alert payload cannot cause any operation to execute** — an explicit adversarial test ([SECURITY.md §21](SECURITY.md#21-alert-webhook-ingress)); label and annotation lengths capped.
+**Acceptance (PRD §4.8 criteria):** a configured condition produces an alert event — **met against a real Prometheus and Alertmanager** (smoke 18g); repeats are grouped and deduplicated — met; resolved alerts retain history — met; **acknowledgement does not mark the underlying problem resolved** — met, and enforced by a schema CHECK as well as the code.
 
-**Risks:** an alert storm floods rows or notifications. Mitigation: dedup plus rate limit with explicit, logged overflow behaviour.
+**Tests:** *Unit* — `dedup_key` stability and separator-injection; the status-transition table; label→target parsing; the payload as untrusted input; the generated rules. *Integration* — new, repeat, resolved, malformed, unmatched, a batch with one bad entry, concurrent ingestion (a deterministic race test and a load test), out-of-order resolved/firing, every refusal counted, the scope matrix, paging with ties, every illegal transition, rule evaluation with `promtool`. *Frontend* — every state of both pages, markup in a summary, every error. *Smoke 18g* — the real chain, a stop, an alert, a recovery and an Alertmanager outage.
+
+**Security:** shared secret, source restriction and rate limiting enforced; **an explicit adversarial test shows a crafted alert cannot change a server, a service, a grant or the audit trail's action types, and triggers no outbound call** ([SECURITY.md §21](SECURITY.md#21-alert-webhook-ingress)); label and annotation lengths capped.
+
+**Risks:** an alert storm floods rows or notifications — dedup plus a rate limit and a per-request cap, with the overflow returned per alert, counted and logged. A `for:` duration is a working default, not a measurement.
 
 ---
 
