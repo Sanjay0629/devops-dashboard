@@ -912,6 +912,10 @@ config = get("/config")
 assert "retention_enabled: true" in config, "compactor retention is off"
 assert "retention_period: 2w" in config, "retention is not 14 days (OPEN-08)"
 assert "reporting_enabled: false" in config, "Loki would send usage statistics"
+# M3.2: the log API reads up to 5000 lines for a continuation page and a tie-group
+# completion (backend/app/logs/service.py LOKI_MAX_ENTRIES); a lower ceiling makes
+# every 1000-line page a 400 from Loki.
+assert "max_entries_limit_per_query: 5000" in config, "Loki's read ceiling is below what the API reads"
 print("  retention is 14 d with the compactor on; usage reporting is off")
 PYTHON
 
@@ -989,6 +993,39 @@ else
   printf '*** covered by 18d; the journal source is configured but NOT observed this run.\n\n'
 fi
 
+log "18f. The log search API against a REAL Loki and the real pipeline (M3.2)"
+# 18d left loki, sample-logs and alloy running. The API is exercised as the SPA
+# calls it (session cookie + CSRF), from inside the project network, by
+# scripts/smoke_logs_api.py -- see its docstring for what each part proves and why
+# every "absent" there is paired with a "present".
+"${COMPOSE[@]}" exec -T backend python -m app.inventory.seed --sample-log-host \
+  || fail "could not register the sample log host (issue 94)"
+# 18b-18e together outlast the 30-minute idle timeout, so the session from step 13
+# may be gone. A 401 here would be about the harness and not the API: log in again.
+authorize_url="$(hop "$FRONTEND/api/v1/auth/login?next=/dashboard")"
+callback_url="$(hop "${authorize_url}&user=admin")"
+hop "$callback_url" >/dev/null
+[[ "$(api /auth/session)" == *"$ADMIN_EMAIL"* ]] || fail "could not log in again for step 18f"
+session_cookie="$(grep -E '[[:space:]]dcp_session[[:space:]]' "$JAR" | awk '{print $NF}')"
+csrf="$(grep dcp_csrf "$JAR" | awk '{print $NF}')"
+[[ -n "$session_cookie" && -n "$csrf" ]] || fail "no session or CSRF cookie in the jar"
+smoke_api() {
+  "${LOGS[@]}" exec -T -e "SMOKE_COOKIE=dcp_session=$session_cookie; dcp_csrf=$csrf" \
+    -e "SMOKE_CSRF=$csrf" -e "SMOKE_ORIGIN=$FRONTEND" \
+    sample-logs python - "$1" < scripts/smoke_logs_api.py
+}
+smoke_api search || { "${LOGS[@]}" logs --tail=40 alloy; "${COMPOSE[@]}" logs --tail=40 backend; fail "the log search assertions failed"; }
+
+# An outage must be SAID. Stopping Loki is the only way to see the API's answer to
+# a real one; 503 with no entries is the assertion, an empty 200 is the failure.
+"${LOGS[@]}" stop loki >/dev/null
+smoke_api outage || { "${LOGS[@]}" start loki >/dev/null; fail "an unavailable Loki was not reported as unavailable"; }
+"${LOGS[@]}" start loki >/dev/null
+until [ "$(docker inspect --format '{{.State.Health.Status}}' "$("${LOGS[@]}" ps -q loki)")" = "healthy" ]; do
+  sleep 3
+done
+smoke_api recovered || fail "the log API did not recover after Loki came back"
+
 log "19. A database outage degrades honestly, with no zeros (§11.10)"
 "${COMPOSE[@]}" stop postgres >/dev/null
 # Poll rather than sleep: the readiness probe has its own per-check deadline,
@@ -1040,4 +1077,5 @@ fi
 printf 'Covered docs/TESTING.md §11 steps 1-12. Step 8: the Prometheus half is\n'
 printf '  asserted (step 18), and so is Loki accepting a push and returning it\n'
 printf '  (step 18c). Alloy shipping the sample logs through to Loki is step 18d,\n'
-printf '  and a real systemd journal is step 18e.\n'
+printf '  a real systemd journal is step 18e, and the log search API against that real\n'
+printf '  pipeline and Loki (including an outage) is step 18f.\n'
