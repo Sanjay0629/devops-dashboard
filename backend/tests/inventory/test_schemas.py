@@ -153,7 +153,7 @@ class TestApplicationRequests:
         assert ApplicationCreateRequest.model_validate({"name": "App", "slug": "checkout-api"})
 
     def test_slug_is_immutable(self) -> None:
-        """It is the Loki ``application_id`` label source; renaming orphans logs."""
+        """It addresses an application in URLs and configuration (it is not the Loki label)."""
         with pytest.raises(ValidationError) as caught:
             ApplicationUpdateRequest.model_validate({"slug": "renamed"})
         assert ("slug",) in _locations(caught.value)

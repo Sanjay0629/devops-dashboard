@@ -754,8 +754,12 @@ async def test_a_malformed_name_in_the_path_is_422_before_any_lookup(fleet: Flee
 # --- §16.7 logs ---------------------------------------------------------------
 
 
-async def test_logs_are_not_configured_until_loki_exists_and_say_so(fleet: Fleet) -> None:
-    """Not an empty page: that would read as "no errors in the last hour"."""
+async def test_logs_are_not_configured_without_a_loki_url_and_say_so(fleet: Fleet) -> None:
+    """Not an empty page: that would read as "no errors in the last hour".
+
+    The answered cases are in ``test_logs_api.py``; this file keeps the checks that
+    run before Loki is asked (permission, scope, registration, parameters).
+    """
     await add(fleet, "web", "nginx.service")
 
     response = await call(fleet.client, "GET", fleet.url("web", "nginx.service", "/logs"))
@@ -772,7 +776,7 @@ async def test_logs_need_the_system_log_permission_which_a_viewer_lacks(fleet: F
     response = await call(fleet.client, "GET", fleet.url("web", "nginx.service", "/logs"))
 
     assert response.status_code == 403
-    assert "logs:query" in denials(fleet.engine, fleet.caller)
+    assert "logs:read:system" in denials(fleet.engine, fleet.caller)
 
 
 async def test_logs_for_an_unregistered_unit_or_unseen_server_are_404(fleet: Fleet) -> None:

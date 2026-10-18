@@ -260,7 +260,7 @@ Logical applications, independent of servers (PRD §4.9).
 |---|---|---|---|
 | `id` | `uuid` | PK | |
 | `name` | `text` | NOT NULL | |
-| `slug` | `text` | NOT NULL | URL-safe identifier; also the Loki `application_id` label source |
+| `slug` | `text` | NOT NULL | URL-safe identifier. **Not** the Loki label: the `application_id` label is the application's UUID (`OPEN-33`, M3.2), which is what Alloy validates and what §19.1 filters on |
 | `description` | `text` | NULL | |
 | `owner_team` | `text` | NULL | |
 | `repository_reference` | `text` | NULL | A URL or `org/repo`, validated against the host allowlist if fetched |

@@ -188,3 +188,70 @@ def test_the_prometheus_timeout_is_bounded(monkeypatch: pytest.MonkeyPatch) -> N
         monkeypatch.setenv("DCP_PROMETHEUS_TIMEOUT_SECONDS", bad)
         with pytest.raises(ConfigurationError):
             load_settings()
+
+
+# --- Loki (M3.2) -----------------------------------------------------------------
+
+
+def test_loki_is_optional_and_unset_means_unconfigured(settings: Settings) -> None:
+    """``loki_configured`` is what every log read branches on (503 not_configured)."""
+    assert settings.loki_url is None
+    assert settings.loki_configured is False
+    assert (settings.loki_timeout_seconds, settings.log_retention_days) == (15.0, 14)
+
+
+def test_loki_url_is_normalised_and_reported_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DCP_LOKI_URL", "http://loki:3100/")
+    loaded = load_settings()
+    assert loaded.loki_url == "http://loki:3100"
+    assert loaded.loki_configured is True
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "loki:3100",
+        "ftp://loki:3100",
+        "http://user:password@loki:3100",
+        "http://loki:3100#fragment",
+        "http://loki:3100\nX-Injected: 1",
+        "http://",
+    ],
+)
+def test_the_loki_url_is_validated_at_load_time(monkeypatch: pytest.MonkeyPatch, bad: str) -> None:
+    monkeypatch.setenv("DCP_LOKI_URL", bad)
+    with pytest.raises(ConfigurationError) as caught:
+        load_settings()
+    assert "DCP_LOKI_URL" in str(caught.value)
+    assert "password" not in str(caught.value)
+
+
+def test_loki_must_use_https_outside_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DCP_ENVIRONMENT", "production")
+    monkeypatch.setenv("DCP_DEMO_MODE", "false")
+    monkeypatch.setenv("DCP_LOKI_URL", "http://loki:3100")
+    with pytest.raises(ConfigurationError) as caught:
+        load_settings()
+    assert "loki_url must use https" in str(caught.value)
+
+    monkeypatch.setenv("DCP_LOKI_URL", "https://loki.example.invalid")
+    assert load_settings().loki_url == "https://loki.example.invalid"
+
+
+@pytest.mark.parametrize(
+    ("name", "bad"),
+    [
+        ("DCP_LOKI_TIMEOUT_SECONDS", "0"),
+        ("DCP_LOKI_TIMEOUT_SECONDS", "-1"),
+        ("DCP_LOKI_TIMEOUT_SECONDS", "61"),
+        ("DCP_LOG_RETENTION_DAYS", "0"),
+        ("DCP_LOG_RETENTION_DAYS", "-1"),
+        ("DCP_LOG_RETENTION_DAYS", "3651"),
+    ],
+)
+def test_the_loki_deadline_and_retention_are_bounded(
+    monkeypatch: pytest.MonkeyPatch, name: str, bad: str
+) -> None:
+    monkeypatch.setenv(name, bad)
+    with pytest.raises(ConfigurationError):
+        load_settings()

@@ -22,6 +22,7 @@ from typing import Final
 
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError, field_error
+from app.logs.status import loki_status
 from app.metrics import templates
 from app.metrics.client import PrometheusClient, PrometheusUnavailableError, breaker
 from app.metrics.schemas import (
@@ -154,7 +155,6 @@ _PENDING: Final[tuple[tuple[str, str, str], ...]] = (
     # status endpoint that otherwise needs none. It becomes per-account when
     # there is a per-account answer. Recorded in PROGRESS.md.
     ("Cloud accounts", "cloud", "No cloud provider adapter exists yet (M4.1)."),
-    ("Loki", "logs", "Log ingestion is not implemented yet (M3.1)."),
     ("Alertmanager", "alerts", "Alerting is not implemented yet (M3.3)."),
     ("Jenkins", "ci", "Deployment integration is not implemented yet (M5.1)."),
     ("Secret store", "secrets", "No secret store backend is selected yet (OPEN-06)."),
@@ -210,7 +210,7 @@ async def prometheus_status(client: PrometheusClient | None = None) -> Integrati
 
 
 async def integration_status() -> IntegrationStatusList:
-    """§26.1. Prometheus is probed; the rest report what is true of them."""
+    """§26.1. Prometheus and Loki are probed; the rest report what is true of them."""
     settings = get_settings()
     rows = [
         IntegrationStatus(
@@ -227,6 +227,7 @@ async def integration_status() -> IntegrationStatusList:
             demo_mode=settings.demo_mode,
         ),
         await prometheus_status(),
+        await loki_status(),
     ]
     rows.extend(
         IntegrationStatus(

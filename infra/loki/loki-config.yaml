@@ -54,7 +54,13 @@ limits_config:
 
   # Reads.
   max_query_length: 168h          # 7 days, docs/API_CONTRACTS.md §19
-  max_entries_limit_per_query: 1000
+  # 5000, not the API's page maximum of 1000 (M3.2): a full page is read with one
+  # extra line to know whether there is more, and with the lines already delivered
+  # at its boundary timestamp when it is a continuation, and a boundary tie group
+  # is re-read in full. The API enforces the 1000-line page; this is the ceiling
+  # for those internal reads (`LOKI_MAX_ENTRIES` in backend/app/logs/service.py).
+  # Found by the smoke test against a real Loki: the stand-in accepted any limit.
+  max_entries_limit_per_query: 5000
 
   # Writes. A sample older than this is rejected, so an outage longer than a
   # week cannot back-fill history; that is the intent.

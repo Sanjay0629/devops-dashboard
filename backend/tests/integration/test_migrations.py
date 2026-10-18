@@ -208,3 +208,42 @@ def test_audit_events_has_no_updated_at_trigger(migrated: Engine) -> None:
             )
         ).scalar()
     assert count == 0
+
+
+def _log_grants(engine: Engine) -> dict[str, set[str]]:
+    """Role names holding each log permission, keyed by the permission's action."""
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT p.action, r.name
+                  FROM role_permissions rp
+                  JOIN permissions p ON p.id = rp.permission_id
+                  JOIN roles r ON r.id = rp.role_id
+                 WHERE p.resource_type = 'logs'
+                """
+            )
+        ).all()
+    grants: dict[str, set[str]] = {}
+    for action, role in rows:
+        grants.setdefault(action, set()).add(role)
+    return grants
+
+
+def test_log_permissions_take_the_contract_names_and_no_role_gains_or_loses_one(
+    rebuilt: Engine, alembic_config: Config
+) -> None:
+    """Migration 0007 (OPEN-32) renames in place, so grants follow the permission id.
+
+    The expected sets are docs/SECURITY.md §4's matrix, written out rather than
+    read from the migration: system logs are DevOps and above, application logs
+    everyone.
+    """
+    everyone = {"VIEWER", "DEVELOPER", "DEVOPS_ENGINEER", "APPROVER", "ADMINISTRATOR"}
+    system = {"DEVOPS_ENGINEER", "APPROVER", "ADMINISTRATOR"}
+    assert _log_grants(rebuilt) == {"read:application": everyone, "read:system": system}
+
+    command.downgrade(alembic_config, "0006")
+    assert _log_grants(rebuilt) == {"read": everyone, "query": system}
+    command.upgrade(alembic_config, "head")
+    assert _log_grants(rebuilt) == {"read:application": everyone, "read:system": system}

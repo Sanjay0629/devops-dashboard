@@ -52,6 +52,12 @@ x-backend-env: &backend-env
   # why that is deliberate rather than an omission.
   DCP_PROMETHEUS_URL: ${DCP_PROMETHEUS_URL:-http://prometheus:9090}
   DCP_PROMETHEUS_TIMEOUT_SECONDS: ${DCP_PROMETHEUS_TIMEOUT_SECONDS:-10.0}
+  # M3.2. Same two-halves trap as above (issue 54): .env.example has the entry,
+  # and this block is the passthrough. Loki is on the project network only; the
+  # browser never reaches it.
+  DCP_LOKI_URL: ${DCP_LOKI_URL:-http://loki:3100}
+  DCP_LOKI_TIMEOUT_SECONDS: ${DCP_LOKI_TIMEOUT_SECONDS:-15.0}
+  DCP_LOG_RETENTION_DAYS: ${DCP_LOG_RETENTION_DAYS:-14}
   # M2.3 (OPEN-14). The worker writes this file to a volume Prometheus mounts
   # read-only; the other services carry the same value because they share this
   # block, and only the worker has the volume. Both timing settings are

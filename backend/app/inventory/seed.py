@@ -18,11 +18,22 @@ Idempotent: keyed on ``(cloud_account_id, provider_resource_id)`` and on
 ``slug``, so a second run changes nothing and a partially seeded database
 completes. Removal is ``--remove``, which deletes exactly the rows this script
 creates and nothing else.
+
+``--sample-log-host`` (M3.2, PROGRESS issue 94) adds the one server and one
+application whose **fixed ids** are the identity the sample log stack ships under
+(``ALLOY_SERVER_ID`` / ``ALLOY_APPLICATION_ID`` in the Compose file), so the sample
+logs belong to a registered server and a scoped caller can see them. It is a flag
+and not part of the default seed on purpose: the default seed's counts are
+asserted by other suites, and a log host nobody asked for would change them. The
+hostname differs from the one the shipper puts in its label, which is exactly what
+lets the smoke test prove the API serves the inventory's name and never the
+shipper's.
 """
 
 from __future__ import annotations
 
 import argparse
+import uuid
 from typing import Any, Final
 
 from sqlalchemy import delete, select
@@ -115,6 +126,15 @@ SERVERS: Final[tuple[tuple[str, str, str, str, str, str, tuple[str, ...]], ...]]
 )
 
 
+#: The sample log stack's identity. These two literals are the Compose defaults of
+#: ``ALLOY_SERVER_ID`` and ``ALLOY_APPLICATION_ID``; ``tests/inventory/test_sample_log_seed.py``
+#: fails if the two ever differ.
+SAMPLE_LOG_SERVER_ID: Final = uuid.UUID("00000000-0000-4000-8000-00000000a110")
+SAMPLE_LOG_APPLICATION_ID: Final = uuid.UUID("00000000-0000-4000-8000-0000000000a9")
+SAMPLE_LOG_APPLICATION_SLUG: Final = "demo-sample-api"
+SAMPLE_LOG_HOSTNAME: Final = f"sample-log-host.{DEMO_DOMAIN}"
+
+
 def _account(session: Session) -> CloudAccount:
     """The ``ON_PREM`` account migration 0002 seeds, or a demo one beside it.
 
@@ -200,6 +220,49 @@ def seed(session: Session) -> tuple[int, int]:
     return created_servers, created_applications
 
 
+def seed_sample_log_host(session: Session) -> int:
+    """The server and application the sample logs are shipped as. Returns rows created."""
+    account = _account(session)
+    created = 0
+    application = session.get(Application, SAMPLE_LOG_APPLICATION_ID)
+    if application is None:
+        application = Application(
+            id=SAMPLE_LOG_APPLICATION_ID,
+            name=f"{DEMO_PREFIX} Sample API",
+            slug=SAMPLE_LOG_APPLICATION_SLUG,
+            description="Synthetic: the application the sample log stack ships as.",
+            owner_team="platform",
+            status="ACTIVE",
+        )
+        session.add(application)
+        created += 1
+    server = session.get(Server, SAMPLE_LOG_SERVER_ID)
+    if server is None:
+        server = Server(
+            id=SAMPLE_LOG_SERVER_ID,
+            cloud_account_id=account.id,
+            provider_resource_id="i-0demo-sample-log-host",
+            hostname=SAMPLE_LOG_HOSTNAME,
+            display_name=f"{DEMO_PREFIX} sample-log-host",
+            operating_system="LINUX",
+            os_version="synthetic",
+            environment="development",
+            region="demo-region-1",
+            owner_team="platform",
+            management_method="NONE",
+            monitoring_enabled=False,
+            status="MANAGED",
+            provider_metadata=dict(SYNTHETIC),
+        )
+        session.add(server)
+        created += 1
+    session.flush()
+    if session.get(ApplicationServer, (application.id, server.id)) is None:
+        session.add(ApplicationServer(application_id=application.id, server_id=server.id))
+        session.flush()
+    return created
+
+
 def remove(session: Session) -> tuple[int, int]:
     """Delete exactly the rows :func:`seed` creates."""
     server_ids = list(
@@ -212,7 +275,9 @@ def remove(session: Session) -> tuple[int, int]:
     application_ids = list(
         session.execute(
             select(Application.id).where(
-                Application.slug.in_([slug for slug, _name, _team in APPLICATIONS])
+                Application.slug.in_(
+                    [slug for slug, _name, _team in APPLICATIONS] + [SAMPLE_LOG_APPLICATION_SLUG]
+                )
             )
         )
         .scalars()
@@ -234,6 +299,11 @@ def remove(session: Session) -> tuple[int, int]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--remove", action="store_true", help="delete the synthetic rows instead")
+    parser.add_argument(
+        "--sample-log-host",
+        action="store_true",
+        help="add only the server and application the sample log stack ships as (M3.2)",
+    )
     arguments = parser.parse_args(argv)
 
     settings = get_settings()
@@ -247,7 +317,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     with Session(get_sync_engine(), future=True) as session, session.begin():
-        servers, applications = remove(session) if arguments.remove else seed(session)
+        if arguments.sample_log_host and not arguments.remove:
+            servers, applications = seed_sample_log_host(session), 0
+        else:
+            servers, applications = remove(session) if arguments.remove else seed(session)
     logger.info(
         "seed_removed" if arguments.remove else "seed_created",
         servers=servers,

@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.inventory.models import SERVICE_NAME_PATTERN
 from app.inventory.schemas import CursorPage, DataState, DisplayName, Environment
+from app.logs.schemas import LabelLevel
 from app.metrics.schemas import UnavailableReason
 from app.services.normalise import ServiceState
 
@@ -30,7 +31,11 @@ ServiceName = Annotated[str, Field(min_length=3, max_length=128)]
 _SERVICE_NAME = re.compile(SERVICE_NAME_PATTERN)
 
 ServiceAction = Literal["start", "stop", "restart", "status", "logs_tail"]
-LogLevel = Literal["debug", "info", "notice", "warning", "error", "critical"]
+# AD-21's level values, one definition (M3.2): this was the journald spelling
+# (`notice`, `warning`) while Loki holds `warn` and has no `notice`, so a filter on
+# either could only ever match nothing. §16.7 never answered before M3.2, so no
+# client depended on the old values.
+LogLevel = LabelLevel
 
 
 def _check_service_name(value: str) -> str:

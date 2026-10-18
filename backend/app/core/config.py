@@ -124,6 +124,20 @@ class Settings(BaseSettings):
     #: ends rather than only at ours.
     prometheus_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
 
+    # --- Loki (M3.2, AD-05, docs/SECURITY.md §19) -----------------------------
+    #: Base URL of the Loki **read** API, e.g. ``http://loki:3100``. Optional:
+    #: unset, every log read answers ``503 not_configured`` rather than an
+    #: empty page. Deployment configuration like ``prometheus_url`` above, and
+    #: for the same reasons it does not pass through ``validate_registered_url``.
+    loki_url: str | None = None
+    #: Upstream deadline for one Loki call (docs/API_CONTRACTS.md §19.1: 15 s).
+    loki_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
+    #: How long Loki keeps logs (OPEN-37). Must match
+    #: ``limits_config.retention_period`` in ``infra/loki/loki-config.yaml``; the
+    #: smoke test asserts that it does. A ``from`` older than this is refused,
+    #: because an empty answer for a range Loki no longer holds reads as "no logs".
+    log_retention_days: int = Field(default=14, ge=1, le=3_650)
+
     # --- Target discovery and agent health (M2.3, OPEN-14) -------------------
     #: Where DCP writes the Prometheus ``file_sd`` target file. Unset means
     #: discovery is **off**: nothing is written and the regeneration task says
@@ -217,7 +231,7 @@ class Settings(BaseSettings):
             return tuple(part for part in value.replace(",", " ").split() if part)
         return value
 
-    @field_validator("oidc_issuer", "oidc_redirect_url", "prometheus_url")
+    @field_validator("oidc_issuer", "oidc_redirect_url", "prometheus_url", "loki_url")
     @classmethod
     def _check_absolute_http_url(cls, value: str | None) -> str | None:
         """Reject anything that is not a plain absolute http(s) URL.
@@ -285,7 +299,7 @@ class Settings(BaseSettings):
             # field comment), so the remaining honest rule is: https outside
             # 'local'. An internal Prometheus without TLS has to be fronted
             # by something that has it.
-            for name in ("oidc_issuer", "oidc_redirect_url", "prometheus_url"):
+            for name in ("oidc_issuer", "oidc_redirect_url", "prometheus_url", "loki_url"):
                 url = getattr(self, name)
                 if url is not None and not url.startswith("https://"):
                     raise ValueError(f"{name} must use https outside the 'local' environment")
@@ -317,6 +331,10 @@ class Settings(BaseSettings):
     @property
     def prometheus_configured(self) -> bool:
         return self.prometheus_url is not None
+
+    @property
+    def loki_configured(self) -> bool:
+        return self.loki_url is not None
 
     @property
     def cookie_secure(self) -> bool:

@@ -228,7 +228,7 @@ class Application(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "applications"
 
     name: Mapped[str] = mapped_column(String(256), nullable=False)
-    # URL-safe identifier; also the source of the Loki `application_id` label.
+    # URL-safe identifier. Not the Loki `application_id` label: that is `id` (OPEN-33).
     slug: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     owner_team: Mapped[str | None] = mapped_column(String(128), nullable=True)

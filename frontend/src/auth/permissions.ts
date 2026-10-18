@@ -31,6 +31,8 @@ export const PERMISSIONS = {
   adminSettings: 'admin:manage',
   /** Read host metrics (§15). Scope is checked by the backend per server. */
   metricsRead: 'metrics:read',
+  /** Search application-source logs (§19.1). System sources need `logs:read:system`. */
+  logsReadApplication: 'logs:read:application',
   /** Read systemd service state (§16). Scope is checked per server by the backend. */
   serviceRead: 'service:read',
   /** Read server and application inventory. Held by every role. */
