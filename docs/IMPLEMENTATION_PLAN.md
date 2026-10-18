@@ -559,6 +559,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M3.2 — Log search API and UI
 
+**Status: complete locally (2026-10-18); not pushed, not on hosted CI.** Decisions `OPEN-32` – `OPEN-38` closed before code (see [ARCHITECTURE.md §19](ARCHITECTURE.md)); evidence in [`PROGRESS.md`](../PROGRESS.md) §9. §19.3 and deployment-to-logs navigation move to M5 (they need Jenkins and a deployments page); everything else below was built.
+
 **Tasks:** Loki client with timeouts and circuit breaker; **server-side LogQL construction** from structured filters; pattern-preset catalogue; endpoints 19.1–19.3; cursor pagination; outbound redaction; frontend log search with filters, result list, source/timestamp display, and navigation from a failed service or a deployment to its logs.
 
 **Acceptance (PRD §4.7 criteria):** an authorised user searches across several servers; results show source and timestamp; unauthorised users cannot query restricted environments; limits and retention are respected. Loki down renders an explicit unavailable state — **never "no logs found"**, which during an incident is a dangerous lie.

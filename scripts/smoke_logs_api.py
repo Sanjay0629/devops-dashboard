@@ -154,6 +154,13 @@ def now_ns() -> int:
 # --- the checks --------------------------------------------------------------------
 
 
+def loki_row() -> dict:
+    """§26.1's Loki row: a live probe since M3.2 (it said \"not implemented\" before)."""
+    status, body = call("GET", "/integrations/status")
+    assert status == 200 and isinstance(body, dict), (status, body)
+    return next(row for row in body["integrations"] if row["name"] == "Loki")
+
+
 def catalogue() -> dict:
     status, sources = call("GET", "/logs/sources")
     assert status == 200 and isinstance(sources, dict), (status, sources)
@@ -168,6 +175,9 @@ def catalogue() -> dict:
     days = int(match.group(1)) * (7 if match.group(2) == "w" else 1)
     assert sources["limits"]["retention_days"] == days, (sources["limits"], days)
     say(f"the catalogue is served; DCP_LOG_RETENTION_DAYS={days} equals Loki's retention_period")
+    row = loki_row()
+    assert (row["status"], row["circuit_state"]) == ("ok", "closed"), row
+    say("the integration page reports Loki ok (a live probe), circuit closed")
     return sources
 
 
@@ -330,6 +340,9 @@ def outage() -> None:
     say("Loki stopped: 503 provider_unavailable, and nothing that could read as an empty result")
     status, _ = call("GET", "/logs/sources")
     assert status == 200, "the static catalogue should not depend on Loki"
+    row = loki_row()
+    assert row["status"] == "unavailable" and "://" not in (row["last_error_message"] or ""), row
+    say("the integration page reports Loki unavailable, with a reason code and no URL")
 
 
 def recovered() -> None:

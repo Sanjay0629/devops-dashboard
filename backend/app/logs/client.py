@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Final
 
 import httpx
@@ -221,6 +221,20 @@ class LokiClient:
                 except ValueError:
                     continue
         return counts
+
+    async def probe(self) -> datetime:
+        """Cheapest read that proves Loki can be reached and parsed (§26.1).
+
+        ``vector(1)`` selects no stream, so this answers "can we reach and parse
+        this Loki" without depending on anything having been shipped.
+        """
+        started = datetime.now(UTC)
+        data = await self._get(
+            _QUERY, {"query": "vector(1)", "time": str(int(started.timestamp()))}
+        )
+        if data.get("resultType") != "vector":
+            raise LokiUnavailableError("provider_error")
+        return started
 
 
 def _bytes_scanned(data: dict[str, Any]) -> int | None:

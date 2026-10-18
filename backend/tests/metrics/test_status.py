@@ -169,14 +169,15 @@ async def test_the_full_page_lists_every_integration_the_contract_names() -> Non
     assert names == [
         "Identity provider",
         "Prometheus",
-        "Cloud accounts",
         "Loki",
+        "Cloud accounts",
         "Alertmanager",
         "Jenkins",
         "Secret store",
         "Notification channels",
     ]
-    # Every unbuilt one says so, and says which milestone brings it.
+    # Every one that is not configured says so (Loki is a live probe since M3.2, and is
+    # unconfigured here because the test environment sets no URL).
     for row in page.integrations[2:]:
         assert row.status == "not_configured"
         assert row.last_error_message
