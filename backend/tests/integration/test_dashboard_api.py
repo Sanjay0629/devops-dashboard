@@ -360,7 +360,6 @@ async def test_every_section_without_a_source_is_null_and_says_why(
                 "network_bytes_per_second",
             ),
         ),
-        ("active_alerts", ("critical", "warning", "info")),
         ("recent_deployments", ("items",)),
         ("recent_operations", ("items",)),
     ):
@@ -371,6 +370,24 @@ async def test_every_section_without_a_source_is_null_and_says_why(
         assert section["unavailable_reason"], name
         for field in fields:
             assert section[field] is None, f"{name}.{field} must be null, never 0 or []"
+
+
+async def test_active_alerts_is_a_real_section_with_real_integers(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str],
+) -> None:
+    """M3.3: the section reads ``alert_events`` and is never a ``null`` pretending to be zero.
+
+    What the counts *are* for each scope is ``tests/integration/test_alerts_api.py``; here the
+    shape is pinned: integers, a source and a time, and ``pipeline`` ``null`` because this
+    stack configures no Alertmanager (so there is no pipeline to confirm or doubt).
+    """
+    client, _caller, _team = dashboard
+    section = (await _summary(client))["active_alerts"]
+    assert section["data_state"] == "ok" and section["source"] == "postgresql"
+    assert section["collected_at"] is not None
+    for field in ("critical", "warning", "info"):
+        assert isinstance(section[field], int) and section[field] >= 0
+    assert section["pipeline"] is None
 
 
 # --- filters -----------------------------------------------------------------
@@ -529,14 +546,16 @@ async def test_the_health_list_never_defaults_a_server_to_healthy(
     assert len(body["items"]) == len(FIXTURE)
     for row in body["items"]:
         assert row["health_state"] is None, row["hostname"]
-        assert row["active_alert_count"] is None, row["hostname"]
+        # M3.3: a real count of alerts about this host the caller may read; these hosts
+        # have none. ``null`` is reserved for "you may not see alerts here".
+        assert row["active_alert_count"] == 0, row["hostname"]
         # Never seen is not stale: reporting `false` would claim a freshness
         # nothing has observed.
         assert row["stale"] is None, row["hostname"]
         # Real, because `services` is a table we can count.
         assert row["failed_service_count"] == 0, row["hostname"]
     assert body["health"]["data_state"] == "not_configured"
-    assert body["alerts"]["data_state"] == "not_configured"
+    assert body["alerts"]["data_state"] == "ok"
 
 
 async def test_the_health_list_is_scope_filtered(

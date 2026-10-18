@@ -36,6 +36,7 @@ caller did not ask for), and it is recorded as a known issue.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -43,8 +44,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.alerts import counts as alert_counts
 from app.authz.dependencies import Authorized
-from app.authz.matcher import Target
+from app.authz.matcher import Grant, Target
+from app.authz.queries import readable_servers
 from app.core.config import get_settings
 from app.core.errors import AppError, field_error
 from app.core.logging import get_logger
@@ -70,6 +73,7 @@ from app.inventory.schemas import (
     HealthCheckConfig,
     HealthSection,
     ManagementCapabilitiesSection,
+    OpenAlertCounts,
     OpenAlertsSection,
     ServerCreateRequest,
     ServerDetail,
@@ -181,7 +185,27 @@ def server_summary(server: Server) -> ServerSummary:
     )
 
 
-async def server_detail(db: AsyncSession, server: Server) -> ServerDetail:
+async def _open_alerts_section(
+    db: AsyncSession, grants: Sequence[Grant], server_id: uuid.UUID
+) -> OpenAlertsSection:
+    """Open alerts about this server, or why the caller cannot be told (never a bare zero)."""
+    readable = await db.execute(
+        select(Server.id).where(Server.id == server_id, readable_servers(grants, "alert", "read"))
+    )
+    if readable.first() is None:
+        return OpenAlertsSection(
+            counts=None, data_state="unavailable", unavailable_reason="alert_read_not_permitted"
+        )
+    counts = await alert_counts.open_counts(db, grants, [Server.id == server_id])
+    return OpenAlertsSection(
+        counts=OpenAlertCounts(critical=counts["CRITICAL"], warning=counts["WARNING"]),
+        data_state="ok",
+        collected_at=datetime.now(UTC),
+        source="postgresql",
+    )
+
+
+async def server_detail(db: AsyncSession, server: Server, grants: Sequence[Grant]) -> ServerDetail:
     """§14.3. The sections with no source yet say so rather than guessing."""
     applications = (
         await db.execute(
@@ -227,11 +251,7 @@ async def server_detail(db: AsyncSession, server: Server) -> ServerDetail:
             for application, role in applications
         ],
         registered_service_count=service_count,
-        open_alerts=OpenAlertsSection(
-            counts=None,
-            data_state="not_configured",
-            unavailable_reason="Alerting is not implemented yet (M3).",
-        ),
+        open_alerts=await _open_alerts_section(db, grants, server.id),
         management_capabilities=ManagementCapabilitiesSection(
             capabilities=None,
             data_state="not_configured",

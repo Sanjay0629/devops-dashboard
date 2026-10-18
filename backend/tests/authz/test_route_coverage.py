@@ -263,3 +263,16 @@ def test_the_bypass_gate_would_catch_one(tmp_path: Path) -> None:
     hits = [line for _, line in _code_lines(planted) if BYPASS_PATTERN.search(line)]
     assert len(hits) == 1, hits
     assert "settings . debug" in hits[0]
+
+
+def test_alert_routes_declare_the_permissions_the_contract_names(app: FastAPI) -> None:
+    """docs/API_CONTRACTS.md §20, transcribed from the contract rather than from the code."""
+    expected: dict[tuple[str, str], tuple[str, str]] = {
+        ("GET", "/api/v1/alerts"): ("alert", "read"),
+        ("GET", "/api/v1/alerts/{alert_id}"): ("alert", "read"),
+        ("POST", "/api/v1/alerts/{alert_id}/acknowledge"): ("alert", "acknowledge"),
+        ("POST", "/api/v1/alerts/{alert_id}/assign"): ("alert", "acknowledge"),
+    }
+    declared = {(info.method, info.path): _declared_permission(info) for info in routes_of(app)}
+    for key, permission in expected.items():
+        assert declared.get(key) == permission, f"{key} declares {declared.get(key)!r}"

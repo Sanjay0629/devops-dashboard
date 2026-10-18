@@ -48,7 +48,8 @@ from app.monitoring.health import HealthState
 UTILISATION_REASON = (
     "Fleet-wide utilisation is not aggregated yet; per-server metrics are on each server's page."
 )
-ALERTS_REASON = "Alerting is not implemented yet (M3.3)."
+#: A caller with no ``alert:read`` is told so, not shown a zero.
+ALERTS_NOT_PERMITTED = "alert_read_not_permitted"
 DEPLOYMENTS_REASON = "Deployments are not implemented yet (M5.1)."
 OPERATIONS_REASON = "Service operations are not implemented yet (M4.2)."
 
@@ -122,9 +123,17 @@ class FailedServicesSection(DataSection):
 
 
 class ActiveAlertsSection(DataSection):
+    """Open alerts by severity, from PostgreSQL (M3.3), scoped to what the caller may read.
+
+    ``pipeline`` says whether the alerting pipeline has been *confirmed* by the always-firing
+    watchdog (``app/alerts/status.py``): counts of ``0`` beside ``not_confirmed`` mean "cannot
+    tell", never "all clear" (PRD §3). ``null`` when no Alertmanager is configured.
+    """
+
     critical: int | None = None
     warning: int | None = None
     info: int | None = None
+    pipeline: Literal["confirmed", "not_confirmed", "unknown"] | None = None
 
 
 class RecentActivitySection(DataSection):
@@ -231,7 +240,7 @@ class DashboardHealthList(BaseModel):
     page: CursorPage
     #: The rollup, and why every row's ``health_state`` is ``null`` when it is.
     health: ServerHealthRollup
-    #: Why every row's ``active_alert_count`` is ``null``.
+    #: The same section as §13.1's: why a row's ``active_alert_count`` may be ``null``.
     alerts: ActiveAlertsSection
     collected_at: datetime
     filters_applied: DashboardFilters

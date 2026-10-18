@@ -199,7 +199,7 @@ async def register_server(
         # registration already has its row, and a second one would record an
         # event that did not happen.
         response.status_code = 200
-        detail = await service.server_detail(db, server)
+        detail = await service.server_detail(db, server, authorized.grants)
         return ServerCreated(**detail.model_dump(), idempotent_replay=True)
 
     audit.record(
@@ -225,7 +225,7 @@ async def register_server(
     await db.refresh(server)
     await discovery.request_regeneration()
     logger.info("server_registered", server_id=str(server.id), environment=server.environment)
-    detail = await service.server_detail(db, server)
+    detail = await service.server_detail(db, server, authorized.grants)
     return ServerCreated(**detail.model_dump(), idempotent_replay=False)
 
 
@@ -236,7 +236,7 @@ async def register_server(
 async def read_server(server_id: ServerId, db: Db, authorized: ReadServers) -> ServerDetail:
     """§14.3. Out of scope ⇒ ``404``, never ``403`` (§2)."""
     server = await service.get_server(db, server_id, authorized)
-    return await service.server_detail(db, server)
+    return await service.server_detail(db, server, authorized.grants)
 
 
 # --- 14.4 --------------------------------------------------------------------
@@ -323,7 +323,7 @@ async def update_server(
     await db.refresh(server)
     if TARGET_FIELDS & changes.keys():
         await discovery.request_regeneration()
-    return await service.server_detail(db, server)
+    return await service.server_detail(db, server, authorized.grants)
 
 
 # --- 14.5 --------------------------------------------------------------------
@@ -395,7 +395,7 @@ async def associate_application(
         },
     )
     await db.commit()
-    return await service.server_detail(db, server)
+    return await service.server_detail(db, server, authorized.grants)
 
 
 @router.delete(

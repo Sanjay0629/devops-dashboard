@@ -20,6 +20,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Final
 
+from app.alerts.status import alertmanager_status
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError, field_error
 from app.logs.status import loki_status
@@ -155,7 +156,9 @@ _PENDING: Final[tuple[tuple[str, str, str], ...]] = (
     # status endpoint that otherwise needs none. It becomes per-account when
     # there is a per-account answer. Recorded in PROGRESS.md.
     ("Cloud accounts", "cloud", "No cloud provider adapter exists yet (M4.1)."),
-    ("Alertmanager", "alerts", "Alerting is not implemented yet (M3.3)."),
+    # Replaced by a live probe (M3.3) at this position, so the page keeps the contract's
+    # order; it stays in the list so a name can never be dropped from the page by accident.
+    ("Alertmanager", "alerts", "Alertmanager is probed live (M3.3)."),
     ("Jenkins", "ci", "Deployment integration is not implemented yet (M5.1)."),
     ("Secret store", "secrets", "No secret store backend is selected yet (OPEN-06)."),
     ("Notification channels", "notifications", "Notifications are not implemented yet (M3.4)."),
@@ -210,7 +213,7 @@ async def prometheus_status(client: PrometheusClient | None = None) -> Integrati
 
 
 async def integration_status() -> IntegrationStatusList:
-    """§26.1. Prometheus and Loki are probed; the rest report what is true of them."""
+    """§26.1. Prometheus, Loki and Alertmanager are probed; the rest report what is true of them."""
     settings = get_settings()
     rows = [
         IntegrationStatus(
@@ -229,14 +232,17 @@ async def integration_status() -> IntegrationStatusList:
         await prometheus_status(),
         await loki_status(),
     ]
-    rows.extend(
-        IntegrationStatus(
-            name=name,
-            type=kind,
-            status="not_configured",
-            last_error_message=reason,
-            demo_mode=settings.demo_mode,
+    for name, kind, reason in _PENDING:
+        if name == "Alertmanager":
+            rows.append(await alertmanager_status())
+            continue
+        rows.append(
+            IntegrationStatus(
+                name=name,
+                type=kind,
+                status="not_configured",
+                last_error_message=reason,
+                demo_mode=settings.demo_mode,
+            )
         )
-        for name, kind, reason in _PENDING
-    )
     return IntegrationStatusList(integrations=rows)

@@ -523,7 +523,8 @@ def test_the_partition_task_covers_both_tables_and_leaves_no_open_runway_alert(
         open_alerts = session.execute(
             text(
                 "SELECT count(*) FROM alert_events WHERE source = 'DCP_SYSTEM'"
-                " AND status IN ('FIRING','ACKNOWLEDGED')"
+                " AND details->>'table' IS NOT NULL AND status IN ('FIRING','ACKNOWLEDGED')"
             )
         ).scalar_one()
+    # Only the runway alerts: another test's committed DCP_SYSTEM alert is not this task's.
     assert open_alerts == 0

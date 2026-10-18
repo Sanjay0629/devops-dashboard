@@ -41,6 +41,25 @@ def grant(engine: Engine, user_id: uuid.UUID, role: str, scope: str = FULL_SCOPE
         ).scalar_one()
 
 
+def retire_servers(engine: Engine, server_ids: list[str]) -> None:
+    """Soft-delete servers and their services, so a test does not leave them behind.
+
+    The schema is rebuilt once per session, not per test, and several assertions are
+    about *every* readable server or service: a log search by environment refuses past
+    200 servers, and a dashboard count of unobserved units counts every service row. A
+    test that registers servers must therefore take them away again.
+    """
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE services SET deleted_at = now() WHERE server_id = ANY(:ids)"),
+            {"ids": [uuid.UUID(i) for i in server_ids]},
+        )
+        connection.execute(
+            text("UPDATE servers SET deleted_at = now() WHERE id = ANY(:ids)"),
+            {"ids": [uuid.UUID(i) for i in server_ids]},
+        )
+
+
 def revoke_all(engine: Engine, user_id: uuid.UUID) -> None:
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM user_roles WHERE user_id = :id"), {"id": user_id})

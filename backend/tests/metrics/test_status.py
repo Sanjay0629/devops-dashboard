@@ -176,8 +176,8 @@ async def test_the_full_page_lists_every_integration_the_contract_names() -> Non
         "Secret store",
         "Notification channels",
     ]
-    # Every one that is not configured says so (Loki is a live probe since M3.2, and is
-    # unconfigured here because the test environment sets no URL).
+    # Every one that is not configured says so (Loki since M3.2 and Alertmanager since M3.3
+    # are live probes, unconfigured here because the test environment sets no URL).
     for row in page.integrations[2:]:
         assert row.status == "not_configured"
         assert row.last_error_message

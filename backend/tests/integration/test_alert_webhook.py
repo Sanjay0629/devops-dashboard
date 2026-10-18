@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +26,7 @@ from tests.integration.inventory_helpers import (
     account_id,
     grant,
     register,
+    retire_servers,
     revoke_all,
     user_id,
 )
@@ -117,7 +119,7 @@ async def rig(
     auth_app: tuple[httpx.AsyncClient, FakeIdp],  # noqa: F811
     migrated: Engine,
     monkeypatch: pytest.MonkeyPatch,
-) -> Rig:
+) -> AsyncIterator[Rig]:
     client, provider = auth_app
     await _login(client, provider)
     caller = user_id(migrated, provider.subject)
@@ -136,7 +138,8 @@ async def rig(
     # The shared budget would otherwise be spent by the file's own volume.
     monkeypatch.setattr(webhook, "RATE_LIMIT", 100_000)
     client.cookies.clear()  # the webhook has no session; prove it does not need one
-    return Rig(client, migrated, monkeypatch, ids[0], ids[1], ids[2])
+    yield Rig(client, migrated, monkeypatch, ids[0], ids[1], ids[2])
+    retire_servers(migrated, ids)
 
 
 # --- an accepted delivery ------------------------------------------------------------------
