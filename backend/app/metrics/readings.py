@@ -117,8 +117,25 @@ def _gate(server: Server) -> tuple[DataState, UnavailableReason] | None:
     return None
 
 
-def _thresholds(chosen: Sequence[MetricTemplate]) -> dict[str, dict[str, float]]:
-    return {t.id: dict(t.default_thresholds) for t in chosen if t.default_thresholds is not None}
+def _thresholds(server: Server, chosen: Sequence[MetricTemplate]) -> dict[str, dict[str, float]]:
+    """The lines for ``server``'s environment (``OPEN-46``).
+
+    The same table the alert rule file is generated from, so a card that says
+    ``warning`` and an alert that fires cannot be using different numbers. Only
+    templates that carry a threshold in the catalogue appear.
+    """
+    table = get_settings().utilisation_thresholds.for_environment(server.environment)
+    lines: dict[str, dict[str, float]] = {}
+    for template in chosen:
+        if template.default_thresholds is None:
+            continue
+        line = table.get(template.id)
+        lines[template.id] = (
+            {"warning": line.warning, "critical": line.critical}
+            if line is not None
+            else dict(template.default_thresholds)
+        )
+    return lines
 
 
 def _reading(
@@ -164,7 +181,7 @@ async def current(
     return CurrentMetrics(
         server_id=server.id,
         metrics=readings,
-        thresholds=_thresholds(chosen),
+        thresholds=_thresholds(server, chosen),
         demo_mode=demo,
     )
 
@@ -203,12 +220,15 @@ async def _read_instant(
         scrape = _unwrap(gathered[0])
         results = {tid: _unwrap(r) for tid, r in zip(queries, gathered[1:], strict=True)}
 
+    lines = _thresholds(server, chosen)
     readings: list[MetricReading] = []
     for template in chosen:
         if template.id in unsupported:
             readings.append(_reading(template, "unsupported", "unsupported_os"))
             continue
-        readings.append(_instant_reading(template, scrape, results[template.id]))
+        readings.append(
+            _instant_reading(template, scrape, results[template.id], lines.get(template.id))
+        )
     return readings
 
 
@@ -216,7 +236,9 @@ def _single(samples: Sequence[Sample]) -> Sample | None:
     return samples[0] if len(samples) == 1 else None
 
 
-def _instant_reading(template: MetricTemplate, scrape: Any, result: Any) -> MetricReading:
+def _instant_reading(
+    template: MetricTemplate, scrape: Any, result: Any, lines: dict[str, float] | None
+) -> MetricReading:
     for outcome in (scrape, result):
         if isinstance(outcome, PrometheusUnavailableError):
             return _reading(template, *_failure(outcome))
@@ -246,7 +268,7 @@ def _instant_reading(template: MetricTemplate, scrape: Any, result: Any) -> Metr
         value=value.value,
         data_state="ok",
         collected_at=collected_at,
-        threshold_state=thresholds.classify(template.default_thresholds, value.value),
+        threshold_state=thresholds.classify(lines, value.value),
     )
 
 
@@ -322,7 +344,7 @@ async def history(
         end=end,
         step_seconds=step_seconds,
         series=series,
-        thresholds=_thresholds(chosen),
+        thresholds=_thresholds(server, chosen),
         demo_mode=get_settings().demo_mode,
     )
 

@@ -80,14 +80,15 @@ const SUMMARY = {
     unavailable_reason: null,
   },
   active_alerts: {
-    critical: null,
-    warning: null,
-    info: null,
-    data_state: 'not_configured',
-    collected_at: null,
-    source: null,
+    critical: 2,
+    warning: 3,
+    info: 0,
+    data_state: 'ok',
+    collected_at: '2026-10-15T09:30:00Z',
+    source: 'postgresql',
     stale_after_seconds: null,
-    unavailable_reason: 'Alerting is not implemented yet (M3.3).',
+    unavailable_reason: null,
+    pipeline: 'confirmed',
   },
   recent_deployments: {
     items: null,
@@ -129,7 +130,7 @@ const ROW = {
   last_seen_at: null,
   stale: null,
   failed_service_count: 0,
-  active_alert_count: null,
+  active_alert_count: 0,
 };
 
 function healthList(items: unknown[] = [ROW], hasMore = false) {
@@ -137,13 +138,7 @@ function healthList(items: unknown[] = [ROW], hasMore = false) {
     items,
     page: { limit: 25, next_cursor: hasMore ? 'cursor-2' : null, has_more: hasMore, total: null },
     health: SUMMARY.server_health,
-    alerts: {
-      data_state: 'not_configured',
-      collected_at: null,
-      source: null,
-      stale_after_seconds: null,
-      unavailable_reason: 'Alerting is not implemented yet (M3.3).',
-    },
+    alerts: SUMMARY.active_alerts,
     collected_at: '2026-10-15T09:30:00Z',
     filters_applied: {},
     demo_mode: false,
@@ -216,7 +211,6 @@ describe('Dashboard', () => {
     expect(
       (await screen.findAllByText(/Metrics collection is not implemented yet/)).length,
     ).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Alerting is not implemented yet/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Deployments are not implemented yet/).length).toBeGreaterThan(0);
   });
 
@@ -266,8 +260,79 @@ describe('Dashboard', () => {
     expect(within(row as HTMLElement).queryByText('Healthy')).toBeNull();
     expect(within(row as HTMLElement).queryByText('Unknown')).toBeNull();
     expect(within(row as HTMLElement).getByText('Never seen')).toBeInTheDocument();
-    // And the alert count is not a zero either — there is no alerts table.
-    expect(within(row as HTMLElement).getByText('Not configured')).toBeInTheDocument();
+    // The alert count is a real count now (M3.3), and a real zero is shown as one.
+    const cells = (row as HTMLElement).querySelectorAll('td');
+    expect(cells[cells.length - 1]).toHaveTextContent('0');
+  });
+
+  // --- alerts (M3.3) -------------------------------------------------------------
+
+  const withAlerts = (active_alerts: Record<string, unknown>) =>
+    mockApi({ summary: { ...SUMMARY, active_alerts } });
+
+  it('shows the open critical count, the rest beside it, and links to the alerts', async () => {
+    mockApi();
+    renderDashboard();
+    const card = (await screen.findByRole('link', { name: 'Open critical alerts' })).closest(
+      'div',
+    ) as HTMLElement;
+    expect(within(card).getByRole('link')).toHaveAttribute('href', '/alerts');
+    expect(card).toHaveTextContent('2');
+    expect(card).toHaveTextContent('3 warning · 0 info');
+    // Confirmed pipeline: nothing to qualify.
+    expect(card).not.toHaveTextContent(/cannot tell/);
+  });
+
+  it('says a zero is not good news when alerting has not been confirmed', async () => {
+    withAlerts({ ...SUMMARY.active_alerts, critical: 0, warning: 0, pipeline: 'not_confirmed' });
+    renderDashboard();
+    const card = (await screen.findByRole('link', { name: 'Open critical alerts' })).closest(
+      'div',
+    ) as HTMLElement;
+    expect(card).toHaveTextContent('0');
+    expect(card).toHaveTextContent(/alerting not confirmed: a 0 here means we cannot tell/);
+  });
+
+  it('says so when it could not check whether alerting works', async () => {
+    withAlerts({ ...SUMMARY.active_alerts, pipeline: 'unknown' });
+    renderDashboard();
+    expect(await screen.findByText(/could not check whether alerting is working/)).toBeVisible();
+  });
+
+  it('is silent about the pipeline where no Alertmanager is configured', async () => {
+    withAlerts({ ...SUMMARY.active_alerts, pipeline: null });
+    renderDashboard();
+    const card = (await screen.findByRole('link', { name: 'Open critical alerts' })).closest(
+      'div',
+    ) as HTMLElement;
+    expect(card).not.toHaveTextContent(/cannot tell|alerting not confirmed/);
+  });
+
+  it('tells a caller who may not read alerts, instead of showing them a zero', async () => {
+    withAlerts({
+      critical: null,
+      warning: null,
+      info: null,
+      data_state: 'unavailable',
+      collected_at: null,
+      source: 'postgresql',
+      stale_after_seconds: null,
+      unavailable_reason: 'alert_read_not_permitted',
+      pipeline: null,
+    });
+    renderDashboard();
+    const card = (await screen.findByRole('link', { name: 'Open critical alerts' })).closest(
+      'div',
+    ) as HTMLElement;
+    expect(card).toHaveTextContent('You do not have permission to read alerts.');
+    expect(within(card).queryByText('0')).toBeNull();
+  });
+
+  it('shows "Not permitted" for a server whose alerts the caller may not read, never 0', async () => {
+    mockApi({ health: healthList([{ ...ROW, active_alert_count: null }]) });
+    renderDashboard();
+    const row = (await screen.findByRole('link', { name: 'Web 01' })).closest('tr') as HTMLElement;
+    expect(within(row).getByText('Not permitted')).toBeInTheDocument();
   });
 
   // --- health (M2.5) -----------------------------------------------------------

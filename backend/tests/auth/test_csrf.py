@@ -210,11 +210,13 @@ def test_exempt_paths_are_exact_not_prefixes() -> None:
         assert client.post("/api/v1/webhooks/alerts/escalate").status_code == 403
 
 
-def test_the_app_exempts_nothing_yet() -> None:
-    """The webhook that needs an exemption arrives in M3.3; until then, none."""
+def test_the_app_exempts_exactly_the_alert_webhook() -> None:
+    """M3.3's webhook is the one non-browser caller; nothing else is exempt."""
     from app.main import create_app
 
     app = create_app()
     exempt = [middleware for middleware in app.user_middleware if middleware.cls is CsrfMiddleware]
     assert len(exempt) == 1
-    assert exempt[0].kwargs.get("exempt_paths", frozenset()) == frozenset()
+    assert exempt[0].kwargs.get("exempt_paths", frozenset()) == frozenset(
+        {"/api/v1/webhooks/alerts"}
+    )

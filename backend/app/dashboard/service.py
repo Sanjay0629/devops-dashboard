@@ -39,6 +39,8 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import UnaryExpression
 
+from app.alerts import counts as alert_counts
+from app.alerts import queries as alert_queries
 from app.audit.models import AuditEvent
 from app.authz.matcher import Grant, normalise_scope
 from app.authz.queries import readable_servers
@@ -47,7 +49,7 @@ from app.core.logging import get_logger
 from app.core.pagination import Cursor, encode_cursor
 from app.core.redis import get_redis
 from app.dashboard.schemas import (
-    ALERTS_REASON,
+    ALERTS_NOT_PERMITTED,
     DEPLOYMENTS_REASON,
     OPERATIONS_REASON,
     UTILISATION_REASON,
@@ -338,8 +340,29 @@ async def _recent_health_changes(
     )
 
 
-def _unknown_alerts() -> ActiveAlertsSection:
-    return ActiveAlertsSection(data_state="not_configured", unavailable_reason=ALERTS_REASON)
+async def _alerts_section(
+    db: AsyncSession, grants: Sequence[Grant], filters: DashboardFilterSet
+) -> ActiveAlertsSection:
+    """Open alerts by severity over the servers the caller may read and the filters keep.
+
+    A caller who cannot read alerts is told so rather than shown zeros, and ``pipeline``
+    says whether the alerting pipeline has been confirmed: a ``0`` is only good news when
+    something would have told us otherwise (PRD §3).
+    """
+    if not alert_counts.can_read(grants):
+        return ActiveAlertsSection(
+            data_state="unavailable", source="postgresql", unavailable_reason=ALERTS_NOT_PERMITTED
+        )
+    counts = await alert_counts.open_counts(db, grants, filters.conditions())
+    return ActiveAlertsSection(
+        critical=counts["CRITICAL"],
+        warning=counts["WARNING"],
+        info=counts["INFO"],
+        data_state="ok",
+        collected_at=datetime.now(UTC),
+        source="postgresql",
+        pipeline=await alert_counts.pipeline_state(),
+    )
 
 
 async def summary(
@@ -380,7 +403,7 @@ async def summary(
             collected_at=collected_at,
             source="postgresql",
         ),
-        active_alerts=_unknown_alerts(),
+        active_alerts=await _alerts_section(db, grants, filters),
         recent_deployments=RecentActivitySection(
             data_state="not_configured", unavailable_reason=DEPLOYMENTS_REASON
         ),
@@ -424,7 +447,12 @@ def health_rows_query(
     )
     spec = SERVER_SORTS[sort]
     statement = (
-        select(Server, CloudAccount.provider, failed_units.label("failed_service_count"))
+        select(
+            Server,
+            CloudAccount.provider,
+            failed_units.label("failed_service_count"),
+            alert_queries.open_count_per_server(grants).label("active_alert_count"),
+        )
         .join(CloudAccount, CloudAccount.id == Server.cloud_account_id)
         .where(*_readable(grants, filters), *extra)
     )
@@ -491,7 +519,7 @@ async def health_list(
         has_more = len(fetched) > limit
         page_rows = fetched[:limit]
         items = []
-        for server, provider, failed_count in page_rows:
+        for server, provider, failed_count, alert_count in page_rows:
             health = evaluate(server, table, reference)
             items.append(
                 ServerHealthRow(
@@ -505,7 +533,7 @@ async def health_list(
                     last_seen_at=server.last_seen_at,
                     stale=health.stale,
                     failed_service_count=int(failed_count),
-                    active_alert_count=None,
+                    active_alert_count=None if alert_count is None else int(alert_count),
                 )
             )
         if has_more and page_rows:
@@ -519,7 +547,7 @@ async def health_list(
         items=items,
         page=CursorPage(limit=limit, next_cursor=next_cursor, has_more=has_more),
         health=await _health_rollup(db, grants, filters, reference),
-        alerts=_unknown_alerts(),
+        alerts=await _alerts_section(db, grants, filters),
         collected_at=collected_at,
         filters_applied=filters.echoed(),
         demo_mode=settings.demo_mode,

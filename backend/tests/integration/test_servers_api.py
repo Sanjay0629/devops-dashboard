@@ -88,7 +88,9 @@ async def test_an_administrator_registers_a_server_and_it_is_pending(
     assert body["stale"] is None
     assert body["health"]["state"] is None
     assert body["health"]["data_state"] == "not_configured"
-    assert body["open_alerts"]["counts"] is None
+    # M3.3: a real count, and a host nothing has alerted on has none -- not "unknown".
+    assert body["open_alerts"]["data_state"] == "ok"
+    assert body["open_alerts"]["counts"] == {"critical": 0, "warning": 0}
     assert body["management_capabilities"]["capabilities"] is None
 
 

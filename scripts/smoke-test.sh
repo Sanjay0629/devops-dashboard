@@ -71,6 +71,7 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 
 cleanup() {
   rm -f "$JAR"
+  rm -rf infra/prometheus/rules-smoke
   if [[ "${KEEP_STACK:-0}" != "1" ]]; then
     log "Tearing down"
     "${ALL_PROFILES[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
@@ -246,9 +247,20 @@ log "18. Prometheus scrapes the host exporter and the templates query it (§11.8
 # the code path the API will use — not a curl that happens to produce the same
 # JSON. It also proves DCP_PROMETHEUS_URL is reaching the backend, which is
 # the half scripts/check_env_example.py structurally cannot check (issue 54).
-"${OBSERVABILITY[@]}" up -d --wait --wait-timeout "$TIMEOUT_SECONDS" prometheus node-exporter \
-  || { "${OBSERVABILITY[@]}" logs --tail=50 prometheus node-exporter
-       fail "prometheus/node-exporter did not become healthy"; }
+# M3.3 (OPEN-46). The alert rules are generated from the threshold settings, so this run
+# generates them with ITS thresholds (a host silent for 45 s, not 5 minutes) rather than
+# editing the committed file. They are generated inside the backend image, the code under
+# test, and Prometheus mounts them in place of the committed ones via ALERT_RULES_DIR.
+mkdir -p infra/prometheus/rules-smoke
+"${COMPOSE[@]}" run --rm --no-deps -T backend python - --output - < scripts/gen_alert_rules.py \
+  > infra/prometheus/rules-smoke/dcp-alerts.yml \
+  || fail "could not generate the alert rules"
+grep -q 'alert: HostNotReporting' infra/prometheus/rules-smoke/dcp-alerts.yml \
+  || fail "the generated rule file has no HostNotReporting rule"
+export ALERT_RULES_DIR=../prometheus/rules-smoke
+"${OBSERVABILITY[@]}" up -d --wait --wait-timeout "$TIMEOUT_SECONDS" prometheus node-exporter alertmanager \
+  || { "${OBSERVABILITY[@]}" logs --tail=50 prometheus node-exporter alertmanager
+       fail "prometheus/node-exporter/alertmanager did not become healthy"; }
 
 # M2.3 (OPEN-14). The exporter is NOT in prometheus.yml any more: a target gets
 # there only because a server was registered, which is the acceptance criterion
@@ -1026,6 +1038,45 @@ until [ "$(docker inspect --format '{{.State.Health.Status}}' "$("${LOGS[@]}" ps
 done
 smoke_api recovered || fail "the log API did not recover after Loki came back"
 
+log "18g. Alerting end to end: a real rule, a real Alertmanager, the webhook, an alert row (M3.3)"
+# 18f's session may be old by now (18b-18f outlast the 30-minute idle timeout), so log in
+# again: a 401 here would be about the harness and not about the API.
+authorize_url="$(hop "$FRONTEND/api/v1/auth/login?next=/dashboard")"
+callback_url="$(hop "${authorize_url}&user=admin")"
+hop "$callback_url" >/dev/null
+[[ "$(api /auth/session)" == *"$ADMIN_EMAIL"* ]] || fail "could not log in again for step 18g"
+session_cookie="$(grep -E '[[:space:]]dcp_session[[:space:]]' "$JAR" | awk '{print $NF}')"
+csrf="$(grep dcp_csrf "$JAR" | awk '{print $NF}')"
+[[ -n "$session_cookie" && -n "$csrf" ]] || fail "no session or CSRF cookie in the jar"
+smoke_alerts() {
+  "${LOGS[@]}" exec -T -e "SMOKE_COOKIE=dcp_session=$session_cookie; dcp_csrf=$csrf" \
+    -e "SMOKE_CSRF=$csrf" -e "SMOKE_ORIGIN=$FRONTEND" \
+    -e "SMOKE_WEBHOOK_SECRET=${DCP_ALERT_WEBHOOK_SECRET:-local-development-alert-webhook-secret-0123456789}" \
+    sample-logs python - "$1" < scripts/smoke_alerts.py
+}
+alert_diagnostics() {
+  "${OBSERVABILITY[@]}" logs --tail=40 alertmanager prometheus
+  "${COMPOSE[@]}" logs --tail=40 backend
+}
+# The exporter is up here (18a left it running), so nothing is wrong yet.
+smoke_alerts pipeline || { alert_diagnostics; fail "the alerting pipeline assertions failed"; }
+
+"${OBSERVABILITY[@]}" stop node-exporter >/dev/null
+smoke_alerts down || { "${OBSERVABILITY[@]}" start node-exporter >/dev/null; alert_diagnostics
+                       fail "a stopped exporter did not become an alert row"; }
+"${OBSERVABILITY[@]}" start node-exporter >/dev/null
+smoke_alerts recovered || { alert_diagnostics; fail "the alert was not resolved by the source"; }
+
+# An unreachable Alertmanager must be SAID on the integration page, not read as quiet.
+"${OBSERVABILITY[@]}" stop alertmanager >/dev/null
+smoke_alerts outage || { "${OBSERVABILITY[@]}" start alertmanager >/dev/null
+                         fail "a stopped Alertmanager was not reported"; }
+"${OBSERVABILITY[@]}" start alertmanager >/dev/null
+until [ "$(docker inspect --format '{{.State.Health.Status}}' "$("${OBSERVABILITY[@]}" ps -q alertmanager)")" = "healthy" ]; do
+  sleep 3
+done
+smoke_alerts restored || { alert_diagnostics; fail "the Alertmanager row did not recover"; }
+
 log "19. A database outage degrades honestly, with no zeros (§11.10)"
 "${COMPOSE[@]}" stop postgres >/dev/null
 # Poll rather than sleep: the readiness probe has its own per-check deadline,
@@ -1078,4 +1129,5 @@ printf 'Covered docs/TESTING.md §11 steps 1-12. Step 8: the Prometheus half is\
 printf '  asserted (step 18), and so is Loki accepting a push and returning it\n'
 printf '  (step 18c). Alloy shipping the sample logs through to Loki is step 18d,\n'
 printf '  a real systemd journal is step 18e, and the log search API against that real\n'
-printf '  pipeline and Loki (including an outage) is step 18f.\n'
+printf '  pipeline and Loki (including an outage) is step 18f. Alerting through a real\n'
+printf '  rule file, Prometheus and Alertmanager into the webhook is step 18g.\n'

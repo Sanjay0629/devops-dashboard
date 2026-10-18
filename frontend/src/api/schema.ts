@@ -167,6 +167,80 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/alerts': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List alerts
+     * @description Scope-filtered, newest activity first. Alert text is untrusted: render it as text.
+     */
+    get: operations['list_alerts_api_v1_alerts_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/alerts/{alert_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Alert detail and history */
+    get: operations['get_alert_api_v1_alerts__alert_id__get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/alerts/{alert_id}/acknowledge': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Acknowledge an alert
+     * @description FIRING only. **Never marks the problem resolved**: only the source does that.
+     */
+    post: operations['acknowledge_alert_api_v1_alerts__alert_id__acknowledge_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/alerts/{alert_id}/assign': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Assign an alert to a user, or unassign it */
+    post: operations['assign_alert_api_v1_alerts__alert_id__assign_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/applications': {
     parameters: {
       query?: never;
@@ -679,6 +753,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/webhooks/alerts': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Alertmanager ingress (shared secret, not a session)
+     * @description Store what Alertmanager says is firing or resolved, as text, deduplicated.
+     */
+    post: operations['receive_alerts_api_v1_webhooks_alerts_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/healthz': {
     parameters: {
       query?: never;
@@ -726,7 +820,19 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
-    /** ActiveAlertsSection */
+    /** AcknowledgeRequest */
+    AcknowledgeRequest: {
+      /** Note */
+      note?: string | null;
+    };
+    /**
+     * ActiveAlertsSection
+     * @description Open alerts by severity, from PostgreSQL (M3.3), scoped to what the caller may read.
+     *
+     *     ``pipeline`` says whether the alerting pipeline has been *confirmed* by the always-firing
+     *     watchdog (``app/alerts/status.py``): counts of ``0`` beside ``not_confirmed`` mean "cannot
+     *     tell", never "all clear" (PRD §3). ``null`` when no Alertmanager is configured.
+     */
     ActiveAlertsSection: {
       /** Collected At */
       collected_at?: string | null;
@@ -739,6 +845,8 @@ export interface components {
       data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
       /** Info */
       info?: number | null;
+      /** Pipeline */
+      pipeline?: ('confirmed' | 'not_confirmed' | 'unknown') | null;
       /** Source */
       source?: string | null;
       /** Stale After Seconds */
@@ -747,6 +855,149 @@ export interface components {
       unavailable_reason?: string | null;
       /** Warning */
       warning?: number | null;
+    };
+    /**
+     * AlertDetail
+     * @description §20.2: the row, its own timeline and its recurrences.
+     */
+    AlertDetail: {
+      /** Acknowledged At */
+      acknowledged_at: string | null;
+      acknowledged_by: components['schemas']['UserRef'] | null;
+      /**
+       * Alert Id
+       * Format: uuid
+       */
+      alert_id: string;
+      assigned_to: components['schemas']['UserRef'] | null;
+      /** Details */
+      details: {
+        [key: string]: unknown;
+      };
+      /** Environment */
+      environment: string | null;
+      /**
+       * First Seen At
+       * Format: date-time
+       */
+      first_seen_at: string;
+      /** History */
+      history: components['schemas']['HistoryEntry'][];
+      /**
+       * Last Seen At
+       * Format: date-time
+       */
+      last_seen_at: string;
+      links: components['schemas']['AlertLinks'];
+      /** Occurrence Count */
+      occurrence_count: number;
+      /** Previous Occurrences */
+      previous_occurrences: components['schemas']['PreviousOccurrence'][];
+      /** Resolved At */
+      resolved_at: string | null;
+      /** Rule Name */
+      rule_name: string | null;
+      /**
+       * Severity
+       * @enum {string}
+       */
+      severity: 'INFO' | 'WARNING' | 'CRITICAL';
+      /**
+       * Source
+       * @enum {string}
+       */
+      source:
+        | 'PROMETHEUS'
+        | 'DCP_HEALTH_CHECK'
+        | 'DCP_OPERATION'
+        | 'DCP_DEPLOYMENT'
+        | 'DCP_SYSTEM'
+        | 'MANUAL';
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'FIRING' | 'ACKNOWLEDGED' | 'RESOLVED' | 'EXPIRED';
+      /** Summary */
+      summary: string;
+      target: components['schemas']['TargetRef'] | null;
+    };
+    /**
+     * AlertLinks
+     * @description API routes of what the alert is about (PRD §4.8 "links to affected ...").
+     */
+    AlertLinks: {
+      /** Server */
+      server?: string | null;
+      /** Service */
+      service?: string | null;
+    };
+    /** AlertList */
+    AlertList: {
+      coverage: components['schemas']['ConditionCoverage'];
+      /** Demo Mode */
+      demo_mode: boolean;
+      /** Items */
+      items: components['schemas']['AlertSummary'][];
+      page: components['schemas']['CursorPage'];
+    };
+    /**
+     * AlertSummary
+     * @description A list row (§20.1). Alert text is untrusted: render it as text.
+     */
+    AlertSummary: {
+      /** Acknowledged At */
+      acknowledged_at: string | null;
+      acknowledged_by: components['schemas']['UserRef'] | null;
+      /**
+       * Alert Id
+       * Format: uuid
+       */
+      alert_id: string;
+      assigned_to: components['schemas']['UserRef'] | null;
+      /** Environment */
+      environment: string | null;
+      /**
+       * First Seen At
+       * Format: date-time
+       */
+      first_seen_at: string;
+      /**
+       * Last Seen At
+       * Format: date-time
+       */
+      last_seen_at: string;
+      links: components['schemas']['AlertLinks'];
+      /** Occurrence Count */
+      occurrence_count: number;
+      /** Resolved At */
+      resolved_at: string | null;
+      /** Rule Name */
+      rule_name: string | null;
+      /**
+       * Severity
+       * @enum {string}
+       */
+      severity: 'INFO' | 'WARNING' | 'CRITICAL';
+      /**
+       * Source
+       * @enum {string}
+       */
+      source:
+        | 'PROMETHEUS'
+        | 'DCP_HEALTH_CHECK'
+        | 'DCP_OPERATION'
+        | 'DCP_DEPLOYMENT'
+        | 'DCP_SYSTEM'
+        | 'MANUAL';
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'FIRING' | 'ACKNOWLEDGED' | 'RESOLVED' | 'EXPIRED';
+      /** Summary */
+      summary: string;
+      target: components['schemas']['TargetRef'] | null;
     };
     /**
      * ApplicationCreateRequest
@@ -914,6 +1165,16 @@ export interface components {
       status?: ('ACTIVE' | 'ARCHIVED') | null;
     };
     /**
+     * AssignRequest
+     * @description ``assignee_id`` ``null`` unassigns.
+     */
+    AssignRequest: {
+      /** Assignee Id */
+      assignee_id: string | null;
+      /** Note */
+      note?: string | null;
+    };
+    /**
      * AssociateApplicationRequest
      * @description §14.6.
      */
@@ -1020,6 +1281,18 @@ export interface components {
             | 'unsupported_os'
           )
         | null;
+    };
+    /**
+     * ConditionCoverage
+     * @description What this milestone produces alerts for, and what it does not yet (``OPEN-40``).
+     */
+    ConditionCoverage: {
+      /** Not Produced Yet */
+      not_produced_yet: {
+        [key: string]: string;
+      }[];
+      /** Produced */
+      produced: string[];
     };
     /**
      * CreateUserRequest
@@ -1299,6 +1572,25 @@ export interface components {
       state?: ('healthy' | 'warning' | 'critical' | 'stale' | 'unreachable' | 'unknown') | null;
       /** Unavailable Reason */
       unavailable_reason?: string | null;
+    };
+    /** HistoryEntry */
+    HistoryEntry: {
+      /** Actor */
+      actor?: string | null;
+      /**
+       * At
+       * Format: date-time
+       */
+      at: string;
+      /**
+       * Event
+       * @enum {string}
+       */
+      event: 'first_seen' | 'acknowledged' | 'assigned' | 'unassigned' | 'resolved' | 'expired';
+      /** Note */
+      note?: string | null;
+      /** Subject */
+      subject?: string | null;
     };
     /**
      * IntegrationStatus
@@ -1736,6 +2028,36 @@ export interface components {
         | 'disk_full';
       /** Label */
       label: string;
+    };
+    /**
+     * PreviousOccurrence
+     * @description An earlier, closed alert for the same condition on the same target.
+     */
+    PreviousOccurrence: {
+      /**
+       * Alert Id
+       * Format: uuid
+       */
+      alert_id: string;
+      /**
+       * First Seen At
+       * Format: date-time
+       */
+      first_seen_at: string;
+      /**
+       * Last Seen At
+       * Format: date-time
+       */
+      last_seen_at: string;
+      /** Occurrence Count */
+      occurrence_count: number;
+      /** Resolved At */
+      resolved_at: string | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'FIRING' | 'ACKNOWLEDGED' | 'RESOLVED' | 'EXPIRED';
     };
     /** QueryStats */
     QueryStats: {
@@ -2645,6 +2967,24 @@ export interface components {
       /** Idle Timeout Seconds */
       idle_timeout_seconds: number;
     };
+    /**
+     * TargetRef
+     * @description The row an alert is about, **as found by lookup** (``OPEN-45``), never as labelled.
+     */
+    TargetRef: {
+      /** Display Name */
+      display_name: string | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Type
+       * @enum {string}
+       */
+      type: 'server' | 'service' | 'application' | 'deployment' | 'operation';
+    };
     /** TerminateSessionsResponse */
     TerminateSessionsResponse: {
       /** Terminated */
@@ -2704,6 +3044,19 @@ export interface components {
       items: components['schemas']['UserSummary'][];
       page: components['schemas']['OffsetPage'];
     };
+    /**
+     * UserRef
+     * @description Who, by name. No email: an operator needs to know whom, not how to reach them.
+     */
+    UserRef: {
+      /** Display Name */
+      display_name: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+    };
     /** UserSummary */
     UserSummary: {
       /**
@@ -2761,6 +3114,34 @@ export interface components {
       msg: string;
       /** Error Type */
       type: string;
+    };
+    /**
+     * WebhookAlertResult
+     * @description What happened to one alert of a delivery. Never echoes alert content.
+     */
+    WebhookAlertResult: {
+      /** Accepted */
+      accepted: boolean;
+      /** Action */
+      action?: ('created' | 'updated' | 'resolved' | 'ignored' | 'watchdog') | null;
+      /** Index */
+      index: number;
+      /** Reason */
+      reason?: ('malformed' | 'unknown_rule' | 'overflow' | 'database_rejected') | null;
+    };
+    /**
+     * WebhookResponse
+     * @description The ``202`` body (§20.5): per-alert accept/reject, so one bad alert rejects only itself.
+     */
+    WebhookResponse: {
+      /** Accepted */
+      accepted: number;
+      /** Rejected */
+      rejected: number;
+      /** Results */
+      results: components['schemas']['WebhookAlertResult'][];
+      /** Truncated By Sender */
+      truncated_by_sender: number;
     };
   };
   responses: never;
@@ -3064,6 +3445,147 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['TerminateSessionsResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_alerts_api_v1_alerts_get: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string | null;
+        status?: ('FIRING' | 'ACKNOWLEDGED' | 'RESOLVED' | 'EXPIRED')[] | null;
+        severity?: ('INFO' | 'WARNING' | 'CRITICAL')[] | null;
+        environment?: ('development' | 'staging' | 'production' | 'other')[] | null;
+        target_type?: string | null;
+        target_id?: string | null;
+        from?: string | null;
+        to?: string | null;
+        q?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AlertList'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  get_alert_api_v1_alerts__alert_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        alert_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AlertDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  acknowledge_alert_api_v1_alerts__alert_id__acknowledge_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        alert_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AcknowledgeRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AlertDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  assign_alert_api_v1_alerts__alert_id__assign_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        alert_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AssignRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AlertDetail'];
         };
       };
       /** @description Validation Error */
@@ -4175,6 +4697,61 @@ export interface operations {
         content: {
           'application/json': components['schemas']['HTTPValidationError'];
         };
+      };
+    };
+  };
+  receive_alerts_api_v1_webhooks_alerts_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WebhookResponse'];
+        };
+      };
+      /** @description Missing or wrong shared secret. */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Source address not allowed. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Body over the ceiling. */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Rate limited; Alertmanager re-sends at its group interval. */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description No shared secret is configured. */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
     };
   };

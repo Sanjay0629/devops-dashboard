@@ -1,0 +1,44 @@
+# Alertmanager for the development stack (M3.3, OPEN-47).
+#
+# Alertmanager's whole job here is to group and deduplicate what Prometheus fires and POST
+# it to DCP's webhook. **It has no external receivers**: delivery to email, Teams or Slack is
+# DCP's own `notifications` queue (M3.4, OPEN-13), driven by the channel tables, so the
+# destinations stay registered configuration that DCP checks (AD-20) rather than a second
+# copy of them in this file.
+#
+# The webhook shared secret is NOT in this file. The Compose service writes it from
+# DCP_ALERT_WEBHOOK_SECRET to a file at start-up and `credentials_file` reads it, so the
+# secret has exactly one source and never sits in version control.
+#
+# Measured against a real Alertmanager 0.27 in the M3.3 spike, and relevant here:
+#   * `credentials_file` sends `Authorization: Bearer <contents>`.
+#   * `max_alerts` silently drops the excess and says so only in the payload's
+#     `truncatedAlerts`; DCP's own per-request cap is the same number (100).
+#   * A 4xx/5xx is re-sent every `group_interval` until accepted, so DCP answers 202 to a
+#     delivery with a bad *alert* in it and reserves 4xx for what only a misconfiguration
+#     causes.
+#   * Resolved notifications are only sent if `send_resolved` is true.
+#
+# `repeat_interval` is 1h and DCP expires an open alert not refreshed for three of them
+# (app/alerts/lifecycle.py EXPIRE_AFTER_SECONDS): change one, change both.
+#
+# No inhibit rules, on purpose: warning and critical rules are mutually exclusive by
+# construction (OPEN-41), so there is nothing to inhibit and nothing hidden from the webhook.
+
+route:
+  receiver: dcp
+  group_by: [alertname, server_id]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 1h
+
+receivers:
+  - name: dcp
+    webhook_configs:
+      - url: http://backend:8000/api/v1/webhooks/alerts
+        send_resolved: true
+        max_alerts: 100
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /tmp/dcp-webhook-secret

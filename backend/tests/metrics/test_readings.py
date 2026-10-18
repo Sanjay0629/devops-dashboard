@@ -96,6 +96,31 @@ async def test_a_current_value_carries_its_scrape_time_and_threshold_state() -> 
     assert result.source == "prometheus"
 
 
+async def test_a_reading_uses_its_environments_lines_the_alert_rules_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OPEN-46: a card that says `warning` and an alert that fires share one set of numbers."""
+    monkeypatch.setenv(
+        "DCP_UTILISATION_THRESHOLDS",
+        '{"production": {"cpu_utilisation": {"warning": 70, "critical": 85}}}',
+    )
+    get_settings.cache_clear()
+    fake = FakePrometheus()
+    serve(fake, "cpu_utilisation", "75")
+
+    production = await readings.current(
+        server(environment="production"), only("cpu_utilisation"), client=client_for(fake)
+    )
+    staging = await readings.current(
+        server(environment="staging"), only("cpu_utilisation"), client=client_for(fake)
+    )
+
+    assert production.metrics[0].threshold_state == "warning"
+    assert production.thresholds == {"cpu_utilisation": {"warning": 70.0, "critical": 85.0}}
+    assert staging.metrics[0].threshold_state == "normal"  # 75 < the shipped 80
+    assert staging.thresholds == {"cpu_utilisation": {"warning": 80.0, "critical": 90.0}}
+
+
 async def test_a_template_without_a_threshold_has_no_state_and_no_entry() -> None:
     fake = FakePrometheus()
     serve(fake, "load_average", "3.2")

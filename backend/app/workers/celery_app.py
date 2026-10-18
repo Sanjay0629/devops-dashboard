@@ -89,9 +89,16 @@ def create_celery_app() -> Celery:
             },
             # Daily is ample for a three-month runway, and the task is
             # idempotent so a missed run costs nothing (M1.2).
-            "ensure-audit-partitions": {
-                "task": "dcp.maintenance.ensure_audit_partitions",
+            "ensure-partitions": {
+                "task": "dcp.maintenance.ensure_partitions",
                 "schedule": crontab(hour="3", minute="7"),
+                "options": {"queue": "maintenance"},
+            },
+            # M3.3 (OPEN-44). Every five minutes against a three-hour bound: a slow
+            # beat costs a little latency on an expiry, never a wrong one.
+            "expire-alerts": {
+                "task": "dcp.maintenance.expire_alerts",
+                "schedule": 300.0,
                 "options": {"queue": "maintenance"},
             },
         },

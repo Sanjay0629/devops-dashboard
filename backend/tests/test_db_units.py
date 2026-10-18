@@ -97,6 +97,9 @@ class TestModelMetadata:
             "ServiceActionPolicy",
             "ApprovalPolicy",
             "AuditEvent",
+            # M3.3: the alert lifecycle and its one-open-row arbiter (OPEN-42).
+            "AlertEvent",
+            "AlertOpenKey",
             # M1.4: the durable read-only switch (docs/SECURITY.md §27).
             "SystemSetting",
         }
@@ -174,10 +177,13 @@ class TestModelMetadata:
 
     @pytest.mark.parametrize(
         "table",
-        ["operations", "deployments", "approvals", "alert_events"],
+        ["operations", "deployments", "approvals", "notification_deliveries"],
     )
     def test_history_tables_are_not_created_early(self, table: str) -> None:
-        """These arrive with the milestones that write to them (M4, M3)."""
+        """These arrive with the milestones that write to them (M4, M3.4).
+
+        ``alert_events`` left this list when M3.3 created it.
+        """
         assert table not in Base.metadata.tables
 
 

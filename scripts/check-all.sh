@@ -55,6 +55,23 @@ run "frontend: npm audit"     bash -c 'cd frontend && npm audit --audit-level=hi
 # tree ready to commit — which is the fix, not a side effect.
 run "contracts: api types"    bash -c './scripts/generate-api-types.sh >/dev/null && git diff --exit-code -- frontend/src/api/schema.ts'
 run "config: .env.example"    bash -c 'cd backend && uv run python ../scripts/check_env_example.py'
+# OPEN-46: the Prometheus rule file is generated from DCP_UTILISATION_THRESHOLDS and
+# DCP_HEALTH_THRESHOLDS, so a committed copy that disagrees with the generator is a
+# second copy of the numbers. Regenerate with the command the failure prints.
+run "alerts: rule file current" bash -c 'cd backend && uv run python ../scripts/gen_alert_rules.py --check'
+# promtool ships in the Prometheus image, so these need Docker. Skipped LOUDLY (not
+# silently passed) where Docker is missing, like the integration suite above.
+if docker info >/dev/null 2>&1; then
+  PROM_IMAGE="${PROM_IMAGE:-prom/prometheus:v3.0.1}"
+  run "alerts: promtool check rules" bash -c "MSYS_NO_PATHCONV=1 docker run --rm --entrypoint promtool -v \"\$(pwd -W 2>/dev/null || pwd)/infra/prometheus:/p:ro\" $PROM_IMAGE check rules /p/rules/dcp-alerts.yml"
+  run "alerts: promtool test rules"  bash -c "MSYS_NO_PATHCONV=1 docker run --rm --entrypoint promtool -v \"\$(pwd -W 2>/dev/null || pwd)/infra/prometheus:/p:ro\" $PROM_IMAGE test rules /p/tests/dcp-alerts.test.yml"
+else
+  printf '
+=== alerts: promtool
+    SKIPPED — Docker is not available
+'
+  skipped+=("alerts: promtool (no Docker)")
+fi
 
 # OPEN-22's floor is on CHANGED code, not on a total (docs/TESTING.md §19), so
 # it needs something to diff against. BASE_REF defaults to origin/main, which

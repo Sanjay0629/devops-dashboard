@@ -58,6 +58,16 @@ const APPEARANCE: Record<string, { glyph: string; label: string; colour: string 
   UNCOLLECTED: { glyph: '∅', label: 'Not collected', colour: 'var(--c-stale)' },
   UNSUPPORTED: { glyph: '—', label: 'Not supported', colour: 'var(--c-unknown)' },
 
+  // Alert severity and status (§20, M3.3). `ACKNOWLEDGED` is drawn as open-but-taken, never
+  // as resolved (PRD §4.8); `EXPIRED` is *unconfirmed*, a different fact from `RESOLVED`.
+  CRITICAL: { glyph: '■', label: 'Critical', colour: 'var(--c-critical)' },
+  WARNING: { glyph: '▲', label: 'Warning', colour: 'var(--c-warning)' },
+  INFO: { glyph: '●', label: 'Info', colour: 'var(--c-unknown)' },
+  FIRING: { glyph: '■', label: 'Firing', colour: 'var(--c-critical)' },
+  ACKNOWLEDGED: { glyph: '◆', label: 'Acknowledged (still open)', colour: 'var(--c-warning)' },
+  RESOLVED: { glyph: '●', label: 'Resolved', colour: 'var(--c-healthy)' },
+  EXPIRED: { glyph: '◌', label: 'Expired (not confirmed)', colour: 'var(--c-stale)' },
+
   // Application status.
   ACTIVE: { glyph: '●', label: 'Active', colour: 'var(--c-healthy)' },
   ARCHIVED: { glyph: '—', label: 'Archived', colour: 'var(--c-unknown)' },
