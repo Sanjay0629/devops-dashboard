@@ -540,7 +540,7 @@ Append-only (AD-11, [SECURITY.md §18](SECURITY.md#18-audit-logging-and-audit-pr
 |---|---|---|---|
 | `id` | `uuid` | PK part | |
 | `first_seen_at` | `timestamptz` | PK part, NOT NULL | Partition key |
-| `source` | `text` | NOT NULL, CHECK in (`PROMETHEUS`,`DCP_HEALTH_CHECK`,`DCP_OPERATION`,`DCP_DEPLOYMENT`,`MANUAL`) | |
+| `source` | `text` | NOT NULL, CHECK in (`PROMETHEUS`,`DCP_HEALTH_CHECK`,`DCP_OPERATION`,`DCP_DEPLOYMENT`,`DCP_SYSTEM`,`MANUAL`) | `DCP_SYSTEM` added 2026-10-18 (`OPEN-40`): DCP's own self-monitoring (the partition-runway monitor), which is none of the others |
 | `dedup_key` | **†** `text` | NOT NULL | Fingerprint from source + labels. **Required by PRD §4.8 "deduplication and grouping"**, which PRD §6's columns cannot express |
 | `rule_name` | **†** `text` | NULL | |
 | `target_type` | `text` | NULL | Polymorphic |
@@ -558,7 +558,8 @@ Append-only (AD-11, [SECURITY.md §18](SECURITY.md#18-audit-logging-and-audit-pr
 | `resolved_at` | `timestamptz` | NULL | |
 | `created_at` / `updated_at` | `timestamptz` | NOT NULL | |
 
-- `UNIQUE (dedup_key, first_seen_at) WHERE status IN ('FIRING','ACKNOWLEDGED')` — a repeat occurrence increments `occurrence_count` and `last_seen_at` on the open row instead of inserting a new one.
+- ~~`UNIQUE (dedup_key, first_seen_at) WHERE status IN ('FIRING','ACKNOWLEDGED')`~~ **— corrected 2026-10-18 (`OPEN-42`).** PostgreSQL requires a unique index on a partitioned table to include the partition key, so that index is satisfied by two open rows with different `first_seen_at` and **does not enforce one open row per `dedup_key`**. The invariant lives in a small unpartitioned table, `alert_open_keys(dedup_key PRIMARY KEY, alert_id, first_seen_at)`: ingestion inserts the key with `ON CONFLICT (dedup_key) DO NOTHING`; a new row means "insert the event", a conflict means "update the open event it points at" (increment `occurrence_count`, set `last_seen_at`). Resolve and expire delete the key in the same transaction that closes the event. `alert_events` keeps a plain (non-unique) partial index on `(dedup_key) WHERE status IN ('FIRING','ACKNOWLEDGED')` for reads.
+- `dedup_key` is computed by DCP, not taken from Alertmanager (`OPEN-41`): `sha256(source, rule_name, resolved target id, the rule's closed discriminator labels)`. Severity is part of `rule_name`, so a warning and a critical for one condition are never one row.
 - `CHECK ((status = 'ACKNOWLEDGED') <= (acknowledged_by IS NOT NULL))` expressed as `CHECK (status <> 'ACKNOWLEDGED' OR acknowledged_by IS NOT NULL)`.
 - **Acknowledgement never implies resolution** (PRD §4.8): `status='ACKNOWLEDGED'` leaves `resolved_at` NULL, and only the source (or an explicit resolve action) sets `RESOLVED`. The schema keeps the two independent, and a test asserts it.
 - Resolved alerts are retained with their history (PRD §4.8). Partitioned monthly by `first_seen_at`.
@@ -660,7 +661,7 @@ Rules: a transaction never spans an external call — no provider, Jenkins, Prom
 | Two workers claim one row | Guarded conditional `UPDATE`; loser exits |
 | Two approvers decide simultaneously | `uq_approvals_one_decision_per_approver` + guarded parent update; the first decision wins, the second gets `409` |
 | Duplicate server registration | `uq_servers_account_resource` |
-| Concurrent alert occurrences | Open-row unique index + `INSERT ... ON CONFLICT DO UPDATE` incrementing `occurrence_count` |
+| Concurrent alert occurrences | `alert_open_keys` primary key + `INSERT ... ON CONFLICT (dedup_key) DO NOTHING`, then update the open event it names (§9.1, `OPEN-42`) |
 | Concurrent inventory sync runs | Advisory lock per `cloud_account_id`; a second run skips with a log line |
 | Concurrent edits to the same row | Optimistic concurrency via `updated_at` precondition on `PATCH`; mismatch ⇒ `409 conflict` |
 | Retention and partition maintenance | Serialised `maintenance` queue + advisory lock |
