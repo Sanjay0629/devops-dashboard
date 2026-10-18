@@ -17,6 +17,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import get_settings
 from app.db.base import Base, all_models
+from app.db.partitions import PARTITIONED_TABLES
 
 # Import every model so Base.metadata is complete before autogenerate runs.
 all_models()
@@ -45,12 +46,16 @@ def _database_url() -> str:
 def _include_object(
     obj: object, name: str | None, type_: str, reflected: bool, compare_to: object
 ) -> bool:
-    """Keep audit partitions out of autogenerate.
+    """Keep partitions out of autogenerate.
 
     Partitions are created by a maintenance job, not by migrations, so
     autogenerate must not propose dropping the ones it finds in the database.
     """
-    return not (type_ == "table" and name is not None and name.startswith("audit_events_"))
+    return not (
+        type_ == "table"
+        and name is not None
+        and name.startswith(tuple(f"{table}_" for table in PARTITIONED_TABLES))
+    )
 
 
 def run_migrations_offline() -> None:

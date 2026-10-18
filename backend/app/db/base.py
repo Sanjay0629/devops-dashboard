@@ -99,6 +99,7 @@ def all_models() -> list[type[Any]]:
     importing the models lazily here keeps that in one place instead of relying
     on import side effects elsewhere.
     """
+    import app.alerts.models
     import app.approvals.models
     import app.audit.models
     import app.auth.models

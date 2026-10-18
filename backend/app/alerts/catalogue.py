@@ -66,6 +66,16 @@ RULES: Final[tuple[AlertRule, ...]] = (
 
 BY_NAME: Final[dict[str, AlertRule]] = {rule.name: rule for rule in RULES}
 
+#: DCP's own self-monitoring (``source = DCP_SYSTEM``, ``OPEN-40``), raised by the
+#: maintenance task rather than by Prometheus. Deliberately **not** in :data:`RULES`:
+#: the webhook only accepts the Prometheus catalogue, so no payload can forge one of these.
+SYSTEM_RULES: Final[tuple[AlertRule, ...]] = (
+    AlertRule("PartitionRunwayLow", "partition_runway", "WARNING", discriminators=("table",)),
+    AlertRule(
+        "PartitionRunwayExhausted", "partition_runway", "CRITICAL", discriminators=("table",)
+    ),
+)
+
 #: PRD §4.8 conditions DCP has no producer for yet (``OPEN-40``). Listed so the UI and
 #: the status row can say so instead of implying they are monitored.
 NOT_PRODUCED_YET: Final[tuple[tuple[str, str], ...]] = (

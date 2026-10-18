@@ -9,10 +9,13 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, inspect, text
 
 from app.db.base import Base, all_models
+from app.db.partitions import PARTITIONED_TABLES
 from tests.integration.conftest import _drop_everything
 
 EXPECTED_TABLES = {
     "alembic_version",
+    "alert_events",
+    "alert_open_keys",
     "application_servers",
     "applications",
     "approval_policies",
@@ -71,7 +74,11 @@ def test_autogenerate_detects_no_drift(migrated: Engine, alembic_config: Config)
                 "compare_server_default": False,
                 # Partitions are maintenance-managed, not migration-managed.
                 "include_object": lambda obj, name, type_, reflected, compare_to: (
-                    not (type_ == "table" and name is not None and name.startswith("audit_events_"))
+                    not (
+                        type_ == "table"
+                        and name is not None
+                        and name.startswith(tuple(f"{t}_" for t in PARTITIONED_TABLES))
+                    )
                 ),
             },
         )

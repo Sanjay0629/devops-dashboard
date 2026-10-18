@@ -251,6 +251,8 @@ async def _clear_namespace() -> None:
         # else's totals — which is the very failure the cache-key tests exist
         # to detect, arriving as a flake instead.
         "dcp:dashboard:*",
+        # M3.3: the alert pipeline's last-seen times and refusal counters.
+        "dcp:alerts:*",
     ):
         keys = [key async for key in client.scan_iter(match=pattern, count=500)]
         if keys:

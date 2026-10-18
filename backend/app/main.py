@@ -23,6 +23,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.admin.router import router as admin_router
+from app.alerts.webhook import router as alert_webhook_router
 from app.auth.router import router as auth_router
 from app.core.config import Settings, get_settings
 from app.core.csrf import CsrfMiddleware
@@ -85,7 +86,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
     # Inside CORS, outside the routes: a state-changing request is rejected
     # before any handler or database session is created (docs/SECURITY.md §11).
-    app.add_middleware(CsrfMiddleware, allowed_origins=settings.cors_origins)
+    # The one exemption: the Alertmanager webhook is not browser-originated and
+    # authenticates itself with a shared secret (app/alerts/webhook.py). Exact path, so
+    # nothing under it inherits the exemption; a test fails if another path appears.
+    app.add_middleware(
+        CsrfMiddleware,
+        allowed_origins=settings.cors_origins,
+        exempt_paths=frozenset({f"{settings.api_base_path}/webhooks/alerts"}),
+    )
     app.add_middleware(CorrelationIdMiddleware)
 
     register_exception_handlers(app)
@@ -106,6 +114,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # §19.1 and §19.2 (M3.2). Mounted even with no Loki configured: they answer
     # 503 not_configured rather than disappearing.
     app.include_router(logs_router, prefix=settings.api_base_path)
+    # §20.5 (M3.3). Mounted even with no secret configured: it answers 503
+    # not_configured rather than disappearing.
+    app.include_router(alert_webhook_router, prefix=settings.api_base_path)
 
     return app
 

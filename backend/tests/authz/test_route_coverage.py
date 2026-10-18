@@ -39,14 +39,15 @@ from app.authz.dependencies import PERMISSION_ATTRIBUTE
 #: "session" means authenticated but permission-free: the endpoint answers
 #: about the caller themselves, so identity *is* the authorisation.
 #:
-#: ``POST /api/v1/webhooks/alerts`` is the fourth public endpoint in §2 and is
-#: absent only because alert ingestion does not exist yet (M3.1). It joins this
-#: list, as "public", when it does.
+#: ``POST /api/v1/webhooks/alerts`` is the fourth public endpoint in §2 (M3.3). It has
+#: no session and no permission; it authenticates with a shared secret, a source
+#: address and a rate limit, and ``tests/alerts/test_webhook_unit.py`` pins those.
 EXCEPTIONS: Final[dict[tuple[str, str], str]] = {
     ("GET", "/healthz"): "public",
     ("GET", "/readyz"): "public",
     ("GET", "/api/v1/auth/login"): "public",
     ("GET", "/api/v1/auth/callback"): "public",
+    ("POST", "/api/v1/webhooks/alerts"): "public",
     ("POST", "/api/v1/auth/logout"): "session",
     ("GET", "/api/v1/auth/session"): "session",
 }
