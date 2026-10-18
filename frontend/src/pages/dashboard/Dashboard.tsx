@@ -60,6 +60,33 @@ function refreshSeconds(): number {
 }
 
 /**
+ * The alerts card's section, with a reason an operator can read. The API's reason is a code
+ * (`alert_read_not_permitted`); the banner prints the reason it is given.
+ */
+function alertSection(section: DashboardSummary['active_alerts']): DataSection {
+  if (section.unavailable_reason === 'alert_read_not_permitted') {
+    return { ...section, unavailable_reason: 'You do not have permission to read alerts.' };
+  }
+  return section;
+}
+
+/**
+ * What qualifies the number. **A `0` is only good news if something would have told us
+ * otherwise**, so the card says when the alerting pipeline has not been confirmed by the
+ * always-firing watchdog (API `pipeline`): "0" beside that reads "we cannot tell".
+ */
+function alertNote(section: DashboardSummary['active_alerts']): string | undefined {
+  if (section.data_state !== 'ok') return undefined;
+  const parts = [`${String(section.warning ?? 0)} warning`, `${String(section.info ?? 0)} info`];
+  if (section.pipeline === 'not_confirmed') {
+    parts.push('alerting not confirmed: a 0 here means we cannot tell');
+  } else if (section.pipeline === 'unknown') {
+    parts.push('could not check whether alerting is working');
+  }
+  return parts.join(' · ');
+}
+
+/**
  * One summary card.
  *
  * `value` is `number | null` and the `null` branch is the whole reason this
@@ -433,9 +460,11 @@ export function Dashboard(): React.JSX.Element {
               section={summary.value.utilisation}
             />
             <Card
-              label="Active alerts"
+              label="Open critical alerts"
               value={summary.value.active_alerts.critical}
-              section={summary.value.active_alerts}
+              section={alertSection(summary.value.active_alerts)}
+              to="/alerts"
+              note={alertNote(summary.value.active_alerts)}
             />
           </div>
 
@@ -543,8 +572,8 @@ export function Dashboard(): React.JSX.Element {
                   </td>
                   <td>{row.failed_service_count}</td>
                   <td style={{ color: 'var(--c-text-muted)' }}>
-                    {/* Not 0: there is no alerts table to have counted. */}
-                    {row.active_alert_count ?? 'Not configured'}
+                    {/* `null` is "you may not read alerts for this server", never a 0. */}
+                    {row.active_alert_count ?? 'Not permitted'}
                   </td>
                 </tr>
               ))}

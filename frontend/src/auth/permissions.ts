@@ -33,6 +33,10 @@ export const PERMISSIONS = {
   metricsRead: 'metrics:read',
   /** Search application-source logs (§19.1). System sources need `logs:read:system`. */
   logsReadApplication: 'logs:read:application',
+  /** Read alerts (§20.1, §20.2). Scope is checked by the backend, per alert. */
+  alertRead: 'alert:read',
+  /** Acknowledge and assign alerts (§20.3, §20.4). Never resolves one. */
+  alertAcknowledge: 'alert:acknowledge',
   /** Read systemd service state (§16). Scope is checked per server by the backend. */
   serviceRead: 'service:read',
   /** Read server and application inventory. Held by every role. */

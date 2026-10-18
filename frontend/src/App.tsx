@@ -6,6 +6,8 @@ import { SessionProvider } from '@/auth/SessionProvider';
 import { PERMISSIONS, canRender } from '@/auth/permissions';
 import { useIsReadOnly, useSession } from '@/auth/useSession';
 import { Login } from '@/pages/Login';
+import { AlertDetail } from '@/pages/alerts/AlertDetail';
+import { AlertList } from '@/pages/alerts/AlertList';
 import { Dashboard } from '@/pages/dashboard/Dashboard';
 import { ApplicationDetail } from '@/pages/applications/ApplicationDetail';
 import { ApplicationList } from '@/pages/applications/ApplicationList';
@@ -48,6 +50,7 @@ function Navigation(): React.JSX.Element {
     { to: '/compare', label: 'Compare' },
     // Advisory, like every nav decision: the backend answers 403 on its own account.
     ...(canRender(state, PERMISSIONS.logsReadApplication) ? [{ to: '/logs', label: 'Logs' }] : []),
+    ...(canRender(state, PERMISSIONS.alertRead) ? [{ to: '/alerts', label: 'Alerts' }] : []),
     { to: '/applications', label: 'Applications' },
   ];
   return (
@@ -131,9 +134,10 @@ function Shell(): React.JSX.Element {
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M2.5 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
-            service state and host health from Prometheus. Logs, alerting, operations and
-            deployments are not implemented yet, and every section that depends on them says so
+            Milestone M3.3 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
+            service state, host health from Prometheus, log search and alerts (Prometheus rules
+            through Alertmanager, with acknowledge and assign). Notifications, service operations
+            and deployments are not implemented yet, and every section that depends on them says so
             rather than showing a zero.
           </p>
         </div>
@@ -211,6 +215,8 @@ function Shell(): React.JSX.Element {
         <Route path="/services" element={<ServiceList />} />
         <Route path="/compare" element={<Compare />} />
         <Route path="/logs" element={<LogSearch />} />
+        <Route path="/alerts" element={<AlertList />} />
+        <Route path="/alerts/:alertId" element={<AlertDetail />} />
         <Route path="/applications" element={<ApplicationList />} />
         <Route path="/applications/:applicationId" element={<ApplicationDetail />} />
         <Route
