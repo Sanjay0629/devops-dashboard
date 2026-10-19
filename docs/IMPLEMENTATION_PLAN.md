@@ -623,6 +623,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M4.1 — Provider adapter interface and the demo adapter
 
+**Status: in progress (2026-10-19), on branch `phase-M4.1`; nothing built yet.** Plan: [`M4.1_PLAN.md`](M4.1_PLAN.md). Decisions closed before code at the owner's instruction to take the recommended option: `OPEN-58` – `OPEN-66` (and `OPEN-05`), see [ARCHITECTURE.md §19](ARCHITECTURE.md#19-open-decisions). Adjustments to the tasks below, each with its reason in the plan: no §14.8 (moves to M4.3); the "full operation lifecycle" is the adapter lifecycle, the state-machine one is M4.2; no `AgentAdapter`; no frontend page; "no provider branching" means no *behavioural* branching, with `inventory/schemas.py` a recorded, allowlisted exception.
+
 **Tasks:** the `ProviderAdapter` interface, result envelope and error taxonomy; capability sets; adapter registry by `cloud_accounts.provider`; `DemoAdapter`; `GET /cloud-accounts/{id}/capabilities`; `demo_mode` propagation.
 
 **Acceptance:** no provider-specific branching exists above the adapter layer (reviewed, and grep-checked for provider names outside `providers/`); demonstration mode returns `not_configured` for writes and marks every affected response.
