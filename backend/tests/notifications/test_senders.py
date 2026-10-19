@@ -239,6 +239,25 @@ def test_email_without_smtp_configuration_is_permanent(
         ("send", smtplib.SMTPResponseException(451, b"try later"), "transient", "smtp_busy"),
         ("send", smtplib.SMTPResponseException(550, b"no such user"), "permanent", "smtp_rejected"),
         ("send", smtplib.SMTPRecipientsRefused({}), "permanent", "smtp_rejected"),
+        # A 4xx refusal of the recipient is "try later", and smtplib raises it as a refusal.
+        (
+            "send",
+            smtplib.SMTPRecipientsRefused({"a@b.c": (451, b"try later")}),
+            "transient",
+            "smtp_busy",
+        ),
+        (
+            "send",
+            smtplib.SMTPRecipientsRefused({"a@b.c": (550, b"no such user")}),
+            "permanent",
+            "smtp_rejected",
+        ),
+        (
+            "send",
+            smtplib.SMTPRecipientsRefused({"a@b.c": (451, b"x"), "d@e.f": (550, b"y")}),
+            "permanent",
+            "smtp_rejected",
+        ),
         ("starttls", smtplib.SMTPNotSupportedError("no"), "permanent", "smtp_tls_unavailable"),
         ("starttls", ssl.SSLError("certificate verify failed"), "permanent", "tls_failed"),
         ("login", smtplib.SMTPAuthenticationError(535, b"bad"), "permanent", "smtp_auth_failed"),

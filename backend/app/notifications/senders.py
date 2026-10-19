@@ -96,7 +96,12 @@ def send_email(
             if 400 <= error.smtp_code < 500
             else Outcome("permanent", "smtp_rejected")
         )
-    except smtplib.SMTPRecipientsRefused:
+    except smtplib.SMTPRecipientsRefused as error:
+        # smtplib reports a refused recipient -- a 4xx "try later" included -- through this
+        # one exception. Only if every refusal was a 5xx is it permanent.
+        codes = [code for code, _ in error.recipients.values()]
+        if codes and all(400 <= code < 500 for code in codes):
+            return Outcome("transient", "smtp_busy")
         return classify_reason("smtp_rejected")
     except ssl.SSLError:
         return classify_reason("tls_failed")

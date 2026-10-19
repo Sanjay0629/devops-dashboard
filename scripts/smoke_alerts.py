@@ -378,12 +378,19 @@ def notify_register() -> None:
 def notify_failures() -> None:
     sid = exporter_server()["id"]
     alert = the_alert(sid)
-    got = wait_for(
-        "both deliveries to exhaust their retries against a failing destination",
-        lambda: (d := deliveries(alert["alert_id"])).keys() >= {WEBHOOK_CHANNEL, EMAIL_CHANNEL}
-        and all(v["status"] == "ABANDONED" for v in d.values()) and d,
-        timeout=400,
-    )
+    try:
+        got = wait_for(
+            "both deliveries to exhaust their retries against a failing destination",
+            lambda: (d := deliveries(alert["alert_id"])).keys() >= {WEBHOOK_CHANNEL, EMAIL_CHANNEL}
+            and all(v["status"] == "ABANDONED" for v in d.values()) and d,
+            timeout=400,
+        )
+    except AssertionError:
+        # Say what the deliveries ARE: a wait that only reports "False" hid a permanent
+        # failure (an SMTP 4xx read as a refusal) for a whole run.
+        for name, d in deliveries(alert["alert_id"]).items():
+            say(f"{name}: {d['status']} attempts={d['attempt_count']} last_error={d['last_error']}")
+        raise
     hook, mail = got[WEBHOOK_CHANNEL], got[EMAIL_CHANNEL]
     # Delays 5,5,5 are the smoke run's setting: four attempts, then abandoned.
     assert (hook["attempt_count"], hook["last_error"]) == (4, "http_503"), hook
