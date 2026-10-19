@@ -51,7 +51,7 @@ UTILISATION_REASON = (
 #: A caller with no ``alert:read`` is told so, not shown a zero.
 ALERTS_NOT_PERMITTED = "alert_read_not_permitted"
 DEPLOYMENTS_REASON = "Deployments are not implemented yet (M5.1)."
-OPERATIONS_REASON = "Service operations are not implemented yet (M4.2)."
+OPERATIONS_REASON = "Recent operations are not listed here yet (the operations history is M4.6)."
 
 
 class ServerCounts(DataSection):
