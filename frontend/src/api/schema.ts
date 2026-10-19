@@ -596,6 +596,46 @@ export interface paths {
     patch: operations['update_channel_api_v1_notification_channels__channel_id__patch'];
     trace?: never;
   };
+  '/api/v1/operations/{operation_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Operation status
+     * @description §17.2. Unknown, or out of scope for a caller who is not the requester ⇒ ``404``.
+     */
+    get: operations['read_operation_api_v1_operations__operation_id__get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/operations/{operation_id}/cancel': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Cancel before execution
+     * @description §17.3. Legal only from ``PENDING`` or ``AWAITING_APPROVAL``; a running one is ``409``.
+     */
+    post: operations['cancel_operation_api_v1_operations__operation_id__cancel_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/servers': {
     parameters: {
       query?: never;
@@ -811,6 +851,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/servers/{server_id}/services/{service_name}/operations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Request an allowlisted operation
+     * @description §17.1. ``202`` for a new operation, ``200`` for an idempotent replay.
+     */
+    post: operations['request_operation_api_v1_servers__server_id__services__service_name__operations_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/services': {
     parameters: {
       query?: never;
@@ -976,6 +1036,16 @@ export interface components {
       unavailable_reason?: string | null;
       /** Warning */
       warning?: number | null;
+    };
+    /** ActorView */
+    ActorView: {
+      /** Display Name */
+      display_name: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
     };
     /**
      * AlertDetail
@@ -1286,6 +1356,24 @@ export interface components {
       repository_reference?: string | null;
       /** Status */
       status?: ('ACTIVE' | 'ARCHIVED') | null;
+    };
+    /**
+     * ApprovalSummary
+     * @description Always ``null`` until the approval workflow exists (M4.5, ``OPEN-68``).
+     */
+    ApprovalSummary: {
+      /**
+       * Approval Id
+       * Format: uuid
+       */
+      approval_id: string;
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /** Required Approvals */
+      required_approvals: number;
     };
     /**
      * AssignRequest
@@ -2281,6 +2369,146 @@ export interface components {
       stale_after_seconds?: number | null;
       /** Unavailable Reason */
       unavailable_reason?: string | null;
+    };
+    /**
+     * OperationAccepted
+     * @description §17.1. ``200`` on an idempotent replay, ``202`` otherwise.
+     */
+    OperationAccepted: {
+      /** Action Type */
+      action_type: string;
+      approval?: components['schemas']['ApprovalSummary'] | null;
+      /**
+       * Approval Status
+       * @enum {string}
+       */
+      approval_status: 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+      /**
+       * Correlation Id
+       * Format: uuid
+       */
+      correlation_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Deadline At
+       * Format: date-time
+       */
+      deadline_at: string;
+      /**
+       * Execution Status
+       * @enum {string}
+       */
+      execution_status:
+        | 'PENDING'
+        | 'AWAITING_APPROVAL'
+        | 'APPROVED'
+        | 'RUNNING'
+        | 'SUCCEEDED'
+        | 'FAILED'
+        | 'TIMED_OUT'
+        | 'CANCELLED'
+        | 'REJECTED';
+      /** Idempotent Replay */
+      idempotent_replay: boolean;
+      /**
+       * Operation Id
+       * Format: uuid
+       */
+      operation_id: string;
+      /** Poll After Seconds */
+      poll_after_seconds: number | null;
+      requested_by: components['schemas']['ActorView'];
+      /** Requested Reason */
+      requested_reason: string | null;
+      target: components['schemas']['TargetView'];
+    };
+    /**
+     * OperationDetail
+     * @description §17.2.
+     */
+    OperationDetail: {
+      /** Action Type */
+      action_type: string;
+      approval?: components['schemas']['ApprovalSummary'] | null;
+      /**
+       * Approval Status
+       * @enum {string}
+       */
+      approval_status: 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+      /** Completed At */
+      completed_at: string | null;
+      /**
+       * Correlation Id
+       * Format: uuid
+       */
+      correlation_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Deadline At
+       * Format: date-time
+       */
+      deadline_at: string;
+      /**
+       * Execution Status
+       * @enum {string}
+       */
+      execution_status:
+        | 'PENDING'
+        | 'AWAITING_APPROVAL'
+        | 'APPROVED'
+        | 'RUNNING'
+        | 'SUCCEEDED'
+        | 'FAILED'
+        | 'TIMED_OUT'
+        | 'CANCELLED'
+        | 'REJECTED';
+      /** External Execution Id */
+      external_execution_id: string | null;
+      /** Failure Reason */
+      failure_reason: string | null;
+      /** Observed State After */
+      observed_state_after: string | null;
+      /** Observed State Before */
+      observed_state_before: string | null;
+      /**
+       * Operation Id
+       * Format: uuid
+       */
+      operation_id: string;
+      /** Parent Operation Id */
+      parent_operation_id: string | null;
+      /** Poll After Seconds */
+      poll_after_seconds: number | null;
+      requested_by: components['schemas']['ActorView'];
+      /** Requested Reason */
+      requested_reason: string | null;
+      /** Sanitized Result */
+      sanitized_result?: {
+        [key: string]: unknown;
+      };
+      /** Started At */
+      started_at: string | null;
+      target: components['schemas']['TargetView'];
+      /** Verified At */
+      verified_at: string | null;
+    };
+    /** OperationRequest */
+    OperationRequest: {
+      /**
+       * Action
+       * @enum {string}
+       */
+      action: 'start' | 'stop' | 'restart';
+      /** Reason */
+      reason?: string | null;
     };
     /** PermissionEntry */
     PermissionEntry: {
@@ -3287,6 +3515,20 @@ export interface components {
        * @enum {string}
        */
       type: 'server' | 'service' | 'application' | 'deployment' | 'operation';
+    };
+    /** TargetView */
+    TargetView: {
+      /** Environment */
+      environment: string;
+      /** Server Display Name */
+      server_display_name: string;
+      /**
+       * Server Id
+       * Format: uuid
+       */
+      server_id: string;
+      /** Service Name */
+      service_name: string;
     };
     /** TerminateSessionsResponse */
     TerminateSessionsResponse: {
@@ -4543,6 +4785,70 @@ export interface operations {
       };
     };
   };
+  read_operation_api_v1_operations__operation_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Operation identifier */
+        operation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OperationDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  cancel_operation_api_v1_operations__operation_id__cancel_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Operation identifier */
+        operation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OperationDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   list_servers_api_v1_servers_get: {
     parameters: {
       query?: {
@@ -5097,6 +5403,61 @@ export interface operations {
       };
       /** @description Loki did not answer within the deadline. */
       504: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  request_operation_api_v1_servers__server_id__services__service_name__operations_post: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Client-generated key, unique per logical intent (§7). */
+        'Idempotency-Key': string;
+      };
+      path: {
+        /** @description Server identifier */
+        server_id: string;
+        /** @description A registered unit name */
+        service_name: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['OperationRequest'];
+      };
+    };
+    responses: {
+      /** @description An idempotent replay: the original operation, nothing re-executed. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OperationAccepted'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Demonstration mode, no adapter, or an approval is required (M4.5). */
+      503: {
         headers: {
           [name: string]: unknown;
         };

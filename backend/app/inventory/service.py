@@ -82,6 +82,7 @@ from app.inventory.schemas import (
 )
 from app.metrics import discovery
 from app.monitoring.read import current_reference, evaluate
+from app.operations.guard import refuse_if_in_flight
 
 logger = get_logger(__name__)
 
@@ -482,15 +483,10 @@ async def update_server(
 
 
 async def retire_server(db: AsyncSession, server: Server) -> Server:
-    """§14.5 — soft delete.
-
-    The "blocked while a non-terminal operation targets the server" rule in
-    §14.5 has nothing to check yet: ``operations`` arrives with M4.2. The guard
-    is deliberately *not* written as a no-op that looks like a control; it goes
-    in with the table it depends on.
-    """
+    """§14.5 — soft delete, refused while an operation is in flight against the server."""
     if server.status == "RETIRED":
         raise InvalidStateTransitionError("That server is already retired.")
+    await refuse_if_in_flight(db, server_id=server.id)
     server.status = "RETIRED"
     server.deleted_at = datetime.now(UTC)
     await db.flush()
