@@ -68,6 +68,12 @@ const APPEARANCE: Record<string, { glyph: string; label: string; colour: string 
   RESOLVED: { glyph: '●', label: 'Resolved', colour: 'var(--c-healthy)' },
   EXPIRED: { glyph: '◌', label: 'Expired (not confirmed)', colour: 'var(--c-stale)' },
 
+  // Notification delivery (§20.2, M3.4). `PENDING` is drawn by the server-registration entry
+  // above (not yet sent, or waiting for a retry). `FAILED` is a permanent failure and is drawn
+  // above; `ABANDONED` is "retries ran out" -- a different fact, so a different word.
+  SENT: { glyph: '●', label: 'Sent', colour: 'var(--c-healthy)' },
+  ABANDONED: { glyph: '✕', label: 'Gave up (retries used)', colour: 'var(--c-critical)' },
+
   // Application status.
   ACTIVE: { glyph: '●', label: 'Active', colour: 'var(--c-healthy)' },
   ARCHIVED: { glyph: '—', label: 'Archived', colour: 'var(--c-unknown)' },

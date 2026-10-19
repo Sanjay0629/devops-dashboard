@@ -26,6 +26,7 @@ import {
   type AlertDetail as Alert,
   type HistoryEntry,
 } from '@/api/alerts';
+import { reasonText, retryDelivery, type Delivery } from '@/api/notifications';
 import { PERMISSIONS } from '@/auth/permissions';
 import { useCanRender, useIsReadOnly, useSession } from '@/auth/useSession';
 import { LoadingState } from '@/components/EmptyState';
@@ -135,6 +136,31 @@ export function AlertDetail(): React.JSX.Element {
     setUpdated(null);
     setProblem(null);
     void reload();
+  };
+
+  /** Make a failed or abandoned delivery due again (§20.6). The backend decides if it may. */
+  const retry = async (delivery: Delivery): Promise<void> => {
+    if (alert === null) return;
+    setBusy(true);
+    setProblem(null);
+    const result = await retryDelivery(alert.alert_id, delivery.delivery_id);
+    setBusy(false);
+    if (result.kind === 'ok') {
+      setUpdated(null);
+      await reload();
+      return;
+    }
+    setProblem(
+      result.kind === 'conflict' || result.kind === 'invalid'
+        ? 'That delivery cannot be retried in its current state. Reload to see it as it is now.'
+        : result.kind === 'forbidden'
+          ? 'You do not have permission to do that.'
+          : result.kind === 'read_only'
+            ? 'The portal is in read-only mode. State-changing actions are disabled.'
+            : result.kind === 'not_found'
+              ? 'This alert does not exist, or is outside your access scope.'
+              : `Could not reach the backend: ${result.reason}`,
+    );
   };
 
   return (
@@ -288,6 +314,79 @@ export function AlertDetail(): React.JSX.Element {
               </li>
             ))}
           </ol>
+
+          <h2 className="mb-2 text-base font-medium">Notifications</h2>
+          {(alert.notifications ?? []).length === 0 ? (
+            <p className="mb-6 text-sm" style={{ color: 'var(--c-text-muted)' }}>
+              Nobody was notified about this alert: no channel was registered and active for it when
+              it began.
+            </p>
+          ) : (
+            <table className="mb-6 w-full text-left text-sm">
+              <caption className="sr-only">Notification deliveries for this alert</caption>
+              <thead>
+                <tr style={{ color: 'var(--c-text-muted)' }}>
+                  <th className="py-1 pr-3">Channel</th>
+                  <th className="py-1 pr-3">Status</th>
+                  <th className="py-1 pr-3">Attempts</th>
+                  <th className="py-1 pr-3">Detail</th>
+                  <th className="py-1">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {(alert.notifications ?? []).map((delivery) => (
+                  <tr
+                    key={delivery.delivery_id}
+                    className="border-t"
+                    style={{ borderColor: 'var(--c-border)' }}
+                  >
+                    <td className="py-2 pr-3">
+                      {delivery.channel_name} · {delivery.channel_type}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <StatusBadge value={delivery.status} />
+                    </td>
+                    <td className="py-2 pr-3">{delivery.attempt_count}</td>
+                    <td className="py-2 pr-3">
+                      {delivery.status === 'SENT' && delivery.sent_at != null && (
+                        <>Sent {stamp(delivery.sent_at)}</>
+                      )}
+                      {delivery.status === 'PENDING' && delivery.next_attempt_at != null && (
+                        <>
+                          {delivery.attempt_count === 0 ? 'Waiting to be sent' : 'Retrying'} ·{' '}
+                          {stamp(delivery.next_attempt_at)}
+                        </>
+                      )}
+                      {delivery.last_error != null && delivery.status !== 'SENT' && (
+                        <span style={{ color: 'var(--c-critical)' }}>
+                          {' '}
+                          {reasonText(delivery.last_error)}
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2">
+                      {delivery.retryable && mayAct && (
+                        <button
+                          type="button"
+                          disabled={busy || readOnly}
+                          onClick={() => {
+                            void retry(delivery);
+                          }}
+                          className="rounded border px-2 py-0.5 text-xs disabled:opacity-50"
+                          style={{ borderColor: 'var(--c-border)' }}
+                          aria-label={`Retry sending to ${delivery.channel_name}`}
+                        >
+                          Retry
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
 
           <h2 className="mb-2 text-base font-medium">Earlier occurrences</h2>
           {alert.previous_occurrences.length === 0 ? (

@@ -24,6 +24,7 @@ const COVERAGE = {
     { condition: 'deployment_failed', arrives_in: 'M5' },
     { condition: 'operation_timed_out_or_failed', arrives_in: 'M4' },
   ],
+  notification_channels_active: 2,
 };
 
 function alert(over: Record<string, unknown> = {}) {
@@ -98,6 +99,51 @@ describe('alertsQuery', () => {
 
   it('omits what is empty, and is empty when nothing is set', () => {
     expect(alertsQuery({ statuses: [], severities: [], environment: '', q: '   ' })).toBe('');
+  });
+});
+
+describe('AlertList notification coverage (M3.4)', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function show(active: number) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockReturnValue(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve(
+              page([alert()], { coverage: { ...COVERAGE, notification_channels_active: active } }),
+            ),
+        }),
+      ),
+    );
+    return render(
+      <MemoryRouter>
+        <AlertList />
+      </MemoryRouter>,
+    );
+  }
+
+  it('says alerts are being sent nowhere when no channel is active', async () => {
+    show(0);
+    const note = await screen.findByText(/Alerts are not being sent anywhere/);
+    expect(note.closest('p')).toHaveAttribute('role', 'status');
+    expect(note.closest('p')).toHaveTextContent(/nobody is told when one begins/);
+  });
+
+  it('says how many channels are told when some are active', async () => {
+    show(2);
+    expect(await screen.findByText(/2 channels are/)).toBeInTheDocument();
+    expect(screen.queryByText(/not being sent anywhere/)).toBeNull();
+  });
+
+  it('uses the singular for one channel', async () => {
+    show(1);
+    expect(await screen.findByText(/1 channel is/)).toBeInTheDocument();
   });
 });
 

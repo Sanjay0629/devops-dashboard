@@ -67,6 +67,7 @@ export function CoverageNote({ coverage }: { coverage: ConditionCoverage }): Rea
     const condition = item.condition ?? '';
     return `${NOT_PRODUCED[condition] ?? condition} (arrives in ${item.arrives_in ?? 'a later milestone'})`;
   });
+  const silent = coverage.notification_channels_active === 0;
   return (
     <aside
       aria-label="What raises alerts"
@@ -82,6 +83,20 @@ export function CoverageNote({ coverage }: { coverage: ConditionCoverage }): Rea
           means nothing is watching it, not that it is fine.
         </p>
       )}
+      <p className="mt-1" role={silent ? 'status' : undefined}>
+        {silent ? (
+          <>
+            <strong>Alerts are not being sent anywhere:</strong> no notification channel is active,
+            so nobody is told when one begins.
+          </>
+        ) : (
+          <>
+            <strong>Notifications:</strong> {coverage.notification_channels_active} channel
+            {coverage.notification_channels_active === 1 ? ' is' : 's are'} told when an alert
+            begins.
+          </>
+        )}
+      </p>
     </aside>
   );
 }

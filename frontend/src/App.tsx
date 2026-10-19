@@ -15,6 +15,7 @@ import { ServerDetail } from '@/pages/servers/ServerDetail';
 import { ServerEditForm, ServerForm } from '@/pages/servers/ServerForm';
 import { LogSearch } from '@/pages/logs/LogSearch';
 import { Compare } from '@/pages/metrics/Compare';
+import { ChannelList } from '@/pages/notifications/ChannelList';
 import { ServerList } from '@/pages/servers/ServerList';
 import { ServerMetrics } from '@/pages/servers/ServerMetrics';
 import { ServerServices } from '@/pages/services/ServerServices';
@@ -52,6 +53,9 @@ function Navigation(): React.JSX.Element {
     ...(canRender(state, PERMISSIONS.logsReadApplication) ? [{ to: '/logs', label: 'Logs' }] : []),
     ...(canRender(state, PERMISSIONS.alertRead) ? [{ to: '/alerts', label: 'Alerts' }] : []),
     { to: '/applications', label: 'Applications' },
+    ...(canRender(state, PERMISSIONS.adminIntegrations)
+      ? [{ to: '/notifications/channels', label: 'Notifications' }]
+      : []),
   ];
   return (
     <nav
@@ -134,11 +138,11 @@ function Shell(): React.JSX.Element {
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M3.3 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
-            service state, host health from Prometheus, log search and alerts (Prometheus rules
-            through Alertmanager, with acknowledge and assign). Notifications, service operations
-            and deployments are not implemented yet, and every section that depends on them says so
-            rather than showing a zero.
+            Milestone M3.4 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
+            service state, host health from Prometheus, log search, alerts (Prometheus rules through
+            Alertmanager, with acknowledge and assign) and notifications (channels, delivery status
+            and retry). Service operations and deployments are not implemented yet, and every
+            section that depends on them says so rather than showing a zero.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -217,6 +221,7 @@ function Shell(): React.JSX.Element {
         <Route path="/logs" element={<LogSearch />} />
         <Route path="/alerts" element={<AlertList />} />
         <Route path="/alerts/:alertId" element={<AlertDetail />} />
+        <Route path="/notifications/channels" element={<ChannelList />} />
         <Route path="/applications" element={<ApplicationList />} />
         <Route path="/applications/:applicationId" element={<ApplicationDetail />} />
         <Route
