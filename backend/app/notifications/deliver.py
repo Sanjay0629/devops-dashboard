@@ -225,8 +225,11 @@ def process(
     # No transaction is open while the network is touched.
     session.rollback()
     if outcome is None:
-        assert message is not None
-        outcome = sender(channel_type, destination, message)
+        outcome = (
+            sender(channel_type, destination, message)
+            if message is not None
+            else classify_reason("alert_missing")
+        )
     status = record(session, delivery_id, attempts_made=attempts, outcome=outcome)
     session.commit()
     logger.info(
