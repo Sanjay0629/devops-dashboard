@@ -86,6 +86,7 @@ ignore = [
 # the parameter as a redefinition (the alert suite carries a noqa on one parameter; this module
 # has thirty).
 "tests/integration/test_notifications_api.py" = ["F811"]
+"tests/integration/test_operations_worker.py" = ["F811"]
 # The class names are the documented taxonomy (ARCHITECTURE.md §7.1, API_CONTRACTS.md §3):
 # `Throttled`, `Timeout`, `NotFound` ... A suffix would rename the contract.
 "app/providers/errors.py" = ["N818"]

@@ -90,3 +90,30 @@ def transition_statement(
         .values(**values)
         .returning(Operation.id)
     )
+
+
+def record_handle_statement(
+    operation_id: uuid.UUID,
+    external_execution_id: str,
+    *,
+    observed_state_before: str | None,
+    steps: list[str],
+) -> Update:
+    """Persist the provider's id **before** polling begins (AD-08, ``OPEN-70``).
+
+    Guarded on ``RUNNING``: a row the reaper has already timed out is not written to, and the
+    caller learns that from the empty ``RETURNING``. Not a transition, so it lives beside the
+    transition builder rather than in it.
+    """
+    return (
+        update(Operation)
+        .where(Operation.id == operation_id, Operation.execution_status == states.RUNNING)
+        .values(
+            external_execution_id=external_execution_id,
+            observed_state_before=observed_state_before,
+            sanitized_result=Operation.sanitized_result.op("||", return_type=JSONB)(
+                literal({"steps": steps}, type_=JSONB)
+            ),
+        )
+        .returning(Operation.id)
+    )
