@@ -103,6 +103,8 @@ class TestModelMetadata:
             # M3.4: the notification outbox and the destinations it delivers to.
             "NotificationChannel",
             "NotificationDelivery",
+            # M4.2: the record of every privileged service operation.
+            "Operation",
             # M1.4: the durable read-only switch (docs/SECURITY.md §27).
             "SystemSetting",
         }
@@ -180,13 +182,13 @@ class TestModelMetadata:
 
     @pytest.mark.parametrize(
         "table",
-        ["operations", "deployments", "approvals"],
+        ["deployments", "approvals"],
     )
     def test_history_tables_are_not_created_early(self, table: str) -> None:
-        """These arrive with the milestones that write to them (M4, M5).
+        """These arrive with the milestones that write to them (M4.5, M5).
 
-        ``alert_events`` left this list when M3.3 created it, and
-        ``notification_deliveries`` when M3.4 did.
+        ``alert_events`` left this list when M3.3 created it, ``notification_deliveries`` when
+        M3.4 did, and ``operations`` when M4.2 did.
         """
         assert table not in Base.metadata.tables
 

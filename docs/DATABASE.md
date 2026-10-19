@@ -464,6 +464,7 @@ Indexes: `(target_server_id, created_at DESC)`, `(execution_status) WHERE execut
 
 **Notes added in M4.2 (`OPEN-69` – `OPEN-77`):**
 - `execution_status` never holds `VERIFYING` (ARCHITECTURE §6.2); the nine values are exactly the PRD's.
+- `environment` carries the same CHECK as `servers.environment` (the four values, no `*`), and `approval_status` / `action_type` are CHECKed to the closed sets above.
 - `provider` stores the **adapter id** that executed the operation (e.g. `aws_ssm`), as the column note says, not the `cloud_accounts.provider` enum.
 - `sanitized_result` holds closed fields only: `adapter_id`, `steps[]`, `observed_before`, `observed_after`, `reconciliation_required` (`true` when the provider may have acted and the outcome is unknown), `reason_code`. `reconciliation_required` is a key, not a column.
 - `failure_reason` is a closed code set in code (API_CONTRACTS §17.2); the column stays free text so a client tolerates new values.
