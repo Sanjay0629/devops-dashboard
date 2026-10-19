@@ -2810,7 +2810,7 @@ as expected (see issue 23).
 
 ## 9. Next recommended task
 
-### M3.3 — COMPLETE LOCALLY 2026-10-18 (all six commits on `phase-M3.3`, cut from `main` after PR #20). Not pushed, not on hosted CI.
+### M3.3 — COMPLETE 2026-10-18 (all six commits on `phase-M3.3`, cut from `main` after PR #20); **merged to `main` as PR #21** (corrected 2026-10-19). The hosted-CI result of that PR was not read from the development machine (`gh` is not installed there), so it is **not claimed here**.
 
 **Next, in this order:**
 

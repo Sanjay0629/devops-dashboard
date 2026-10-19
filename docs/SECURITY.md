@@ -433,6 +433,8 @@ The portal makes outbound requests on behalf of users (health checks, webhooks, 
 6. Response size and timeout are bounded; response bodies from health checks are not echoed verbatim to users beyond a bounded, escaped excerpt.
 7. Configuring a destination is an Administrator action, validated and audited — the configuration surface is itself a privileged boundary.
 
+**Request-time half (M3.4, `OPEN-49`).** Rules 2, 4, 5 and 6 are implemented in `app/core/ssrf.py` and `app/core/netpolicy.py` and first used by notification delivery: the registered URL is re-validated against the allowlist, the name is resolved once, **every** address is checked (loopback, link-local including the metadata endpoint, unspecified, multicast, reserved, and their IPv4-mapped / 6to4 / NAT64 spellings are refused outright; private ranges only inside `DCP_SSRF_ALLOWED_NETWORKS`), and the connection goes to the checked address with the original name kept for `Host` and TLS verification. Redirects are not followed, no proxy is read from the environment, the response body is never read. Measured against a real TLS server and covered by tests including a staged rebind; not exercised against a real Slack, Teams or SMTP provider.
+
 **Prometheus scrape targets (M2.3).** A server's `metrics_instance` becomes a line in the target file, so Prometheus will *connect* to it from the monitoring network. That is an administrator-supplied outbound destination, and it is policed as one (`app/metrics/discovery.target_problem`), at the write boundary (a field error) **and again when the file is built** (so a seeded row or a direct `UPDATE` cannot widen it):
 
 - the port must be one of `DCP_METRICS_TARGET_PORTS` (default `9100`), so the setting cannot be used to probe other ports;

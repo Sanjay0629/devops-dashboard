@@ -160,7 +160,7 @@ Per adapter (AWS, Azure, agent, demo), against mocked provider APIs:
 - Beat schedule: each scheduled task is registered, and running two beat instances is detected as a misconfiguration.
 - Task payloads contain **ids only** — a test asserts no task signature accepts a credential, command, URL or domain object.
 - Celery serialisation is JSON-only; a pickle payload is rejected.
-- Notification retry: transient failure → retry → success; permanent failure → `ABANDONED` after the cap, visible in the API.
+- Notification retry: transient failure → retry → success; transient failures past the cap → `ABANDONED`; a permanent failure → `FAILED` at once (a refused destination is not retried, `OPEN-53`); both visible in the API and manually retryable.
 
 ---
 
