@@ -579,6 +579,8 @@ Append-only (AD-11, [SECURITY.md §18](SECURITY.md#18-audit-logging-and-audit-pr
 | `status` | `text` | NOT NULL, CHECK in (`ACTIVE`,`DISABLED`) | |
 | `created_at` / `updated_at` | `timestamptz` | NOT NULL | |
 
+**Built in migration 0009 (M3.4).** `name` is at most 100 characters; `destination_reference` at most 512; `channel_type` and `status` are `CHECK`ed closed sets; `routing_rules` is validated by the application as `{severity, environment, target_type}` (`OPEN-52`) and a stored value that does not validate means *do not deliver*. The reference is `env://NAME` for TEAMS, SLACK and WEBHOOK and the address itself for EMAIL (`OPEN-48`).
+
 ### 9.3 `notification_deliveries` — *added entity (Phase 3)*
 
 **Justification:** PRD §4.8 acceptance criterion — "notification failures are observable and retryable". Observability and retry require a per-attempt record; neither `alert_events` nor Redis can provide a durable one.
@@ -596,6 +598,8 @@ Append-only (AD-11, [SECURITY.md §18](SECURITY.md#18-audit-logging-and-audit-pr
 | `created_at` / `updated_at` | `timestamptz` | NOT NULL | |
 
 `UNIQUE (alert_event_id, channel_id)`; index `(status, next_attempt_at) WHERE status = 'PENDING'`.
+
+**Built in migration 0009 (M3.4), and this table is the transactional outbox (`OPEN-50`):** a row is inserted `PENDING` **in the same transaction as the alert row it is about**, for each `ACTIVE` channel whose rules match the stored alert, only when an alert row is *created* (`OPEN-51`). Added to what is documented above: `last_error` is at most 64 characters and holds a **closed reason code**, never a URL or the peer's words; `CHECK ((status = 'SENT') = (sent_at IS NOT NULL))` and `CHECK ((status = 'PENDING') = (next_attempt_at IS NOT NULL))` so a terminal row cannot look as if it is waiting for a retry; `CHECK (attempt_count BETWEEN 0 AND 20)`; indexes `(channel_id, created_at DESC)`, `(alert_event_id)` and `(created_at)`. Statuses (`OPEN-53`): `PENDING` = not yet sent or waiting for a retry; `SENT`; `FAILED` = a **permanent** failure; `ABANDONED` = **transient failures used the whole budget**. A claim is a lease -- `attempt_count + 1` and `next_attempt_at = now + 120 s` in one statement with `FOR UPDATE SKIP LOCKED` -- so delivery is **at-least-once** (a worker that dies after sending can cause a duplicate message; it cannot cause a lost one). Rows older than 90 days that are not `PENDING` are deleted by `dcp.maintenance.purge_notification_deliveries`.
 
 ---
 
@@ -763,6 +767,8 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 
 **Created in M1.4** (migration `0003`, applied to the development database on 2026-10-14 with its existing rows preserved): `system_settings` ([§3.6](#36-system_settings--added-entity-m14)), with its `updated_at` trigger and its seeded `read_only_mode = false` row. The same revision added the `admin:users` and `admin:roles` permissions the contracts name per endpoint, which the M1.2 seed had collapsed into `admin:manage`.
 
-**Not yet created** — each arrives with the milestone that writes to it: `deployment_targets`, `deployments`, `operations`, `approvals` (M4–M5), `alert_events`, `notification_channels`, `notification_deliveries` (M3).
+**Created in M3.3** (migration `0008`): `alert_events` (partitioned monthly) and `alert_open_keys`. **Created in M3.4** (migration `0009`): `notification_channels` and `notification_deliveries`, with their `updated_at` triggers ([§9.2](#92-notification_channels--added-entity-phase-3), [§9.3](#93-notification_deliveries--added-entity-phase-3)); the schema is at revision `0009`.
+
+**Not yet created** — each arrives with the milestone that writes to it: `deployment_targets`, `deployments`, `operations`, `approvals` (M4–M5).
 
 `OPEN-02` is **resolved** (2026-10-14): applications are environment-agnostic, confirming `AD-12`. `applications` was created without an `environment` column and stays that way, so the decision cost nothing to settle.

@@ -86,4 +86,17 @@ describe('StatusBadge', () => {
     expect(screen.queryByText('UNCOLLECTED')).toBeNull();
     expect(screen.getByText('Not collected')).toBeInTheDocument();
   });
+
+  it('draws a notification that gave up differently from one that failed for good', () => {
+    const labels = new Map<string, string>();
+    for (const state of ['PENDING', 'SENT', 'FAILED', 'ABANDONED']) {
+      const { container, unmount } = render(<StatusBadge value={state} />);
+      labels.set(state, container.textContent);
+      unmount();
+    }
+    expect(new Set(labels.values()).size).toBe(4);
+    expect(labels.get('SENT')).toContain('Sent');
+    expect(labels.get('ABANDONED')).toContain('Gave up');
+    expect(screen.queryByText('ABANDONED')).toBeNull();
+  });
 });

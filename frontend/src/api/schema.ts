@@ -241,6 +241,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/alerts/{alert_id}/notifications/{delivery_id}/retry': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Retry a failed or abandoned notification delivery
+     * @description ``FAILED`` / ``ABANDONED`` only; a ``SENT`` delivery is never re-sent by a button.
+     */
+    post: operations['retry_delivery_api_v1_alerts__alert_id__notifications__delivery_id__retry_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/applications': {
     parameters: {
       query?: never;
@@ -516,6 +536,44 @@ export interface paths {
     options?: never;
     head?: never;
     patch?: never;
+    trace?: never;
+  };
+  '/api/v1/notification-channels': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List notification channels and how their deliveries are going */
+    get: operations['list_channels_api_v1_notification_channels_get'];
+    put?: never;
+    /**
+     * Register a notification channel
+     * @description The destination is a *reference*; a URL or token in its place is a ``422``.
+     */
+    post: operations['create_channel_api_v1_notification_channels_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/notification-channels/{channel_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Edit, enable or disable a channel */
+    patch: operations['update_channel_api_v1_notification_channels__channel_id__patch'];
     trace?: never;
   };
   '/api/v1/servers': {
@@ -889,6 +947,8 @@ export interface components {
        */
       last_seen_at: string;
       links: components['schemas']['AlertLinks'];
+      /** Notifications */
+      notifications?: components['schemas']['DeliveryOut'][];
       /** Occurrence Count */
       occurrence_count: number;
       /** Previous Occurrences */
@@ -1219,6 +1279,86 @@ export interface components {
       /** Status */
       status: string;
     };
+    /** ChannelCreate */
+    ChannelCreate: {
+      /**
+       * Channel Type
+       * @enum {string}
+       */
+      channel_type: 'EMAIL' | 'TEAMS' | 'SLACK' | 'WEBHOOK';
+      /** Destination Reference */
+      destination_reference: string;
+      /** Name */
+      name: string;
+      routing_rules?: components['schemas']['RoutingRules'];
+      /**
+       * Status
+       * @default ACTIVE
+       * @enum {string}
+       */
+      status: 'ACTIVE' | 'DISABLED';
+    };
+    /** ChannelList */
+    ChannelList: {
+      /** Demo Mode */
+      demo_mode: boolean;
+      /** Email Available */
+      email_available: boolean;
+      /** Items */
+      items: components['schemas']['ChannelOut'][];
+    };
+    /** ChannelOut */
+    ChannelOut: {
+      /**
+       * Channel Type
+       * @enum {string}
+       */
+      channel_type: 'EMAIL' | 'TEAMS' | 'SLACK' | 'WEBHOOK';
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      deliveries: components['schemas']['DeliveryHealth'];
+      /** Destination Reference */
+      destination_reference: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Name */
+      name: string;
+      /** Routing Rules */
+      routing_rules: {
+        [key: string]: unknown;
+      };
+      /** Routing Rules Valid */
+      routing_rules_valid: boolean;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'ACTIVE' | 'DISABLED';
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /**
+     * ChannelUpdate
+     * @description Everything optional. The type cannot change: it would change what the reference means.
+     */
+    ChannelUpdate: {
+      /** Destination Reference */
+      destination_reference?: string | null;
+      /** Name */
+      name?: string | null;
+      routing_rules?: components['schemas']['RoutingRules'] | null;
+      /** Status */
+      status?: ('ACTIVE' | 'DISABLED') | null;
+    };
     /**
      * CompareRequest
      * @description §15.3's body. Exactly one of ``server_ids`` / ``environments``.
@@ -1291,6 +1431,11 @@ export interface components {
       not_produced_yet: {
         [key: string]: string;
       }[];
+      /**
+       * Notification Channels Active
+       * @default 0
+       */
+      notification_channels_active: number;
       /** Produced */
       produced: string[];
     };
@@ -1440,6 +1585,67 @@ export interface components {
       stale_after_seconds?: number | null;
       /** Unavailable Reason */
       unavailable_reason?: string | null;
+    };
+    /**
+     * DeliveryHealth
+     * @description What this channel's recent deliveries say about it. Counts, never destinations.
+     */
+    DeliveryHealth: {
+      /** Failed 24H */
+      failed_24h: number;
+      /** Last Error */
+      last_error: string | null;
+      /** Last Failure At */
+      last_failure_at: string | null;
+      /** Last Success At */
+      last_success_at: string | null;
+      /** Pending */
+      pending: number;
+      /** Sent 24H */
+      sent_24h: number;
+    };
+    /**
+     * DeliveryOut
+     * @description One (alert, channel) delivery (§20.2). ``last_error`` is a closed reason code.
+     */
+    DeliveryOut: {
+      /** Attempt Count */
+      attempt_count: number;
+      /**
+       * Channel Id
+       * Format: uuid
+       */
+      channel_id: string;
+      /** Channel Name */
+      channel_name: string;
+      /**
+       * Channel Type
+       * @enum {string}
+       */
+      channel_type: 'EMAIL' | 'TEAMS' | 'SLACK' | 'WEBHOOK';
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Delivery Id
+       * Format: uuid
+       */
+      delivery_id: string;
+      /** Last Error */
+      last_error: string | null;
+      /** Next Attempt At */
+      next_attempt_at: string | null;
+      /** Retryable */
+      retryable: boolean;
+      /** Sent At */
+      sent_at: string | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'PENDING' | 'SENT' | 'FAILED' | 'ABANDONED';
     };
     /**
      * FailedServicesSection
@@ -2228,6 +2434,15 @@ export interface components {
       effect: string;
       /** Permission */
       permission: string;
+    };
+    /** RoutingRules */
+    RoutingRules: {
+      /** Environment */
+      environment?: ('development' | 'staging' | 'production' | 'other')[];
+      /** Severity */
+      severity?: ('INFO' | 'WARNING' | 'CRITICAL')[];
+      /** Target Type */
+      target_type?: ('server' | 'service')[];
     };
     /**
      * ScopeDefinition
@@ -3599,6 +3814,38 @@ export interface operations {
       };
     };
   };
+  retry_delivery_api_v1_alerts__alert_id__notifications__delivery_id__retry_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        alert_id: string;
+        delivery_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeliveryOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   list_applications_api_v1_applications_get: {
     parameters: {
       query?: {
@@ -4085,6 +4332,94 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['MetricTemplateList'];
+        };
+      };
+    };
+  };
+  list_channels_api_v1_notification_channels_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ChannelList'];
+        };
+      };
+    };
+  };
+  create_channel_api_v1_notification_channels_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ChannelCreate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ChannelOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_channel_api_v1_notification_channels__channel_id__patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        channel_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ChannelUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ChannelOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
         };
       };
     };

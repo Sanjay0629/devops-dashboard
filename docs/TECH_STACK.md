@@ -290,7 +290,7 @@ done unmet and makes M1.6 large.
 
 **Responsibility:** Alertmanager dedupes/groups/silences and posts to DCP's webhook, which materialises `alert_events`; DCP owns acknowledgement, assignment and history; DCP's `notifications` queue delivers to email/Teams/Slack/webhook.
 **Why:** PRD §4.8.
-**Open:** whether rules stay file-managed or become in-app CRUD (OPEN-03); which channels ship first and where their config lives (OPEN-13).
+**Resolved:** rules are file-managed (OPEN-03); channel configuration is DB tables (OPEN-13); delivery is DCP's own, driven by a transactional outbox (OPEN-50). Email is stdlib `smtplib`, HTTPS is the already-installed `httpx` -- no new dependency (§10 rung 2).
 **Rule:** notification delivery failures must be observable and retryable (PRD §4.8) — delivery attempts are recorded with status, and retries are bounded with backoff.
 
 ### 5.7 Grafana
@@ -334,7 +334,7 @@ done unmet and makes M1.6 large.
 ### 6.6 Secrets manager
 
 **Responsibility:** runtime retrieval of OIDC client secret, DB credentials, Jenkins token, notification webhooks, and agent keys.
-**Rules:** pluggable interface with one configured backend per deployment (OPEN-06); read at process start and on cache miss with a short TTL; never written to disk or logs; rotation supported by re-reading on authentication failure rather than requiring a restart.
+**As built (M3.4, OPEN-48):** `app/core/secrets.py` -- `resolve("env://NAME")` reads the process variable `DCPSECRET_NAME` (a development / small-deployment backend, **not** a production secret manager; the cloud stores arrive with M4.3 / M4.4 behind the same call). **Rules:** pluggable interface with one configured backend per deployment (OPEN-06); read at process start and on cache miss with a short TTL; never written to disk or logs; rotation supported by re-reading on authentication failure rather than requiring a restart.
 
 ---
 

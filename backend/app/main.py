@@ -39,6 +39,7 @@ from app.inventory.router_applications import router as applications_router
 from app.inventory.router_servers import router as servers_router
 from app.logs.router import router as logs_router
 from app.metrics.router import router as metrics_router
+from app.notifications.router import router as notifications_router
 from app.services.router import router as services_router
 
 logger = get_logger(__name__)
@@ -116,6 +117,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 503 not_configured rather than disappearing.
     app.include_router(logs_router, prefix=settings.api_base_path)
     app.include_router(alerts_router, prefix=settings.api_base_path)
+    app.include_router(notifications_router, prefix=settings.api_base_path)
     # §20.5 (M3.3). Mounted even with no secret configured: it answers 503
     # not_configured rather than disappearing.
     app.include_router(alert_webhook_router, prefix=settings.api_base_path)

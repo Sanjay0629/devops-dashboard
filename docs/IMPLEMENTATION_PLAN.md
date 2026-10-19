@@ -597,6 +597,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M3.4 — Notifications
 
+**Status: complete locally (2026-10-19); not pushed, not on hosted CI.** Decisions `OPEN-48` - `OPEN-57` closed before code, at the owner's instruction to take the recommended option (see [ARCHITECTURE.md §19](ARCHITECTURE.md#19-open-decisions) and [`M3.4_PLAN.md`](M3.4_PLAN.md)); evidence in [`PROGRESS.md`](../PROGRESS.md) §9. Built: the secret resolver (`env://`), the request-time half of SECURITY.md §19, `notification_channels` / `notification_deliveries` as a transactional outbox, the delivery worker with lease, bounded retry and abandonment, SMTP and HTTPS senders, §26.8 - §26.10 and §20.6, the §26.1 rows, the channels page and the deliveries on an alert. **Not built (by decision):** resolved / acknowledged / expired notices, a send-test route, channel delete, AWS / Azure secret backends, webhook signing, per-channel rate limits. **Not verified:** a real Slack workspace, Teams tenant or mail provider (only the local sink was exercised); the hosted CI run.
+
 **Tasks:** `notification_channels` and `notification_deliveries` tables and admin endpoints; routing rules; delivery tasks on the `notifications` queue with bounded retry and backoff; delivery status visible in the UI; a manual retry action.
 
 **Acceptance (PRD §4.8):** notification failures are **observable and retryable**; destination references come from registered configuration only.

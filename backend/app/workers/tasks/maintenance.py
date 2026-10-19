@@ -13,8 +13,10 @@ alert nobody has refreshed for three Alertmanager repeat intervals is marked ``E
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.alerts import runway, store
@@ -76,3 +78,29 @@ def expire_alerts() -> dict[str, Any]:
     if expired:
         logger.warning("alerts_expired", count=expired)
     return {"expired": expired}
+
+
+#: DATABASE.md section 11: delivery bookkeeping is transient and kept 90 days.
+NOTIFICATION_RETENTION_DAYS = 90
+
+
+@celery_app.task(name="dcp.maintenance.purge_notification_deliveries", queue="maintenance")
+def purge_notification_deliveries() -> dict[str, Any]:
+    """Delete delivery rows older than the retention window.
+
+    Only rows that are no longer waiting: a ``PENDING`` row is never deleted, however old.
+    """
+    with Session(get_sync_engine()) as session:
+        result = session.execute(
+            text(
+                "DELETE FROM notification_deliveries"
+                " WHERE created_at < now() - make_interval(days => :days)"
+                " AND status <> 'PENDING'"
+            ),
+            {"days": NOTIFICATION_RETENTION_DAYS},
+        )
+        deleted = cast(CursorResult[Any], result).rowcount
+        session.commit()
+    if deleted:
+        logger.info("notification_deliveries_purged", count=deleted)
+    return {"deleted": int(deleted or 0)}

@@ -371,3 +371,158 @@ describe('AlertDetail', () => {
     ).toBeInTheDocument();
   });
 });
+
+function delivery(over: Record<string, unknown> = {}) {
+  return {
+    delivery_id: 'd1',
+    channel_id: 'c1',
+    channel_name: 'ops-slack',
+    channel_type: 'SLACK',
+    status: 'FAILED',
+    attempt_count: 1,
+    last_error: 'http_404',
+    next_attempt_at: null,
+    sent_at: null,
+    created_at: '2026-10-18T08:00:05Z',
+    retryable: true,
+    ...over,
+  };
+}
+
+const postedUrls = (fetchMock: ReturnType<typeof vi.fn>) =>
+  fetchMock.mock.calls
+    .filter((call) => (call[1] as RequestInit | undefined)?.method === 'POST')
+    .map((call) => String(call[0]));
+
+describe('AlertDetail notifications (M3.4)', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('says nobody was notified when there are no deliveries', async () => {
+    mockApi(detail({ notifications: [] }));
+    renderPage();
+    expect(await screen.findByText(/Nobody was notified about this alert/)).toBeInTheDocument();
+  });
+
+  it('tolerates a response from before notifications existed', async () => {
+    mockApi(detail());
+    renderPage();
+    expect(await screen.findByText(/Nobody was notified about this alert/)).toBeInTheDocument();
+  });
+
+  it('shows each delivery, its status, attempts and the reason in words', async () => {
+    mockApi(
+      detail({
+        notifications: [
+          delivery(),
+          delivery({
+            delivery_id: 'd2',
+            channel_name: 'mail',
+            channel_type: 'EMAIL',
+            status: 'SENT',
+            attempt_count: 1,
+            last_error: null,
+            sent_at: '2026-10-18T08:01:00Z',
+            retryable: false,
+          }),
+          delivery({
+            delivery_id: 'd3',
+            channel_name: 'pager',
+            channel_type: 'WEBHOOK',
+            status: 'ABANDONED',
+            attempt_count: 5,
+            last_error: 'timeout',
+          }),
+          delivery({
+            delivery_id: 'd4',
+            channel_name: 'later',
+            status: 'PENDING',
+            attempt_count: 2,
+            last_error: 'http_503',
+            next_attempt_at: '2026-10-18T09:00:00Z',
+            retryable: false,
+          }),
+        ],
+      }),
+    );
+    renderPage();
+    const table = await screen.findByRole('table', {
+      name: 'Notification deliveries for this alert',
+    });
+    expect(within(table).getByText('Failed')).toBeInTheDocument();
+    expect(within(table).getAllByText('Sent').length).toBeGreaterThan(0);
+    expect(within(table).getByText('Gave up (retries used)')).toBeInTheDocument();
+    expect(within(table).getByText(/the destination answered HTTP 404/)).toBeInTheDocument();
+    expect(within(table).getByText(/the destination did not answer in time/)).toBeInTheDocument();
+    expect(within(table).getByText(/Retrying/)).toBeInTheDocument();
+    // A delivered message offers no retry; a failed or abandoned one does; a waiting one does not.
+    expect(within(table).getAllByRole('button', { name: /^Retry sending to/ })).toHaveLength(2);
+    // Raw reason codes are not shown as codes.
+    expect(within(table).queryByText('http_404')).toBeNull();
+  });
+
+  it('shows a channel name containing markup as text', async () => {
+    const markup = '<img src=x onerror=alert(1)>';
+    mockApi(detail({ notifications: [delivery({ channel_name: markup })] }));
+    const { container } = renderPage();
+    expect(
+      await screen.findByText(new RegExp(markup.replace(/[()]/g, '\\$&'))),
+    ).toBeInTheDocument();
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('retries a failed delivery by its ids, then reads the alert again', async () => {
+    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return reply(202, delivery({ status: 'PENDING' }));
+      return reply(200, detail({ notifications: [delivery()] }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderPage();
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Retry sending to ops-slack' }),
+    );
+    await waitFor(() => {
+      expect(postedUrls(fetchMock)).toEqual(['/api/v1/alerts/a1/notifications/d1/retry']);
+    });
+    // Read once on load and again after the retry.
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.filter((c) => !(c[1] as RequestInit | undefined)?.method),
+      ).toHaveLength(2);
+    });
+  });
+
+  it('offers no retry to someone who may only read, or in read-only mode', async () => {
+    mockApi(detail({ notifications: [delivery()] }));
+    const { unmount } = renderPage(authenticated(['alert:read']));
+    await screen.findByRole('table', { name: 'Notification deliveries for this alert' });
+    expect(screen.queryByRole('button', { name: /^Retry sending to/ })).toBeNull();
+    unmount();
+
+    vi.unstubAllGlobals();
+    mockApi(detail({ notifications: [delivery()] }));
+    renderPage(authenticated(['alert:read', 'alert:acknowledge'], true));
+    expect(
+      await screen.findByRole('button', { name: 'Retry sending to ops-slack' }),
+    ).toBeDisabled();
+  });
+
+  it('shows a conflict as one and does not retry it by itself', async () => {
+    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return reply(409, { error: { code: 'invalid_state_transition', message: 'x' } });
+      }
+      return reply(200, detail({ notifications: [delivery()] }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderPage();
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Retry sending to ops-slack' }),
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /cannot be retried in its current state/,
+    );
+    expect(postedUrls(fetchMock)).toHaveLength(1);
+  });
+});

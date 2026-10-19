@@ -52,12 +52,13 @@ from app.core.pagination import Cursor, decode_cursor, encode_cursor
 from app.inventory.models import Server, Service
 from app.inventory.schemas import CursorPage
 from app.inventory.service import InvalidStateTransitionError, NotFoundError
+from app.notifications import service as notification_service
 
 #: Events written by people, read back for the timeline.
 _HUMAN_ACTIONS = ("ALERT_ACKNOWLEDGED", "ALERT_ASSIGNED")
 
 
-def coverage() -> ConditionCoverage:
+def coverage(active_channels: int) -> ConditionCoverage:
     """What produces alerts and what does not yet: never imply a condition is monitored."""
     return ConditionCoverage(
         produced=sorted({rule.condition for rule in RULES}),
@@ -65,6 +66,7 @@ def coverage() -> ConditionCoverage:
             {"condition": condition, "arrives_in": milestone}
             for condition, milestone in NOT_PRODUCED_YET
         ],
+        notification_channels_active=active_channels,
     )
 
 
@@ -223,7 +225,7 @@ async def list_alerts(
     return AlertList(
         items=await _summaries(db, page),
         page=CursorPage(limit=limit, next_cursor=next_cursor, has_more=has_more),
-        coverage=coverage(),
+        coverage=coverage(await notification_service.active_channel_count(db)),
         demo_mode=get_settings().demo_mode,
     )
 
@@ -307,6 +309,7 @@ async def detail(db: AsyncSession, authorized: Authorized, alert_id: uuid.UUID) 
         **summary.model_dump(),
         details=row.details,
         history=await _history(db, row),
+        notifications=await notification_service.deliveries_for_alert(db, row.id),
         previous_occurrences=[
             PreviousOccurrence(
                 alert_id=p.id,

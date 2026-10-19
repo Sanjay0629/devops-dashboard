@@ -29,8 +29,10 @@ from pydantic import Field, SecretStr, ValidationError, field_validator, model_v
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings.exceptions import SettingsError
 
+from app.core.netpolicy import network_problem
 from app.monitoring.health import HealthThresholdTable
 from app.monitoring.utilisation import UtilisationThresholdTable
+from app.notifications.address import MailboxError, parse_mailbox
 
 Environment = Literal["local", "development", "staging", "production"]
 
@@ -182,6 +184,29 @@ class Settings(BaseSettings):
     #: Hosts for which plain ``http`` is accepted, a subset of the allowlist
     #: (§19 rule 3). Normally empty.
     ssrf_insecure_hosts: Annotated[tuple[str, ...], NoDecode] = ()
+    #: Private-range networks an outbound connection may reach (M3.4, ``OPEN-49``):
+    #: RFC1918, CGNAT and IPv6 ULA are refused unless listed here. **Empty by default.**
+    #: Loopback, link-local (the metadata endpoint), multicast and reserved space can
+    #: never be listed (``app/core/netpolicy.py``).
+    ssrf_allowed_networks: Annotated[tuple[str, ...], NoDecode] = ()
+
+    # --- Notifications (M3.4, OPEN-48 -- OPEN-57) ----------------------------
+    #: Seconds to wait after the 1st, 2nd, ... failed attempt. The number of entries
+    #: is the retry budget: ``len + 1`` attempts, then ``ABANDONED``. A setting only so a
+    #: smoke run can shorten it; the worker reads the same value.
+    notification_retry_delays_seconds: Annotated[tuple[int, ...], NoDecode] = (60, 300, 900, 3600)
+    #: Public origin of the SPA, used only to put a link in a notification. Unset: no link
+    #: (it is not derived from the OIDC redirect URL).
+    public_base_url: str | None = None
+    #: Outgoing mail. Unset ``smtp_host`` means an EMAIL channel cannot be registered.
+    #: The host must be on ``ssrf_host_allowlist``; STARTTLS is required unless the host is
+    #: also in ``ssrf_insecure_hosts``.
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65_535)
+    smtp_from: str | None = None
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_starttls: bool = True
 
     # --- tunables ------------------------------------------------------------
     database_statement_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
@@ -215,6 +240,7 @@ class Settings(BaseSettings):
         "cors_origins",
         "ssrf_host_allowlist",
         "ssrf_insecure_hosts",
+        "ssrf_allowed_networks",
         "alert_webhook_allowed_cidrs",
         mode="before",
     )
@@ -255,6 +281,66 @@ class Settings(BaseSettings):
                 raise ValueError("an all-addresses network is not a source restriction")
         return value
 
+    @field_validator(
+        "public_base_url",
+        "smtp_host",
+        "smtp_from",
+        "smtp_username",
+        "smtp_password",
+        mode="before",
+    )
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        """Compose passes an unset variable as the empty string; for these it means unset."""
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("ssrf_allowed_networks")
+    @classmethod
+    def _check_allowed_networks(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for entry in value:
+            try:
+                network = ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                raise ValueError("every entry must be an IP network such as 10.0.0.0/8") from None
+            problem = network_problem(network)
+            if problem is not None:
+                raise ValueError(problem)
+        return value
+
+    @field_validator("notification_retry_delays_seconds", mode="before")
+    @classmethod
+    def _split_retry_delays(cls, value: object) -> object:
+        if isinstance(value, str):
+            try:
+                value = tuple(int(part) for part in value.split(",") if part.strip())
+            except ValueError:
+                raise ValueError("must be comma-separated whole seconds") from None
+        if not isinstance(value, tuple) or not 1 <= len(value) <= 8:
+            raise ValueError("must list between 1 and 8 delays")
+        if any(not 1 <= delay <= 86_400 for delay in value):
+            raise ValueError("every delay must be between 1 and 86400 seconds")
+        return value
+
+    @field_validator("smtp_from")
+    @classmethod
+    def _check_smtp_from(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return parse_mailbox(value)
+        except MailboxError:
+            raise ValueError("must be a single plain email address") from None
+
+    @field_validator("smtp_host")
+    @classmethod
+    def _check_smtp_host(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip().lower()
+        if not value or any(c.isspace() or c in "/@:" for c in value):
+            raise ValueError("must be a bare host name")
+        return value
+
     @field_validator("alert_webhook_secret")
     @classmethod
     def _check_webhook_secret(cls, value: SecretStr | None) -> SecretStr | None:
@@ -283,7 +369,12 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
-        "oidc_issuer", "oidc_redirect_url", "prometheus_url", "loki_url", "alertmanager_url"
+        "oidc_issuer",
+        "oidc_redirect_url",
+        "prometheus_url",
+        "loki_url",
+        "alertmanager_url",
+        "public_base_url",
     )
     @classmethod
     def _check_absolute_http_url(cls, value: str | None) -> str | None:
@@ -339,6 +430,17 @@ class Settings(BaseSettings):
             # Without it the provider need not issue an ID token at all, and
             # ID-token verification is the whole authentication decision.
             raise ValueError("oidc_scopes must include 'openid'")
+        if self.smtp_host is not None:
+            if self.smtp_host not in {h.lower() for h in self.ssrf_host_allowlist}:
+                raise ValueError("smtp_host must be on ssrf_host_allowlist")
+            if not self.smtp_starttls and self.smtp_host not in {
+                h.lower() for h in self.ssrf_insecure_hosts
+            }:
+                raise ValueError("smtp_starttls may be off only for a host in ssrf_insecure_hosts")
+            if self.smtp_from is None:
+                raise ValueError("smtp_from is required when smtp_host is set")
+        if (self.smtp_username is None) != (self.smtp_password is None):
+            raise ValueError("smtp_username and smtp_password must be set together")
         if self.session_idle_timeout_seconds > self.session_absolute_timeout_seconds:
             raise ValueError(
                 "session_idle_timeout_seconds must not exceed "
@@ -358,6 +460,7 @@ class Settings(BaseSettings):
                 "prometheus_url",
                 "loki_url",
                 "alertmanager_url",
+                "public_base_url",
             ):
                 url = getattr(self, name)
                 if url is not None and not url.startswith("https://"):
@@ -398,6 +501,10 @@ class Settings(BaseSettings):
     @property
     def alertmanager_configured(self) -> bool:
         return self.alertmanager_url is not None
+
+    @property
+    def smtp_configured(self) -> bool:
+        return self.smtp_host is not None
 
     @property
     def cookie_secure(self) -> bool:

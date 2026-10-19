@@ -20,6 +20,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Final
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.alerts.status import alertmanager_status
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError, field_error
@@ -32,6 +34,7 @@ from app.metrics.schemas import (
     MetricTemplateInfo,
     MetricTemplateList,
 )
+from app.notifications import status as notification_status
 
 #: §15.2: "max range 30 days".
 MAX_RANGE_SECONDS: Final = 30 * 24 * 3600
@@ -161,7 +164,7 @@ _PENDING: Final[tuple[tuple[str, str, str], ...]] = (
     ("Alertmanager", "alerts", "Alertmanager is probed live (M3.3)."),
     ("Jenkins", "ci", "Deployment integration is not implemented yet (M5.1)."),
     ("Secret store", "secrets", "No secret store backend is selected yet (OPEN-06)."),
-    ("Notification channels", "notifications", "Notifications are not implemented yet (M3.4)."),
+    ("Notification channels", "notifications", "Read from the database (M3.4)."),
 )
 
 
@@ -212,7 +215,7 @@ async def prometheus_status(client: PrometheusClient | None = None) -> Integrati
     )
 
 
-async def integration_status() -> IntegrationStatusList:
+async def integration_status(db: AsyncSession | None = None) -> IntegrationStatusList:
     """§26.1. Prometheus, Loki and Alertmanager are probed; the rest report what is true of them."""
     settings = get_settings()
     rows = [
@@ -235,6 +238,9 @@ async def integration_status() -> IntegrationStatusList:
     for name, kind, reason in _PENDING:
         if name == "Alertmanager":
             rows.append(await alertmanager_status())
+            continue
+        if name == "Notification channels" and db is not None:
+            rows.extend(await notification_status.channel_rows(db))
             continue
         rows.append(
             IntegrationStatus(
