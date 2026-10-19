@@ -44,6 +44,7 @@ _CAPABILITIES = CapabilitySet(
 
 class DemoAdapter(ProviderAdapter):
     adapter_id = "demo"
+    demo = True
 
     def capabilities(self) -> CapabilitySet:
         return _CAPABILITIES

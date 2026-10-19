@@ -184,3 +184,21 @@ async def test_the_full_page_lists_every_integration_the_contract_names() -> Non
     # No row leaks a URL, a credential or a provider payload (§20).
     for row in page.integrations:
         assert "://" not in (row.last_error_message or "")
+
+
+async def test_the_cloud_accounts_row_says_why_it_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M4.1: an adapter layer exists, a real adapter does not, and demo mode is not a probe."""
+    reasons = {}
+    for demo in ("false", "true"):
+        monkeypatch.setenv("DCP_DEMO_MODE", demo)
+        get_settings.cache_clear()
+        page = await service.integration_status()
+        row = next(r for r in page.integrations if r.name == "Cloud accounts")
+        assert row.status == "not_configured"
+        assert row.demo_mode is (demo == "true")
+        reasons[demo] = row.last_error_message
+    get_settings.cache_clear()
+    assert "M4.3" in (reasons["false"] or "")
+    assert "Demonstration mode" in (reasons["true"] or "")

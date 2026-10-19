@@ -32,6 +32,8 @@ from app.providers.types import (
 class ProviderAdapter(ABC):
     #: ``^[a-z][a-z0-9_]{0,31}$``; stamped on every result and handle this adapter produces.
     adapter_id: ClassVar[str]
+    #: ``True`` only for the demonstration adapter (AD-15); read by the API to flag responses.
+    demo: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
