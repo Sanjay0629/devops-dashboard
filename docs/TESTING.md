@@ -158,7 +158,10 @@ Per adapter (AWS, Azure, agent, demo), against mocked provider APIs:
 - Terminal result written with status, timestamps, `sanitized_result` and (for success) `observed_state_after`.
 - **Verification mismatch ⇒ `FAILED`**, never `SUCCEEDED` (mandatory rule 8).
 - **Worker crash mid-operation** (PRD §12): kill the worker; assert the reaper moves the row to `TIMED_OUT` past `deadline_at`, that the provider is **not** re-invoked, and that the row is flagged for reconciliation when no handle was recorded.
-- Worker restart mid-poll resumes from the persisted handle.
+- Worker restart mid-poll resumes from the persisted handle. **Moved to M4.3 (`OPEN-70`):** M4.2 has no resume (it needs a real provider to resume against). In M4.2 a row left `RUNNING` by a killed worker is timed out by the reaper with `reconciliation_required`, the provider is not re-invoked, and the persisted handle is kept for an operator.
+- The reaper times out an unclaimed `PENDING` / `APPROVED` row past `deadline_at` (`EXPIRED_BEFORE_START`) without calling a provider; the healer re-enqueues a row whose queue message was lost.
+- Every `SUCCEEDED` is refused by the state machine without a verification result **and** by `ck_operations_verified_success` without `observed_state_after`; a mutation that removes either guard alone fails a named test.
+- A row needing approval without an approved decision, a re-labelled server, a disabled account and a policy that no longer allows the action are each refused by the worker with zero provider invocations.
 - Permission revoked while the task sat in the queue ⇒ the worker refuses to invoke and records a denial.
 - Approval revoked or expired before execution ⇒ the worker refuses.
 - Queue isolation: a saturated `operations` queue does not delay `notifications`.
