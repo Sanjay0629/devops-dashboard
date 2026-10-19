@@ -101,11 +101,25 @@ def create_celery_app() -> Celery:
                 "schedule": 300.0,
                 "options": {"queue": "maintenance"},
             },
+            # M3.4 (OPEN-50). Leases the due deliveries -- first sends and retries alike.
+            # Fifteen seconds is the latency a notification can add to an alert.
+            "dispatch-notifications": {
+                "task": "dcp.notifications.dispatch",
+                "schedule": 15.0,
+                "options": {"queue": "notifications"},
+            },
+            # M3.4 (DATABASE.md section 11): delivery bookkeeping is kept 90 days.
+            "purge-notification-deliveries": {
+                "task": "dcp.maintenance.purge_notification_deliveries",
+                "schedule": crontab(hour="3", minute="37"),
+                "options": {"queue": "maintenance"},
+            },
         },
         imports=(
             "app.workers.tasks.ping",
             "app.workers.tasks.maintenance",
             "app.workers.tasks.monitoring",
+            "app.workers.tasks.notifications",
         ),
     )
     return celery_app

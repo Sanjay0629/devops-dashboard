@@ -83,6 +83,28 @@ x-backend-env: &backend-env
   DCP_ALERTMANAGER_URL: ${DCP_ALERTMANAGER_URL:-http://alertmanager:9093}
   DCP_ALERT_WEBHOOK_SECRET: ${DCP_ALERT_WEBHOOK_SECRET:-local-development-alert-webhook-secret-0123456789}
   DCP_ALERT_WEBHOOK_ALLOWED_CIDRS: ${DCP_ALERT_WEBHOOK_ALLOWED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+  # M3.4 (OPEN-48 - OPEN-55). Same two-halves trap (issue 54): .env.example documents
+  # these, and this block is what makes .env able to change them. The SSRF lists were
+  # among the settings that never reached the containers; notification delivery is the
+  # first thing that needs them to. The private-range default is the Docker bridge ranges,
+  # as for the webhook CIDRs above, so the `notification-sink` mock is reachable; narrow it
+  # anywhere that matters. EMPTY allowlists admit nothing.
+  DCP_SSRF_HOST_ALLOWLIST: ${DCP_SSRF_HOST_ALLOWLIST:-}
+  DCP_SSRF_INSECURE_HOSTS: ${DCP_SSRF_INSECURE_HOSTS:-}
+  DCP_SSRF_ALLOWED_NETWORKS: ${DCP_SSRF_ALLOWED_NETWORKS:-}
+  DCP_NOTIFICATION_RETRY_DELAYS_SECONDS: ${DCP_NOTIFICATION_RETRY_DELAYS_SECONDS:-60,300,900,3600}
+  DCP_PUBLIC_BASE_URL: ${DCP_PUBLIC_BASE_URL:-}
+  DCP_SMTP_HOST: ${DCP_SMTP_HOST:-}
+  DCP_SMTP_PORT: ${DCP_SMTP_PORT:-587}
+  DCP_SMTP_FROM: ${DCP_SMTP_FROM:-}
+  DCP_SMTP_USERNAME: ${DCP_SMTP_USERNAME:-}
+  DCP_SMTP_PASSWORD: ${DCP_SMTP_PASSWORD:-}
+  DCP_SMTP_STARTTLS: ${DCP_SMTP_STARTTLS:-true}
+  # A destination secret, by the reference env://NOTIFY_SINK. Its value is a URL on the
+  # notification-sink mock, which only exists in the `mocks` profile; with the profile off
+  # the variable points at nothing and a channel using it simply fails to deliver, visibly.
+  # Not DCP_-prefixed on purpose (core/secrets.py).
+  DCPSECRET_NOTIFY_SINK: ${DCPSECRET_NOTIFY_SINK:-http://notification-sink:8080/hook}
   #
   # NOTE: this block enumerates the settings the stack passes through, so a
   # setting that exists on the Settings model but is absent here keeps its
@@ -634,6 +656,30 @@ services:
     deploy:
       resources:
         limits: { cpus: "0.25", memory: 256m }
+
+  # M3.4. A DEVELOPMENT AID (CLAUDE.md section 7): records HTTP posts and SMTP messages
+  # and answers per a mode a test flips (infra/compose/notification-sink/sink.py). It is
+  # not Slack, Teams or a mail server, and passing against it proves DCP's behaviour, not a
+  # provider's. Nothing is published to the host: the smoke test and the worker reach it by
+  # service name. Reuses the backend development image; no new image, no new dependency.
+  notification-sink:
+    <<: *hardening
+    profiles: [mocks]
+    build:
+      context: ../../backend
+      target: development
+    command: ["python", "/notification-sink/sink.py"]
+    volumes:
+      - ./notification-sink:/notification-sink:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128m }
 
   # --- logs profile (M3.1) ---------------------------------------------------
   # A DEVELOPMENT AID (CLAUDE.md §7): writes synthetic log files, laid out like
