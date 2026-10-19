@@ -88,6 +88,8 @@ else
   printf '\n=== coverage: changed lines\n    SKIPPED — %s is not a known ref\n' "$BASE_REF"
   skipped+=("coverage: changed lines (no $BASE_REF)")
 fi
+# OPEN-65: no provider token in code outside app/providers/ except a reviewed, pinned allowlist.
+run "providers: no branching above the adapter layer" python scripts/check_provider_branching.py backend/app
 run "docs: link check"        python scripts/check_doc_links.py .
 
 printf '\n========================================\n'

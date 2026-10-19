@@ -385,7 +385,7 @@ classDiagram
         +get_server_info(ref) ServerInfo
         +check_connectivity(ref) ConnectivityResult
         +list_managed_services(ref) ServiceSnapshot[]
-        +execute_operation(ref, action, params) ExecutionHandle
+        +execute_operation(ref, service, action, operation_id) ExecutionHandle
         +get_operation_status(handle) ExecutionStatus
     }
     ProviderAdapter <|-- AwsSsmAdapter
@@ -396,6 +396,8 @@ classDiagram
 
 All adapters return a common result envelope and raise a common error taxonomy; **no provider branching above the adapter layer**, and none at all in the frontend (PRD §4.11).
 
+**The signature is the security control (`OPEN-58`).** There is no `params` argument: `execute_operation` takes a `ServerRef` and a `ServiceRef` (both built from stored rows), the closed `ServiceAction` enum and an operation id, and nothing else, so a command, script, argv or document name has no parameter to travel in. The method is concrete and final on the base class (capability gate, then the adapter's `_submit`), and a test inspects every adapter's signatures. The interface is synchronous (workers and `boto3` are). The result envelope, handle and capability set are `OPEN-59` and `OPEN-61`; the registry is `OPEN-62`.
+
 ### 7.1 Error taxonomy
 
 `AuthenticationError`, `AuthorizationError`, `NotFound`, `Throttled(retry_after)`, `Timeout`, `UnsupportedOperation`, `PartialFailure`, `ProviderUnavailable`, `NotConfigured`. Each maps to a documented API error code ([API_CONTRACTS.md §3](API_CONTRACTS.md#3-error-format)) and a retry policy ([§10](#10-error-handling-retries-timeouts-and-idempotency)).
@@ -404,13 +406,15 @@ All adapters return a common result envelope and raise a common error taxonomy; 
 
 | Capability | AWS (SSM) | Azure (ARM / Run Command / Arc) | Registered Linux (agent) | Demo |
 |---|---|---|---|---|
-| Inventory sync | Yes | Yes | No (manual registration) | Synthetic |
-| Connectivity check | `DescribeInstanceInformation` ping state | Agent/Arc status | Agent heartbeat | Always ok |
-| Allowlisted service control | Yes, via registered SSM document | Yes, via registered Run Command script | Yes, fixed RPC verbs | Simulated |
-| Async handle + polling | Yes (`CommandId`) | Yes (async operation) | Yes (job id) | Immediate |
+| Inventory sync | Yes | Yes | No (manual registration) | `not_configured` |
+| Connectivity check | `DescribeInstanceInformation` ping state | Agent/Arc status | Agent heartbeat | `not_configured` |
+| Allowlisted service control | Yes, via registered SSM document | Yes, via registered Run Command script | Yes, fixed RPC verbs | `not_configured` |
+| Async handle + polling | Yes (`CommandId`) | Yes (async operation) | Yes (job id) | No handle is ever issued |
 | Concurrent invocation limits | Account/region throttles | Per-VM Run Command serialisation | Agent-defined | None |
 | Typical latency | seconds | seconds to tens of seconds | sub-second | none |
 | Windows unit control | n/a for systemd | n/a for systemd | n/a | n/a |
+
+**The Demo column was amended in M4.1 (`OPEN-63`).** It read "Always ok" / "Simulated" / "Synthetic" / "Immediate", which contradicted §7.3, TESTING §6 and API_CONTRACTS §14.8, and which would present a mock as operational (CLAUDE.md §7). The demo adapter never asserts a fact about a host. Capabilities are three-valued (`supported | unsupported | not_configured`, `OPEN-61`): "the provider cannot" and "we have not set it up" are different answers. The registered Linux (agent) column describes a design that is not built in Phase 4 (`OPEN-62`).
 
 The UI must render `UnsupportedOperation` explicitly ("not supported for this provider"), never as a generic failure (PRD §4.11 acceptance). Azure Run Command's per-VM serialisation and AWS's account-level throttling are different failure modes and must not share one retry constant.
 
@@ -421,7 +425,7 @@ The adapters invoke **pre-registered, parameter-constrained** provider artifacts
 - **AWS:** a custom SSM document (e.g. `DCP-ServiceControl`) whose parameters are a closed enum of actions and a service name validated against the DB allowlist before invocation. The execution IAM role is scoped by resource tag and document name, so even a compromised backend cannot run `AWS-RunShellScript`. See [SECURITY.md §8](SECURITY.md#8-cloud-credentials-and-execution-identity).
 - **Azure:** a registered Run Command script with the same closed parameter set, under a managed identity holding only the specific action on a scoped resource group.
 - **Registered Linux:** a restricted agent exposing fixed verbs (`status`, `start`, `stop`, `restart`, `logs_tail`) with no free-form command field (OPEN-05: build vs adopt SSM hybrid activations / Azure Arc).
-- **Demo:** returns `NotConfigured` for writes and synthetic data for reads, always flagged in responses (AD-15).
+- **Demo:** `NotConfigured` for every call that would state the condition of a host or change it (connectivity, service listing, execute, status); only its own capabilities and the identity the caller already holds are answered, always flagged `demo_mode` in the result and the response (AD-15, `OPEN-63`). Synthetic fleet data lives in the `[DEMO]`-labelled seed, not in the adapter.
 
 String interpolation of user input into any command body is prohibited; parameters are passed as typed provider parameters.
 
@@ -564,16 +568,18 @@ Each inner timeout is strictly less than its caller's. Any operation lacking a d
 
 ### 10.2 Retry policy by error class
 
-| Error class | Retry? | Policy |
-|---|---|---|
-| `Throttled` | Yes | Honour `retry_after`, else exponential backoff + full jitter, cap 5 |
-| `Timeout` on a **read** | Yes | 2 retries, backoff |
-| `Timeout` on a **write/invoke** | **No** | Reconcile instead — see §10.3 |
-| `ProviderUnavailable` | Yes | Backoff, cap 5, then terminal with diagnostics |
-| `AuthenticationError` | Once after forced credential refresh | Then terminal; raise integration alert |
-| `AuthorizationError` | No | Terminal; audit; surface as configuration problem |
-| `UnsupportedOperation` | No | Terminal; surfaced explicitly in UI |
-| `PartialFailure` | No | Terminal `FAILED`, per-target detail retained |
+Read and write are separate columns (`OPEN-60`): a write is retried only where the provider refused the request **before acting** (`Throttled`; the single authentication refresh). Anything ambiguous about whether the provider acted is reconciled from the persisted handle (§10.3), never retried — CLAUDE.md §5.
+
+| Error class | Retry a read? | Retry a write/invoke? | Policy |
+|---|---|---|---|
+| `Throttled` | Yes | **Yes** (refused before acting) | Honour `retry_after`, else exponential backoff + full jitter, cap 5 |
+| `Timeout` | Yes | **No** | Reads: 2 retries, backoff. Writes: reconcile instead — see §10.3 |
+| `ProviderUnavailable` | Yes | **No** — reconcile | Reads: backoff, cap 5, then terminal with diagnostics |
+| `AuthenticationError` | Once after forced credential refresh | Once, same | Then terminal; raise integration alert |
+| `AuthorizationError` | No | No | Terminal; audit; surface as configuration problem |
+| `UnsupportedOperation` | No | No | Terminal; surfaced explicitly in UI |
+| `PartialFailure` | No | No | Terminal `FAILED`, per-target detail retained |
+| `NotFound`, `NotConfigured` | No | No | Terminal; `NotFound` means the provider no longer has the resource (stale inventory) |
 
 ### 10.3 Idempotency and duplicate suppression (AD-08)
 
@@ -820,7 +826,7 @@ Recorded rather than silently resolved. Each has a working default so Phase 1 is
 | ~~OPEN-02~~ | PRD §4.9 lists `environment` as an application attribute, but §6 `applications` has no such column while `deployments` does. Is an application per-environment or environment-agnostic? | **RESOLVED 2026-10-14 by the product owner: environment-agnostic**, confirming `AD-12`. `applications` keeps no `environment` column; environment lives on `servers`, `deployment_targets` and `deployments`. One application spans environments, which is what PRD §4.9 needs when it says one application spans many servers | Closed. No migration; §18 response shapes stand as written |
 | ~~OPEN-03~~ | Are alert rules file-managed or editable in-app? | **RESOLVED 2026-10-17 (before M3.1): file-managed in git (AD-06).** In-app rule editing is not built in v1 and is reopened only by an explicit requirement. The numbers in the utilisation rules are not hand-written: see `OPEN-28` in [API_CONTRACTS.md §30](API_CONTRACTS.md#30-open-decisions) | ~~Phase 3 scope~~ — closed |
 | ~~OPEN-04~~ | Session store: Redis-only, or a durable `user_sessions` table? | **RESOLVED 2026-10-13 (M1.3): Redis-only.** No `user_sessions` table. Login, logout and denial are still audited in PostgreSQL, so the authentication record survives a flushed Redis even though live sessions do not. Accepted cost: a Redis restart logs everyone out. | ~~Phase 1~~ — closed |
-| OPEN-05 | Restricted agent for non-cloud Linux: adopt SSM hybrid activations / Azure Arc, or build one? | Prefer adopt; defer build | Phase 4 |
+| ~~OPEN-05~~ | Restricted agent for non-cloud Linux: adopt SSM hybrid activations / Azure Arc, or build one? | **RESOLVED 2026-10-19 (M4.1, `OPEN-62`): adopt, do not build.** No `AgentAdapter` in Phase 4; the `mi-…` gap is recorded there | ~~Phase 4~~ - closed (M6.1 may revisit) |
 | OPEN-06 | Which secret store is canonical in a multi-cloud portal? | Pluggable interface; one configured backend per deployment. **M3.4 built the interface and one development backend (`env://`, `OPEN-48`); the choice of a production store is still open** | Phase 1 config; M4.3 / M4.4 |
 | OPEN-07 | RPO/RTO targets | Undefined; backups daily + WAL archiving as a starting point | Phase 6 |
 | ~~OPEN-08~~ | Metric and log retention durations and storage budget | **RESOLVED 2026-10-17 (before M3.1), as v1 values rather than measured sizing:** Prometheus 30 d (already in force), **Loki 14 d** (`retention_period: 336h`, compactor retention on), alerts 180 d, audit 400 d online. **No disk quota in v1**; growth is bounded by Loki's ingestion-rate, line-size and stream-count limits plus the retention period, and the byte budget is sized from measured volume in Phase 6 (`OPEN-07`, `OPEN-12`). DCP's 7-day cap is on a query's *span*, not on how far back it may start, so the two numbers do not conflict. Changing a duration is a configuration edit, not a code change | ~~Phase 2/3 sizing~~ — closed |
@@ -859,6 +865,15 @@ Recorded rather than silently resolved. Each has a working default so Phase 1 is
 | ~~OPEN-55~~ | **Raised and closed for M3.4.** Alert text is untrusted; it is about to be sent to people | **RESOLVED:** every message is a fixed template over the stored, already-redacted row, with control characters stripped and length caps. Slack escapes `& < >` (defusing `<!channel>` and `<url|text>`), Teams escapes Markdown, the generic webhook has a fixed JSON schema, email is `text/plain` only. The link is `DCP_PUBLIC_BASE_URL` + `/alerts/<id>` and is **omitted when unset**. The Slack and Teams shapes come from public documentation and are **not verified against a real workspace or tenant** | ~~M3.4~~ - closed |
 | ~~OPEN-56~~ | **Raised and closed for M3.4.** Permissions, audit and endpoints (the contract had none for notifications) | **RESOLVED:** channel admin `admin:integrations`; delivery status on an alert `alert:read` within the alert's scope; manual retry `alert:acknowledge` within scope, blocked in read-only mode. Audit `NOTIFICATION_CHANNEL_CHANGED` (field *names* only, never the reference) and the new `NOTIFICATION_RETRY_REQUESTED`; automatic sends are recorded in `notification_deliveries`, not audited. New: §26.8 - §26.10, §20.6, `notifications[]` on §20.2, `coverage.notification_channels_active` on §20.1, one §26.1 row per channel (the first use of `degraded`: a channel that has never delivered anything is unproven, not `ok`) | ~~M3.4~~ - closed |
 | ~~OPEN-57~~ | **Raised and closed for M3.4.** What is deliberately not built | **RESOLVED:** no channel delete (RESTRICT FK; disable instead); **no "send test message" and no verify endpoint** (a delivery needs an alert row, and a synthetic one is the mocked-data pattern CLAUDE.md §7 forbids); no per-channel rate limit or digest; no webhook signing, secret rotation, escalation, quiet hours or per-user email | ~~M3.4~~ - closed |
+| ~~OPEN-58~~ | **Raised and closed for M4.1.** Shape of the adapter interface | **RESOLVED:** a synchronous ABC (workers and `boto3` are sync; the API calls the short reads through a thread). Typed signature, **no `params`**: `execute_operation(ref: ServerRef, service: ServiceRef, action: ServiceAction, *, operation_id: UUID)`; `ServerRef` / `ServiceRef` are built from stored rows only. `execute_operation` is concrete and final on the base class (capability gate, then abstract `_submit`), and `__init_subclass__` refuses an override. A signature test fails on any parameter that is not one of the closed types, or is named like a command | ~~M4.1~~ - closed |
+| ~~OPEN-59~~ | **Raised and closed for M4.1.** Result envelope | **RESOLVED:** `AdapterResult[T]` = `value`, `data_state` (§4 vocabulary), `collected_at`, `adapter_id`, `demo_mode`, `reason`. `demo_mode` is set by the adapter that produced the result, not read from settings at the API edge. `value` is `None` unless `data_state` is `ok` or `stale`. `ExecutionHandle` = `{adapter_id, external_execution_id (bounded pattern), submitted_at}`, persisted before polling (AD-08) | ~~M4.1~~ - closed |
+| ~~OPEN-60~~ | **Raised and closed for M4.1.** Error mapping and retry for writes | **RESOLVED:** the nine §7.1 classes map to API codes in `providers/errors.py` (API_CONTRACTS §3); `NotFound` is a `502` (a `404` would say DCP's own resource is absent), `Throttled` a `503` with `Retry-After` (a `429` is the caller's own limit), and `UnsupportedOperation` a new `422 unsupported_operation`. Provider text is never copied into a message. §10.2 gains read and write columns: a write is retried only for `Throttled` and the single authentication refresh (the provider refused before acting); `Timeout` / `ProviderUnavailable` on a write are reconciled from the handle, never retried | ~~M4.1~~ - closed |
+| ~~OPEN-61~~ | **Raised and closed for M4.1.** Capability representation | **RESOLVED:** per capability `supported | unsupported | not_configured` (provider cannot vs. we have not set it up), plus `async_handle`, `concurrency` and `latency`. `ensure_supported` raises `UnsupportedOperation` or `NotConfigured`. The matrix is pinned against §7.2. With one adapter there is one column: the harness exists in M4.1, the "adapters differ" assertions arrive with the second real adapter (M4.4) | ~~M4.1~~ - closed |
+| ~~OPEN-62~~ | **Raised and closed for M4.1.** Registry key, and `OPEN-05` | **RESOLVED:** keyed on `cloud_accounts.provider`; `DemoAdapter` for every provider in `demo_mode`, otherwise a provider → factory mapping that is **empty** until M4.3 / M4.4; an unknown or unregistered provider raises `NotConfigured` (fail closed). **`OPEN-05` closed: adopt, do not build.** No `AgentAdapter` in Phase 4; `ON_PREM` / `OTHER` accounts have no adapter. Gap recorded, not solved: SSM hybrid activations would need an `mi-…` resource id under an AWS adapter, which registration rejects today | ~~M4.1~~ - closed |
+| ~~OPEN-63~~ | **Raised and closed for M4.1.** What the demo adapter may say (§7.2, §7.3 and API_CONTRACTS §14.8 disagreed) | **RESOLVED:** it never asserts a fact about a host. `capabilities()` and `get_server_info` (identity the caller already holds, `provider_status="demonstration"`) answer; connectivity, service listing, execute and status raise `NotConfigured`. Synthetic data stays in the `[DEMO]` seed. §14.8 moves to M4.3. "A full operation lifecycle against `DemoAdapter`" is re-scoped: M4.1 tests the adapter lifecycle and that a refused write leaves no handle; the state-machine lifecycle is M4.2, against a test-only fake | ~~M4.1~~ - closed |
+| ~~OPEN-64~~ | **Raised and closed for M4.1.** §26.7 and the §26.1 row | **RESOLVED:** `200` always for an existing account; a registered adapter ⇒ `adapter_state=configured` (a factory exists; credentials are not verified, §26.5 does that); no adapter ⇒ `adapter_state=not_configured`, `capabilities=null` (unknown is not "supports nothing"); demonstration ⇒ every action `not_configured`, `demo_mode=true`. `account_status` is reported, not enforced (the DISABLED gate is M4.2). §26.1 stays one row with new reason text; per-account rows arrive with §26.5. No frontend page | ~~M4.1~~ - closed |
+| ~~OPEN-65~~ | **Raised and closed for M4.1.** The "no provider branching above the adapter layer" gate | **RESOLVED:** `scripts/check_provider_branching.py` scans `app/` outside `providers/` and fails on any provider token in a file not on a reviewed allowlist (a test pins the allowlist). **Exception, recorded:** `inventory/schemas.py` holds a per-provider resource-id pattern and provider → management-method table — registration-time validation of closed data, not behavioural branching; left in place (moving it is unrelated refactoring, CLAUDE.md §3) and tracked in PROGRESS §6 to revisit in M4.3 | ~~M4.1~~ - closed |
+| ~~OPEN-66~~ | **Raised and closed for M4.1.** Deliberately not built | **RESOLVED:** `AgentAdapter`; §14.8; §26.2 – §26.6 and any account UI; per-account §26.1 rows; any real provider, credential or outbound call; timeouts, circuit breakers and retry execution; the capability-disagreement assertions; hybrid-activation support | ~~M4.1~~ - closed |
 
 ---
 

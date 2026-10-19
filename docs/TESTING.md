@@ -140,7 +140,13 @@ Per adapter (AWS, Azure, agent, demo), against mocked provider APIs:
 - Capability gating: an unsupported action returns `UnsupportedOperation`, surfaced as an explicit "not supported by this provider" rather than a generic failure (PRD §4.11 acceptance criterion).
 - **Providers are asserted to differ** where they genuinely do: a test pins the capability matrix, so a future change that silently assumes parity fails ([ARCHITECTURE.md §7.2](ARCHITECTURE.md#72-capability-matrix--providers-are-not-interchangeable)).
 - Demo adapter returns `not_configured` for all writes and flags `demo_mode` on every response.
-- **Adversarial:** the adapter interface has no command/script/argv parameter — asserted by signature inspection, so adding one breaks the test suite.
+- **Adversarial:** the adapter interface has no command/script/argv parameter — asserted by signature inspection, so adding one breaks the test suite. Every parameter annotation must be one of a closed set of types (no `str`, `dict`, `Any`, `*args`, `**kwargs`), so a new parameter has to be added to that set on purpose.
+
+**What M4.1 tests, and what it cannot yet (`OPEN-61`, `OPEN-63`, `OPEN-65`).**
+- A parametrised **conformance harness** every adapter must pass, plus a deliberately violating adapter that the harness must *fail* (a harness nothing can fail proves nothing). The test-only `ScriptedAdapter` lives under `tests/providers/`, never in `app/`.
+- The "full operation lifecycle against `DemoAdapter`" in IMPLEMENTATION_PLAN is the **adapter** lifecycle (capabilities → server info → connectivity → services → execute → status): the demonstration adapter answers the first two and refuses the rest with `not_configured`, and a refused write leaves no handle. Request → `SUCCEEDED` with `observed_state_after` is the state machine's lifecycle (M4.2) and runs there against the test fake.
+- "Providers are asserted to differ" needs two real adapters. M4.1 pins the demonstration column of the §7.2 matrix and builds the comparison harness; the disagreement assertions arrive with M4.4. It is not claimed before then.
+- `scripts/check_provider_branching.py` (in `check-all.sh`): no provider token outside `app/providers/` except in a reviewed, pinned allowlist; a planted violation must fail it.
 - One provider's outage does not affect another account's operations (isolation test).
 
 ---

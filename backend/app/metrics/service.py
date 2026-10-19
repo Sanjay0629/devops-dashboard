@@ -153,12 +153,12 @@ def catalogue(settings: Settings | None = None) -> MetricTemplateList:
 #: same convention ``app/dashboard/schemas.py`` uses for a sourceless section.
 _PENDING: Final[tuple[tuple[str, str, str], ...]] = (
     # §26.1 asks for a row per *cloud account*, and migration 0002 seeds one, so
-    # this is a deliberate single row rather than an enumeration. There is no
-    # provider adapter to probe until M4.1, so N rows would carry one fact N
-    # times — and reading the accounts would mean a database session on a
-    # status endpoint that otherwise needs none. It becomes per-account when
-    # there is a per-account answer. Recorded in PROGRESS.md.
-    ("Cloud accounts", "cloud", "No cloud provider adapter exists yet (M4.1)."),
+    # this is a deliberate single row rather than an enumeration. M4.1 has an adapter
+    # layer but no adapter that can probe an account, so N rows would carry one fact
+    # N times — and reading the accounts would mean a database session on a status
+    # endpoint that otherwise needs none. It becomes per-account with §26.5, the
+    # first real probe (OPEN-64). The text is replaced in demonstration mode below.
+    ("Cloud accounts", "cloud", "No real provider adapter is implemented yet (M4.3, M4.4)."),
     # Replaced by a live probe (M3.3) at this position, so the page keeps the contract's
     # order; it stays in the list so a name can never be dropped from the page by accident.
     ("Alertmanager", "alerts", "Alertmanager is probed live (M3.3)."),
@@ -242,6 +242,8 @@ async def integration_status(db: AsyncSession | None = None) -> IntegrationStatu
         if name == "Notification channels" and db is not None:
             rows.extend(await notification_status.channel_rows(db))
             continue
+        if name == "Cloud accounts" and settings.demo_mode:
+            reason = "Demonstration mode: the demonstration adapter asserts nothing about a host."
         rows.append(
             IntegrationStatus(
                 name=name,

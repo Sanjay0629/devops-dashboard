@@ -398,6 +398,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/cloud-accounts/{account_id}/capabilities': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * What the adapter for this cloud account can do
+     * @description `200` for any existing account; `capabilities` is `null` when no adapter serves it.
+     */
+    get: operations['account_capabilities_api_v1_cloud_accounts__account_id__capabilities_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/dashboard/health': {
     parameters: {
       query?: never;
@@ -878,10 +898,53 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /** AccountCapabilities */
+    AccountCapabilities: {
+      /**
+       * Account Id
+       * Format: uuid
+       */
+      account_id: string;
+      /**
+       * Account Status
+       * @enum {string}
+       */
+      account_status: 'ACTIVE' | 'DISABLED' | 'ERROR';
+      /** Adapter Id */
+      adapter_id: string | null;
+      /**
+       * Adapter State
+       * @enum {string}
+       */
+      adapter_state: 'demonstration' | 'configured' | 'not_configured';
+      capabilities: components['schemas']['CapabilitiesOut'] | null;
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'not_configured';
+      /** Demo Mode */
+      demo_mode: boolean;
+      /** Provider */
+      provider: string;
+      /** Reason */
+      reason: string | null;
+    };
     /** AcknowledgeRequest */
     AcknowledgeRequest: {
       /** Note */
       note?: string | null;
+    };
+    /**
+     * ActionSupport
+     * @description One entry per ``ServiceAction``; a model rather than a map so the TS type names them.
+     */
+    ActionSupport: {
+      logs_tail: components['schemas']['Support'];
+      restart: components['schemas']['Support'];
+      start: components['schemas']['Support'];
+      status: components['schemas']['Support'];
+      stop: components['schemas']['Support'];
     };
     /**
      * ActiveAlertsSection
@@ -1279,6 +1342,16 @@ export interface components {
       /** Status */
       status: string;
     };
+    /** CapabilitiesOut */
+    CapabilitiesOut: {
+      actions: components['schemas']['ActionSupport'];
+      /** Async Handle */
+      async_handle: boolean;
+      concurrency: components['schemas']['Concurrency'];
+      connectivity_check: components['schemas']['Support'];
+      inventory_sync: components['schemas']['Support'];
+      latency: components['schemas']['Latency'];
+    };
     /** ChannelCreate */
     ChannelCreate: {
       /**
@@ -1422,6 +1495,11 @@ export interface components {
           )
         | null;
     };
+    /**
+     * Concurrency
+     * @enum {string}
+     */
+    Concurrency: 'none' | 'per_target_serialised' | 'account_throttled' | 'adapter_defined';
     /**
      * ConditionCoverage
      * @description What this milestone produces alerts for, and what it does not yet (``OPEN-40``).
@@ -1828,6 +1906,11 @@ export interface components {
       /** Integrations */
       integrations: components['schemas']['IntegrationStatus'][];
     };
+    /**
+     * Latency
+     * @enum {string}
+     */
+    Latency: 'immediate' | 'seconds' | 'tens_of_seconds';
     /**
      * LogEntry
      * @description One redacted line. ``hostname`` is the inventory's, never the shipper's label.
@@ -3183,6 +3266,11 @@ export interface components {
       idle_timeout_seconds: number;
     };
     /**
+     * Support
+     * @enum {string}
+     */
+    Support: 'supported' | 'unsupported' | 'not_configured';
+    /**
      * TargetRef
      * @description The row an alert is about, **as found by lookup** (``OPEN-45``), never as labelled.
      */
@@ -4114,6 +4202,37 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['SessionResponse'];
+        };
+      };
+    };
+  };
+  account_capabilities_api_v1_cloud_accounts__account_id__capabilities_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        account_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AccountCapabilities'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
         };
       };
     };
