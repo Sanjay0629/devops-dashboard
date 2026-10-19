@@ -332,8 +332,9 @@ def the_alert(sid: str) -> dict:
         "the stopped-reporting alert",
         lambda: not_reporting(sid, "FIRING", "ACKNOWLEDGED", "RESOLVED"),
     )
-    assert len(found) == 1, found
-    return found[0]
+    # Step 18a stopped the same exporter earlier, so an older, resolved alert exists too:
+    # the one notified is the newest.
+    return max(found, key=lambda a: a["first_seen_at"])
 
 
 def deliveries(alert_id: str) -> dict[str, dict]:
