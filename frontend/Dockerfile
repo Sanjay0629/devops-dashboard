@@ -29,6 +29,10 @@ RUN npm run build
 # /api to the backend, so the SPA and API share one origin
 # (docs/ARCHITECTURE.md §2.1).
 FROM nginx:1.30.6-alpine AS production
+# The base image is rebuilt only when nginx is, so its Alpine packages age: CI's Trivy gate
+# (HIGH/CRITICAL with a fix) failed on libexpat and libx11 on 2026-10-19. Upgrading here
+# takes whatever fix Alpine already ships, on every build, instead of waiting for a new tag.
+RUN apk upgrade --no-cache
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
