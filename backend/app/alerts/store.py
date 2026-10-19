@@ -36,6 +36,7 @@ from app.alerts.models import AlertEvent, AlertOpenKey
 from app.alerts.payload import TargetLabels
 from app.db.types import uuid7
 from app.inventory.models import Server, Service
+from app.notifications.outbox import enqueue_for_new_alert
 
 OPEN = ("FIRING", "ACKNOWLEDGED")
 
@@ -128,6 +129,16 @@ def fire(
                 )
             )
             session.flush()
+            # OPEN-50: who is told is decided here, in this transaction, and written as
+            # rows. Nothing is enqueued and nothing is called from the alert path.
+            enqueue_for_new_alert(
+                session,
+                alert_id=alert_id,
+                severity=severity,
+                environment=target.environment,
+                target_type=target.target_type,
+                now=now,
+            )
             return "created"
 
         open_key = session.execute(

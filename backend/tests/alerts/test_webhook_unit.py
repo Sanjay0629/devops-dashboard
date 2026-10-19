@@ -216,13 +216,30 @@ FORBIDDEN = (
     "app.services",
     "app.metrics.client",
     "app.logs.client",
+    # M3.4: the outbox is written from the alert path; the senders must never be reachable.
+    "app.core.ssrf",
+    "app.core.secrets",
+    "app.notifications.senders",
+    "app.notifications.deliver",
+    "smtplib",
 )
 
 
-@pytest.mark.parametrize("module", ["ingest", "store", "webhook", "payload", "lifecycle"])
+@pytest.mark.parametrize(
+    "module",
+    [
+        "alerts/ingest",
+        "alerts/store",
+        "alerts/webhook",
+        "alerts/payload",
+        "alerts/lifecycle",
+        "notifications/outbox",
+        "notifications/rules",
+    ],
+)
 def test_alert_handling_imports_nothing_that_can_execute_call_out_or_enqueue(module: str) -> None:
     """SECURITY.md §21: an alert payload can never cause an operation to execute."""
-    tree = ast.parse((APP / f"alerts/{module}.py").read_text(encoding="utf-8"))
+    tree = ast.parse((APP / f"{module}.py").read_text(encoding="utf-8"))
     imported: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -235,7 +252,7 @@ def test_alert_handling_imports_nothing_that_can_execute_call_out_or_enqueue(mod
         for banned in FORBIDDEN
         if name == banned or name.startswith(banned + ".")
     }
-    assert not bad, f"app/alerts/{module}.py imports {sorted(bad)}"
+    assert not bad, f"app/{module}.py imports {sorted(bad)}"
     calls = {
         node.func.id
         for node in ast.walk(tree)

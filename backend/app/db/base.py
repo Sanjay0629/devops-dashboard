@@ -104,6 +104,7 @@ def all_models() -> list[type[Any]]:
     import app.audit.models
     import app.auth.models
     import app.authz.models
-    import app.inventory.models  # noqa: F401
+    import app.inventory.models
+    import app.notifications.models  # noqa: F401
 
     return [mapper.class_ for mapper in Base.registry.mappers]

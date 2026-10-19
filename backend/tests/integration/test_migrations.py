@@ -21,6 +21,8 @@ EXPECTED_TABLES = {
     "approval_policies",
     "audit_events",
     "cloud_accounts",
+    "notification_channels",
+    "notification_deliveries",
     "permissions",
     "role_permissions",
     "roles",
