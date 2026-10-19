@@ -255,6 +255,22 @@ grep -q '\[DEMO\]' <<<"$servers" \
 count="$(grep -o '"hostname"' <<<"$servers" | wc -l | tr -d ' ')"
 printf 'server list returned %s rows, visibly synthetic\n' "$count"
 
+log "17b. The adapter layer reports what it can do, and does not pretend (§26.7, M4.1)"
+# The seeded servers carry their cloud account's id; ask the capabilities route about it. In
+# this stack DCP_DEMO_MODE is true, so the answer must be the demonstration adapter with
+# nothing configured -- never an "ok" connectivity check, which would present a mock as a
+# live integration (CLAUDE.md §7). Introduced in M4.1; mock-adapter evidence, not a provider.
+account="$(grep -o '"cloud_account_id":"[^"]*"' <<<"$servers" | head -1 | cut -d'"' -f4)"
+[[ -n "$account" ]] || fail "no cloud_account_id in the server list"
+caps="$(api "/cloud-accounts/${account}/capabilities")" || fail "capabilities route not reachable"
+grep -q '"adapter_state":"demonstration"' <<<"$caps" || fail "demonstration mode did not select the demo adapter: $caps"
+grep -q '"demo_mode":true' <<<"$caps" || fail "capabilities are not flagged demo_mode"
+grep -q '"connectivity_check":"not_configured"' <<<"$caps" || fail "demo connectivity is not not_configured"
+! grep -q '"supported"' <<<"$caps" || fail "the demo adapter claims a supported capability"
+! grep -qi 'credential' <<<"$caps" || fail "the capabilities response mentions a credential"
+printf 'capabilities for the seeded account: demonstration adapter, nothing supported
+'
+
 log "18. Prometheus scrapes the host exporter and the templates query it (§11.8)"
 # M2.1. The assertion runs *inside the backend container*, through
 # app/metrics/client.py and app/metrics/templates.py, so what passes here is
