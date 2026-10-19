@@ -57,6 +57,20 @@ export DCP_AGENT_UNREACHABLE_AFTER_SECONDS=30
 # that would flap a perfectly good host. `stale` and `unreachable` are far enough
 # apart (30 s) that a sweep landing in between is certain to observe STALE.
 export DCP_HEALTH_THRESHOLDS='{"default":{"warning_after_seconds":30,"stale_after_seconds":45,"unreachable_after_seconds":75}}'
+# M3.4, step 18g/18h: notifications, delivered to the `notification-sink` mock (a development
+# aid, NOT Slack, Teams or a mail server). The sink is a service on the Compose network with a
+# private address, so the SSRF policy is configured to allow exactly that host and the Docker
+# bridge ranges; the retry delays are short so "four attempts, then abandoned" is asserted in a
+# minute; and the worker is made to see all of it (the same passthrough proof as above).
+export DCP_SSRF_HOST_ALLOWLIST=notification-sink
+export DCP_SSRF_INSECURE_HOSTS=notification-sink
+export DCP_SSRF_ALLOWED_NETWORKS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+export DCP_NOTIFICATION_RETRY_DELAYS_SECONDS=5,5,5
+export DCP_SMTP_HOST=notification-sink
+export DCP_SMTP_PORT=2525
+export DCP_SMTP_FROM=dcp@example.test
+export DCP_SMTP_STARTTLS=false
+export DCP_PUBLIC_BASE_URL="http://localhost:${FRONTEND_HOST_PORT:-5173}"
 FRONTEND="http://localhost:${FRONTEND_HOST_PORT:-5173}"
 BACKEND="http://localhost:${BACKEND_HOST_PORT:-8000}"
 IDP="http://localhost:${MOCK_IDP_HOST_PORT:-9000}"
@@ -1061,11 +1075,23 @@ alert_diagnostics() {
 # The exporter is up here (18a left it running), so nothing is wrong yet.
 smoke_alerts pipeline || { alert_diagnostics; fail "the alerting pipeline assertions failed"; }
 
+# 18h (M3.4) rides on this same alert: the channels are registered BEFORE the exporter stops,
+# so the alert Prometheus and Alertmanager really produce is the one that is notified.
+smoke_alerts notify_register || { alert_diagnostics; fail "registering notification channels failed"; }
 "${OBSERVABILITY[@]}" stop node-exporter >/dev/null
 smoke_alerts down || { "${OBSERVABILITY[@]}" start node-exporter >/dev/null; alert_diagnostics
                        fail "a stopped exporter did not become an alert row"; }
+log "18h. Notifications: a failing destination, abandonment, a permanent failure, manual retry (M3.4)"
+smoke_alerts notify_failures || { "${OBSERVABILITY[@]}" start node-exporter >/dev/null
+                                  "${COMPOSE[@]}" logs --tail=60 worker beat notification-sink
+                                  fail "notification retry and abandonment assertions failed"; }
+smoke_alerts notify_retry || { "${OBSERVABILITY[@]}" start node-exporter >/dev/null
+                               "${COMPOSE[@]}" logs --tail=60 worker notification-sink
+                               fail "manual retry assertions failed"; }
 "${OBSERVABILITY[@]}" start node-exporter >/dev/null
 smoke_alerts recovered || { alert_diagnostics; fail "the alert was not resolved by the source"; }
+smoke_alerts notify_quiet || { "${COMPOSE[@]}" logs --tail=60 worker notification-sink
+                               fail "a resolve sent a notification"; }
 
 # An unreachable Alertmanager must be SAID on the integration page, not read as quiet.
 "${OBSERVABILITY[@]}" stop alertmanager >/dev/null

@@ -61,7 +61,9 @@ def upgrade() -> None:
             server_default=sa.text("'{}'::jsonb"),
             nullable=False,
         ),
-        sa.Column("status", sa.String(length=16), server_default=sa.text("'ACTIVE'"), nullable=False),
+        sa.Column(
+            "status", sa.String(length=16), server_default=sa.text("'ACTIVE'"), nullable=False
+        ),
         *_timestamps(),
         sa.CheckConstraint(
             "channel_type IN ('EMAIL', 'TEAMS', 'SLACK', 'WEBHOOK')",
@@ -79,7 +81,9 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("alert_event_id", sa.Uuid(), nullable=False),
         sa.Column("channel_id", sa.Uuid(), nullable=False),
-        sa.Column("status", sa.String(length=16), server_default=sa.text("'PENDING'"), nullable=False),
+        sa.Column(
+            "status", sa.String(length=16), server_default=sa.text("'PENDING'"), nullable=False
+        ),
         sa.Column("attempt_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.Column("last_error", sa.String(length=64), nullable=True),
         sa.Column("next_attempt_at", postgresql.TIMESTAMP(timezone=True), nullable=True),
@@ -124,7 +128,9 @@ def upgrade() -> None:
         "notification_deliveries",
         ["channel_id", sa.literal_column("created_at DESC")],
     )
-    op.create_index("ix_notification_deliveries_alert", "notification_deliveries", ["alert_event_id"])
+    op.create_index(
+        "ix_notification_deliveries_alert", "notification_deliveries", ["alert_event_id"]
+    )
     op.create_index(
         "ix_notification_deliveries_created_at", "notification_deliveries", ["created_at"]
     )

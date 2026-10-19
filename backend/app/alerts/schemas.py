@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.inventory.schemas import CursorPage
+from app.notifications.schemas import DeliveryOut
 
 
 class WebhookAlertResult(BaseModel):
@@ -106,6 +107,9 @@ class ConditionCoverage(BaseModel):
 
     produced: list[str]
     not_produced_yet: list[dict[str, str]]
+    #: ACTIVE notification channels (``OPEN-56``). ``0`` means alerts are shown here and
+    #: sent nowhere, which a page should say rather than leave to be assumed.
+    notification_channels_active: int = 0
 
 
 class AlertList(BaseModel):
@@ -148,6 +152,8 @@ class AlertDetail(AlertSummary):
     details: dict[str, object]
     history: list[HistoryEntry]
     previous_occurrences: list[PreviousOccurrence]
+    #: Who was told, and how it went (``OPEN-56``). Reason codes are closed; never a URL.
+    notifications: list[DeliveryOut] = Field(default_factory=list)
 
 
 class AcknowledgeRequest(BaseModel):

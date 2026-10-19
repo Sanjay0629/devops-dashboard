@@ -282,8 +282,196 @@ def restored() -> None:
     say("Alertmanager back: the page is ok again")
 
 
+# --- notifications (step 18h, M3.4) ----------------------------------------------------------
+#
+# These ride on 18g's REAL alert (the stopped exporter): a channel is registered before the
+# exporter stops, so the alert Prometheus and Alertmanager really produce is the one that is
+# notified. The destination is the ``notification-sink`` mock, which is NOT Slack, Teams or a
+# mail server: what this proves is DCP's own behaviour -- what it sends, to where, how it
+# retries -- not that a provider accepts the message.
+
+SINK = "http://notification-sink:8080"
+WEBHOOK_CHANNEL = "smoke-webhook"
+EMAIL_CHANNEL = "smoke-email"
+CANARY_HOST = "notification-sink"
+
+
+def sink(method: str, path: str, body: dict | None = None):
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(SINK + path, data=data, method=method)
+    with urllib.request.urlopen(request, timeout=20) as response:
+        raw = response.read().decode()
+    return json.loads(raw) if raw and raw.lstrip().startswith("{") else raw
+
+
+def sink_mode(mode: str) -> None:
+    sink("POST", "/__mode", {"mode": mode})
+
+
+def sink_received() -> list[dict]:
+    return sink("GET", "/__received")["received"]
+
+
+def mine(alert_id: str) -> list[dict]:
+    """What the sink received about this alert (other alerts may notify it too)."""
+    return [
+        r for r in sink_received()
+        if (r["kind"] == "http" and (r["body"] or {}).get("alert_id") == alert_id)
+        or (r["kind"] == "smtp" and alert_id in r["data"])
+    ]
+
+
+def channel_rows() -> dict[str, dict]:
+    status, body = call("GET", "/integrations/status")
+    assert status == 200, body
+    return {r["name"]: r for r in body["integrations"] if r["name"].startswith("Notifications:")}
+
+
+def the_alert(sid: str) -> dict:
+    found = wait_for(
+        "the stopped-reporting alert",
+        lambda: not_reporting(sid, "FIRING", "ACKNOWLEDGED", "RESOLVED"),
+    )
+    assert len(found) == 1, found
+    return found[0]
+
+
+def deliveries(alert_id: str) -> dict[str, dict]:
+    status, detail = call("GET", f"/alerts/{alert_id}")
+    assert status == 200, detail
+    return {d["channel_name"]: d for d in detail["notifications"]}
+
+
+def notify_register() -> None:
+    sink("DELETE", "/__received")
+    sink_mode("unavailable")  # the first thing a delivery meets is a failing destination
+    for body in (
+        {"name": WEBHOOK_CHANNEL, "channel_type": "WEBHOOK",
+         "destination_reference": "env://NOTIFY_SINK",
+         "routing_rules": {"severity": ["CRITICAL"], "environment": ["staging"]}},
+        {"name": EMAIL_CHANNEL, "channel_type": "EMAIL",
+         "destination_reference": "ops@example.test"},
+    ):
+        status, created = call("POST", "/notification-channels", body)
+        assert status == 201, created
+        # The reference comes back as registered; the resolved URL never does.
+        assert CANARY_HOST not in json.dumps(created) or body["channel_type"] == "EMAIL", created
+        assert "http://" not in json.dumps(created), created
+    status, listed = call("GET", "/notification-channels")
+    assert status == 200 and listed["email_available"] is True, listed
+    assert "http://" not in json.dumps(listed), "a destination URL was returned by the API"
+    status, refused_url = call("POST", "/notification-channels", {
+        "name": "a-url", "channel_type": "SLACK", "destination_reference": "http://x.invalid/hook"})
+    assert status == 422 and "x.invalid" not in json.dumps(refused_url), refused_url
+    rows = wait_for("both channels to appear on the integration page",
+                    lambda: len(r := channel_rows()) == 2 and r)
+    for name in (f"Notifications: {WEBHOOK_CHANNEL}", f"Notifications: {EMAIL_CHANNEL}"):
+        assert rows[name]["status"] == "degraded", rows[name]
+        assert rows[name]["last_error_message"] == "no_delivery_attempted_yet", rows[name]
+    status, alerts = call("GET", "/alerts?limit=1")
+    assert alerts["coverage"]["notification_channels_active"] == 2, alerts["coverage"]
+    say("two channels registered (a webhook by reference, an address); a URL is refused unechoed; "
+        "both are 'degraded: never attempted', not 'ok'")
+
+
+def notify_failures() -> None:
+    sid = exporter_server()["id"]
+    alert = the_alert(sid)
+    got = wait_for(
+        "both deliveries to exhaust their retries against a failing destination",
+        lambda: (d := deliveries(alert["alert_id"])).keys() >= {WEBHOOK_CHANNEL, EMAIL_CHANNEL}
+        and all(v["status"] == "ABANDONED" for v in d.values()) and d,
+        timeout=400,
+    )
+    hook, mail = got[WEBHOOK_CHANNEL], got[EMAIL_CHANNEL]
+    # Delays 5,5,5 are the smoke run's setting: four attempts, then abandoned.
+    assert (hook["attempt_count"], hook["last_error"]) == (4, "http_503"), hook
+    assert (mail["attempt_count"], mail["last_error"]) == (4, "smtp_busy"), mail
+    assert hook["retryable"] and mail["retryable"] and hook["next_attempt_at"] is None
+    posts = [r for r in mine(alert["alert_id"]) if r["kind"] == "http"]
+    assert len(posts) == 4, f"expected four attempts at the destination, saw {len(posts)}"
+    body = posts[0]["body"]
+    assert body["schema"] == "dcp.alert.v1" and body["severity"] == "CRITICAL", body
+    assert body["alert_id"] == alert["alert_id"] and body["environment"] == "staging", body
+    assert body["link"] == f"{os.environ['SMOKE_ORIGIN']}/alerts/{alert['alert_id']}", body
+    assert posts[0]["host"] == CANARY_HOST + ":8080", posts[0]["host"]
+    rows = channel_rows()
+    for name in (f"Notifications: {WEBHOOK_CHANNEL}", f"Notifications: {EMAIL_CHANNEL}"):
+        assert rows[name]["status"] == "unavailable", rows[name]
+    assert rows[f"Notifications: {WEBHOOK_CHANNEL}"]["last_error_message"] == "http_503"
+    assert "http://" not in json.dumps(rows) and CANARY_HOST not in json.dumps(rows)
+    say("a failing destination: 4 attempts each, then ABANDONED with a reason code; the page says "
+        "unavailable and names no address")
+
+
+def retry(alert_id: str, delivery_id: str) -> tuple[int, object]:
+    return call("POST", f"/alerts/{alert_id}/notifications/{delivery_id}/retry")
+
+
+def notify_retry() -> None:
+    sid = exporter_server()["id"]
+    alert = the_alert(sid)
+    aid = alert["alert_id"]
+    before = len(mine(aid))
+    # A permanent failure: the destination answers with a redirect. Not followed, not retried.
+    sink_mode("redirect")
+    hook = deliveries(aid)[WEBHOOK_CHANNEL]
+    status, body = retry(aid, hook["delivery_id"])
+    assert status == 202 and body["status"] == "PENDING" and body["attempt_count"] == 0, body
+    failed = wait_for(
+        "the redirecting destination to be a permanent failure",
+        lambda: (d := deliveries(aid)[WEBHOOK_CHANNEL])["status"] == "FAILED" and d,
+        timeout=120,
+    )
+    assert (failed["attempt_count"], failed["last_error"]) == (1, "redirect_refused"), failed
+    time.sleep(35)  # more than two dispatch ticks: a permanent failure is not retried
+    assert len(mine(aid)) == before + 1, "a redirect was retried or followed"
+    say("a redirect is refused as a permanent failure, attempted exactly once")
+
+    sink_mode("ok")
+    got = deliveries(aid)
+    for name in (WEBHOOK_CHANNEL, EMAIL_CHANNEL):
+        status, again = retry(aid, got[name]["delivery_id"])
+        assert status == 202, again
+    done = wait_for(
+        "both retried deliveries to be sent",
+        lambda: (d := deliveries(aid)) and all(v["status"] == "SENT" for v in d.values()) and d,
+        timeout=120,
+    )
+    assert all(v["last_error"] is None and v["sent_at"] and not v["retryable"] for v in done.values())
+    received = mine(aid)
+    ok_posts = [r for r in received if r["kind"] == "http" and r["mode"] == "ok"]
+    mails = [r for r in received if r["kind"] == "smtp"]
+    assert len(ok_posts) == 1 and len(mails) == 1, (len(ok_posts), len(mails))
+    assert ok_posts[0]["body"]["alert_id"] == aid
+    assert mails[0]["to"] == ["<ops@example.test>"] and mails[0]["from"] == "<dcp@example.test>"
+    assert "Subject: [DCP] [CRITICAL] HostNotReporting (staging)" in mails[0]["data"], mails[0]
+    assert aid in mails[0]["data"]
+    # A delivered message is never re-sent by a button.
+    status, body = retry(aid, done[WEBHOOK_CHANNEL]["delivery_id"])
+    assert status == 409 and body["error"]["code"] == "invalid_state_transition", body
+    rows = channel_rows()
+    assert all(r["status"] == "ok" for r in rows.values()), rows
+    say("manual retry from FAILED and from ABANDONED: both SENT, one message each, the page is ok; "
+        "retrying a SENT delivery is a 409")
+
+
+def notify_quiet() -> None:
+    sid = exporter_server()["id"]
+    alert = the_alert(sid)
+    assert alert["status"] == "RESOLVED", alert
+    before = mine(alert["alert_id"])
+    time.sleep(50)  # three dispatch ticks
+    after = mine(alert["alert_id"])
+    assert len(after) == len(before), "a resolve, a repeat or an expiry sent a message (OPEN-51)"
+    assert all(v["status"] == "SENT" for v in deliveries(alert["alert_id"]).values())
+    say("the alert resolved and nothing more was sent: a channel hears that a problem began")
+
+
 if __name__ == "__main__":
     mode = sys.argv[1]
     {"pipeline": pipeline, "down": down, "recovered": recovered, "outage": outage,
-     "restored": restored}[mode]()
+     "restored": restored, "notify_register": notify_register,
+     "notify_failures": notify_failures, "notify_retry": notify_retry,
+     "notify_quiet": notify_quiet}[mode]()
     say(f"mode {mode}: PASSED")

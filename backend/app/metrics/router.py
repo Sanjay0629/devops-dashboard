@@ -130,8 +130,8 @@ async def metric_templates(request: Request, authorized: ReadMetrics) -> MetricT
     summary="Health of every integration",
 )
 async def integrations_status(
-    request: Request, authorized: ReadIntegrations
+    request: Request, db: Db, authorized: ReadIntegrations
 ) -> IntegrationStatusList:
     """§26.1. Prometheus is probed live; the rest report their real state."""
     reject_unknown_query_parameters(request, NO_QUERY_PARAMS)
-    return await service.integration_status()
+    return await service.integration_status(db)
