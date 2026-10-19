@@ -17,12 +17,14 @@ no re-login, no restart and no invalidation step to get wrong.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import Select, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.audit import service as audit
 from app.authz.matcher import Grant
@@ -39,40 +41,48 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _grants_statement(user_id: uuid.UUID) -> Select[Any]:
+    """The one query behind both resolvers, so the async API and the sync worker cannot drift.
+
+    Expired assignments are excluded here, so the matcher needs no clock.
+    """
+    now = datetime.now(UTC)
+    return (
+        select(
+            Permission.resource_type,
+            Permission.action,
+            RolePermission.effect,
+            UserRole.scope_definition,
+        )
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(UserRole, UserRole.role_id == RolePermission.role_id)
+        .where(
+            UserRole.user_id == user_id,
+            (UserRole.expires_at.is_(None)) | (UserRole.expires_at > now),
+        )
+    )
+
+
+def _to_grants(rows: Sequence[Any]) -> list[Grant]:
+    return [
+        Grant(resource_type=row[0], action=row[1], effect=row[2], scope=row[3] or {})
+        for row in rows
+    ]
+
+
 async def resolve_grants(db: AsyncSession, user_id: uuid.UUID) -> list[Grant]:
     """Every permission this user can reach right now, with its grant's scope.
 
-    Expired assignments are excluded in the query, so the matcher needs no
-    clock. A user with no role assignments resolves to an empty list, which the
-    matcher denies on — deny by default is the absence of a grant, not a
-    special case anywhere.
+    A user with no role assignments resolves to an empty list, which the matcher denies on --
+    deny by default is the absence of a grant, not a special case anywhere.
     """
-    now = datetime.now(UTC)
-    rows = (
-        await db.execute(
-            select(
-                Permission.resource_type,
-                Permission.action,
-                RolePermission.effect,
-                UserRole.scope_definition,
-            )
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .join(UserRole, UserRole.role_id == RolePermission.role_id)
-            .where(
-                UserRole.user_id == user_id,
-                (UserRole.expires_at.is_(None)) | (UserRole.expires_at > now),
-            )
-        )
-    ).all()
-    return [
-        Grant(
-            resource_type=row[0],
-            action=row[1],
-            effect=row[2],
-            scope=row[3] or {},
-        )
-        for row in rows
-    ]
+    return _to_grants((await db.execute(_grants_statement(user_id))).all())
+
+
+def resolve_grants_sync(db: Session, user_id: uuid.UUID) -> list[Grant]:
+    """The same answer for the synchronous worker, which re-authorises before it invokes
+    (SECURITY.md §22)."""
+    return _to_grants(db.execute(_grants_statement(user_id)).all())
 
 
 async def holds_production_scope(db: AsyncSession, user_id: uuid.UUID) -> bool:

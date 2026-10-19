@@ -23,6 +23,7 @@ EXPECTED_TABLES = {
     "cloud_accounts",
     "notification_channels",
     "notification_deliveries",
+    "operations",
     "permissions",
     "role_permissions",
     "roles",

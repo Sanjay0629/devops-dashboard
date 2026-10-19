@@ -276,3 +276,23 @@ def test_alert_routes_declare_the_permissions_the_contract_names(app: FastAPI) -
     declared = {(info.method, info.path): _declared_permission(info) for info in routes_of(app)}
     for key, permission in expected.items():
         assert declared.get(key) == permission, f"{key} declares {declared.get(key)!r}"
+
+
+def test_operation_routes_declare_the_permissions_the_contract_names(app: FastAPI) -> None:
+    """docs/API_CONTRACTS.md §17.
+
+    ``POST …/operations`` declares ``service:read`` as its floor because the contract's permission
+    is ``service:{action}`` and the action is in the body; the handler checks the action itself
+    (``test_operations_api.py`` proves a viewer is refused and audited).
+    """
+    expected: dict[tuple[str, str], tuple[str, str]] = {
+        (
+            "POST",
+            "/api/v1/servers/{server_id}/services/{service_name}/operations",
+        ): ("service", "read"),
+        ("GET", "/api/v1/operations/{operation_id}"): ("operation", "read"),
+        ("POST", "/api/v1/operations/{operation_id}/cancel"): ("operation", "read"),
+    }
+    declared = {(info.method, info.path): _declared_permission(info) for info in routes_of(app)}
+    for key, permission in expected.items():
+        assert declared.get(key) == permission, f"{key} declares {declared.get(key)!r}"

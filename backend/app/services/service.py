@@ -38,6 +38,7 @@ from app.metrics import readings
 from app.metrics.client import PrometheusUnavailableError
 from app.metrics.schemas import UnavailableReason
 from app.metrics.templates import TemplateError
+from app.operations.guard import refuse_if_in_flight
 from app.services import reader
 from app.services.normalise import (
     CollectorObservation,
@@ -347,7 +348,12 @@ async def update_service(
 
 
 async def deregister_service(db: AsyncSession, row: Service) -> Service:
-    """§16.6 — soft delete, so operation and audit history keep a row to point at."""
+    """§16.6 — soft delete, so operation and audit history keep a row to point at.
+
+    Refused while an operation is in flight against the unit: the worker would re-validate it,
+    find it gone and fail an operation nobody can finish honestly (``OPEN-73``).
+    """
+    await refuse_if_in_flight(db, service_id=row.id)
     row.deleted_at = datetime.now(UTC)
     await db.flush()
     return row

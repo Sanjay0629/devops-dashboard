@@ -462,6 +462,17 @@ Indexes: `(target_server_id, created_at DESC)`, `(execution_status) WHERE execut
 
 `operations` rows are **never deleted** (PRD §4.12: a durable record of every privileged operation).
 
+**Notes added in M4.2 (`OPEN-69` – `OPEN-77`):**
+- `execution_status` never holds `VERIFYING` (ARCHITECTURE §6.2); the nine values are exactly the PRD's.
+- `environment` carries the same CHECK as `servers.environment` (the four values, no `*`), and `approval_status` / `action_type` are CHECKed to the closed sets above.
+- `provider` stores the **adapter id** that executed the operation (e.g. `aws_ssm`), as the column note says, not the `cloud_accounts.provider` enum.
+- `sanitized_result` holds closed fields only: `adapter_id`, `steps[]`, `observed_before`, `observed_after`, `reconciliation_required` (`true` when the provider may have acted and the outcome is unknown), `reason_code`. `reconciliation_required` is a key, not a column.
+- `failure_reason` is a closed code set in code (API_CONTRACTS §17.2); the column stays free text so a client tolerates new values.
+- `verified_at` (API) is `completed_at`; no column.
+- `uq_operations_single_inflight` treats `NULL` `target_service_id` values as distinct, so it does not guard server-level operations; none are built. It is also per `(server, service)`, so `service_action_policies.max_concurrent_operations` above 1 is **not honoured** (one in flight is SECURITY §13's rule).
+- `parent_operation_id` exists and is `NULL` on every row: no code sets it until a retry trigger is decided (`OPEN-77`).
+- The reaper writes `PENDING → TIMED_OUT` and `APPROVED → TIMED_OUT` with `failure_reason = EXPIRED_BEFORE_START`; those rows have `started_at` `NULL` and `completed_at` set.
+
 ---
 
 ## 7. `approvals`

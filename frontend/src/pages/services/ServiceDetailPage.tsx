@@ -27,6 +27,7 @@ import { LoadingState } from '@/components/EmptyState';
 import { ErrorState } from '@/components/ErrorState';
 import { NotCollected, ServiceStatus } from '@/components/ServiceStatus';
 import { useLatestResponse } from '@/components/useLatestResponse';
+import { OperationActions } from '@/pages/services/OperationActions';
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -81,6 +82,8 @@ export function ServiceDetailPage(): React.JSX.Element {
         </div>
         <ServiceStatus item={service} />
       </header>
+
+      <OperationActions service={service} />
 
       <p className="mb-4 text-sm">
         <Link

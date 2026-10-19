@@ -108,6 +108,14 @@ def create_celery_app() -> Celery:
                 "schedule": 15.0,
                 "options": {"queue": "notifications"},
             },
+            # M4.2 (OPEN-70). Times out a crashed worker's operation at its deadline and hands
+            # an unclaimed one back to the queue. On maintenance so a saturated operations
+            # queue cannot stop the thing that clears it.
+            "reap-operations": {
+                "task": "dcp.operations.reap",
+                "schedule": 30.0,
+                "options": {"queue": "maintenance"},
+            },
             # M3.4 (DATABASE.md section 11): delivery bookkeeping is kept 90 days.
             "purge-notification-deliveries": {
                 "task": "dcp.maintenance.purge_notification_deliveries",
@@ -120,6 +128,7 @@ def create_celery_app() -> Celery:
             "app.workers.tasks.maintenance",
             "app.workers.tasks.monitoring",
             "app.workers.tasks.notifications",
+            "app.workers.tasks.operations",
         ),
     )
     return celery_app

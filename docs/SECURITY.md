@@ -355,11 +355,11 @@ graph TD
     D -- no --> X3["403 + audit"]
     D -- yes --> E{"Permission on target environment?"}
     E -- no --> X4["403 + audit AUTHZ_DENIED"]
-    E -- yes --> F{"Rate limit + one-in-flight guard"}
-    F -- exceeded --> X5["429 / 409 + audit"]
-    F -- ok --> G{"Idempotency-Key replay?"}
+    E -- yes --> G{"Idempotency-Key replay?"}
     G -- replay --> X6["200 original operation, no execution"]
-    G -- new --> H{"Approval policy requires approval?"}
+    G -- new --> F{"Rate limit + one-in-flight guard"}
+    F -- exceeded --> X5["429 / 409 + audit"]
+    F -- ok --> H{"Approval policy requires approval?"}
     H -- yes --> I["AWAITING_APPROVAL + notify approvers"]
     H -- no --> J["PENDING + enqueue"]
     I --> K{"Approver decision (not requester)"}
@@ -376,6 +376,8 @@ graph TD
 
 Additional requirements:
 
+- **Amended in M4.2 (`OPEN-73`):** the idempotency replay check precedes the rate limit and the one-in-flight guard. Taken after them, a replay of a still-running operation would be refused with `409 operation_in_progress` instead of returning the original, and would spend rate-limit budget.
+- **Until the approval workflow exists (M4.5) "requires approval" is refused, not queued** (`OPEN-68`): the request gets `503 not_configured` and no row. The worker's re-check (below) is built now and refuses a row that needs approval and has none.
 - The confirmation dialog restates **server, service, environment and action** before submission (PRD §4.6). Production targets are visually distinct.
 - `stop` on a production service is treated as high-impact and defaults to requiring approval.
 - The worker **re-checks** permission and approval state immediately before invocation — permissions may have been revoked while the request sat in a queue (PRD §12 failure scenario).

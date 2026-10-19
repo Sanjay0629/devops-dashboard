@@ -22,6 +22,7 @@ import uuid
 from typing import Any, Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.audit.models import AuditEvent
 from app.core.logging import get_correlation_id, get_logger
@@ -59,7 +60,7 @@ def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Addres
 
 
 def record(
-    db: AsyncSession,
+    db: AsyncSession | Session,
     *,
     action_type: str,
     outcome: str,
@@ -70,11 +71,15 @@ def record(
     target_id: uuid.UUID | None = None,
     environment: str | None = None,
     approval_id: uuid.UUID | None = None,
+    correlation_id: uuid.UUID | None = None,
     client_ip: str | None = None,
     user_agent: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> AuditEvent:
-    """Stage one audit event on ``db``. The caller's transaction commits it."""
+    """Stage one audit event on ``db`` (async API session or the worker's sync one).
+
+    The caller's transaction commits it.
+    """
     sanitized = redact_value(metadata or {})
     event = AuditEvent(
         actor_type=actor_type,
@@ -84,7 +89,7 @@ def record(
         target_type=target_type,
         target_id=target_id,
         environment=environment,
-        correlation_id=correlation_uuid(),
+        correlation_id=correlation_id or correlation_uuid(),
         approval_id=approval_id,
         outcome=outcome,
         source_ip=_parse_ip(client_ip),

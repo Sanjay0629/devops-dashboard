@@ -548,7 +548,9 @@ The most security-sensitive group ([SECURITY.md §16](SECURITY.md#16-safe-start-
 
 **The entire request body is one closed enum plus a free-text reason.** There is no command, script, argument, document name, timeout override, host or URL field, and none may ever be added (mandatory rules 1 and 2).
 
-Validation, in order ([SECURITY.md §16](SECURITY.md#16-safe-start--stop--restart-workflow)): `action` ∈ `{start, stop, restart}` → server exists, `MANAGED`, not deleted → cloud account `ACTIVE` → service registered **to this server** → action in the service's policy `allowed_actions` → caller holds `service:{action}` on the server's **stored** environment → rate limit → no in-flight operation for this target → approval policy evaluated. `reason` is required when the policy says so (production by default), 1–500 chars, stored and audited.
+Validation, in order ([SECURITY.md §16](SECURITY.md#16-safe-start--stop--restart-workflow)): `Idempotency-Key` present → `action` ∈ `{start, stop, restart}` (`status` and `logs_tail` are `422` here: §16.4 and §16.7 serve them) → server exists, `MANAGED`, not deleted → cloud account `ACTIVE` → service registered **to this server** → action in the service's policy `allowed_actions` → caller holds `service:{action}` on the server's **stored** environment → **idempotency replay** → an adapter resolves and supports the action → approval policy evaluated → rate limit → no in-flight operation for this target. The replay lookup precedes the rate limit and the in-flight guard so that a replay of a running operation returns the original and spends no budget (`OPEN-73`). `reason` is required for `production` and wherever approval is required, 1–500 chars, stored and audited.
+
+**Until M4.5 an operation that needs approval is refused, not queued** (`OPEN-68`): a policy that requires approval, a `stop` on `production`, or an unreadable policy gives `503 not_configured` with `details.reason = "approval_workflow_unavailable"` and no row. **Until a real provider exists (M4.3)** a request gives `503 not_configured` with `details.reason` `demonstration_mode` or `no_adapter_for_provider`, and `422 unsupported_operation` when the adapter's capability for the action is `unsupported` (`OPEN-75`). None of these creates an `operations` row.
 
 Response `202`:
 
@@ -575,7 +577,7 @@ Response `202`:
 
 The echoed `target` is what the UI must have displayed in the confirmation dialog (PRD §4.6).
 
-Errors: `403 forbidden` (permission or action not allowlisted — audited `AUTHZ_DENIED`), `404 not_found` (unknown/out-of-scope server or unregistered service), `409 operation_in_progress`, `409 conflict` (idempotency key reused with a different body), `422 validation_failed`, `423 read_only_mode`, `429 rate_limited`, `503 not_configured` (demonstration mode or unconfigured provider). Timeouts: the API call returns in under 1 s — execution is asynchronous (PRD §5.3); the operation's own deadline comes from its action policy (default 300 s). Audit `SERVICE_OPERATION_REQUESTED`, and on denial `SERVICE_OPERATION_DENIED`.
+Errors: `403 forbidden` (permission or action not allowlisted — audited `AUTHZ_DENIED`), `404 not_found` (unknown/out-of-scope server or unregistered service), `409 operation_in_progress`, `409 conflict` (idempotency key reused with a different body), `422 validation_failed`, `422 unsupported_operation`, `423 read_only_mode`, `429 rate_limited`, `503 not_configured` (demonstration mode, an unconfigured provider, or approval required before M4.5 — see above). Timeouts: the API call returns in under 1 s — execution is asynchronous (PRD §5.3); the operation's own deadline comes from its action policy (default 300 s). Audit `SERVICE_OPERATION_REQUESTED`, and on denial `SERVICE_OPERATION_DENIED`.
 
 **17.2** Response adds `observed_state_before`, `observed_state_after`, `sanitized_result`, `failure_reason`, `external_execution_id`, `started_at`, `completed_at`, `approval` detail, and `poll_after_seconds` while non-terminal.
 
@@ -592,6 +594,8 @@ Errors: `403 forbidden` (permission or action not allowlisted — audited `AUTHZ
   "completed_at": "2026-01-15T09:31:12Z"
 }
 ```
+
+`verified_at` is derived from `completed_at` (written in the same statement as the terminal status); there is no separate column. `parent_operation_id` is returned and is `null` until a retry trigger exists (`OPEN-77`). `failure_reason` is a closed code set in M4.2 (`PERMISSION_REVOKED`, `APPROVAL_REQUIRED`, `ACCOUNT_DISABLED`, `ACTION_NOT_ALLOWED`, `TARGET_VALIDATION_FAILED`, `NOT_CONFIGURED`, `UNSUPPORTED_OPERATION`, `PROVIDER_AUTHENTICATION`, `PROVIDER_AUTHORIZATION`, `PROVIDER_NOT_FOUND`, `PROVIDER_THROTTLED`, `PROVIDER_TIMEOUT`, `PROVIDER_UNAVAILABLE`, `PROVIDER_PARTIAL_FAILURE`, `PROVIDER_REPORTED_FAILURE`, `VERIFICATION_MISMATCH`, `VERIFICATION_UNAVAILABLE`, `DEADLINE_EXCEEDED`, `EXPIRED_BEFORE_START`), and `sanitized_result.reconciliation_required` is `true` when the provider may have acted. `404` for an unknown operation or an out-of-scope server; the requester always reads their own; others need `operation:read` over the stored environment, else `403`.
 
 `SUCCEEDED` is accompanied by `observed_state_after` and `verified_at` — the schema itself refuses a success without verification evidence ([DATABASE.md §6.1](DATABASE.md#61-constraints-that-carry-security-meaning), mandatory rule 8). A failure returns `sanitized_result` and a `failure_reason` code, readable only by identities scoped to the target (PRD §4.6). Visibility: the requester always; others need `operation:read` on the target's environment ⇒ `403`.
 
@@ -825,6 +829,8 @@ This example is the required behaviour from PRD §4.10: the pipeline succeeded b
 ---
 
 ## 22. Approvals
+
+**Built in M4.5, not M4.2** (`OPEN-67`): the `approvals` table these endpoints read does not exist before then, and IMPLEMENTATION_PLAN's M4.2 task line that listed them was amended.
 
 | # | Method | Path | Purpose | Permission |
 |---|---|---|---|---|

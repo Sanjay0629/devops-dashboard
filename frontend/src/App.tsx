@@ -6,6 +6,7 @@ import { SessionProvider } from '@/auth/SessionProvider';
 import { PERMISSIONS, canRender } from '@/auth/permissions';
 import { useIsReadOnly, useSession } from '@/auth/useSession';
 import { Login } from '@/pages/Login';
+import { OperationDetailPage } from '@/pages/operations/OperationDetail';
 import { AlertDetail } from '@/pages/alerts/AlertDetail';
 import { AlertList } from '@/pages/alerts/AlertList';
 import { Dashboard } from '@/pages/dashboard/Dashboard';
@@ -138,11 +139,13 @@ function Shell(): React.JSX.Element {
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M3.4 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
+            Milestone M4.2 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
             service state, host health from Prometheus, log search, alerts (Prometheus rules through
             Alertmanager, with acknowledge and assign) and notifications (channels, delivery status
-            and retry). Service operations and deployments are not implemented yet, and every
-            section that depends on them says so rather than showing a zero.
+            and retry) and service operations (start, stop and restart a registered service: the
+            request, its state machine and its verified result). No cloud provider is connected yet,
+            so a request is refused with the reason until one is; deployments are not implemented,
+            and every section that depends on them says so rather than showing a zero.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -217,6 +220,7 @@ function Shell(): React.JSX.Element {
         <Route path="/servers/:serverId/services" element={<ServerServices />} />
         <Route path="/servers/:serverId/services/:serviceName" element={<ServiceDetailPage />} />
         <Route path="/services" element={<ServiceList />} />
+        <Route path="/operations/:operationId" element={<OperationDetailPage />} />
         <Route path="/compare" element={<Compare />} />
         <Route path="/logs" element={<LogSearch />} />
         <Route path="/alerts" element={<AlertList />} />
