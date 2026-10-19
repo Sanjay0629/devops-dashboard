@@ -243,7 +243,9 @@ def recovered() -> None:
     sid = exporter_server()["id"]
     resolved = wait_for(
         "the source to resolve the alert once the exporter is back",
-        lambda: not_reporting(sid, "RESOLVED"),
+        # The one this run acknowledged: step 18a stopped the same exporter earlier and left
+        # an older, resolved alert that nobody acknowledged.
+        lambda: [a for a in not_reporting(sid, "RESOLVED") if a["acknowledged_by"]],
     )
     item = resolved[0]
     assert item["resolved_at"] and item["acknowledged_by"], item
