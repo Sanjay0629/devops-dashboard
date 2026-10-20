@@ -340,6 +340,9 @@ async def test_the_policy_decides_allowed_actions_and_the_environment_decides_ap
     assert staging["allowed_actions"] == ["status", "logs_tail", "restart"]
     assert staging["approval_required"] is False
     assert production["approval_required"] is True, "production is gated by the seeded policy"
+    # M4.5: the dialog says how long a request would wait, from the same policy row.
+    assert production["approval_window_seconds"] == 3600
+    assert staging["approval_window_seconds"] is None
 
 
 async def test_a_viewer_cannot_register_and_the_denial_is_audited(fleet: Fleet) -> None:

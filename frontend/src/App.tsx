@@ -6,6 +6,8 @@ import { SessionProvider } from '@/auth/SessionProvider';
 import { PERMISSIONS, canRender } from '@/auth/permissions';
 import { useIsReadOnly, useSession } from '@/auth/useSession';
 import { Login } from '@/pages/Login';
+import { ApprovalPolicies } from '@/pages/approvals/ApprovalPolicies';
+import { ApprovalQueue } from '@/pages/approvals/ApprovalQueue';
 import { OperationDetailPage } from '@/pages/operations/OperationDetail';
 import { AlertDetail } from '@/pages/alerts/AlertDetail';
 import { AlertList } from '@/pages/alerts/AlertList';
@@ -54,8 +56,14 @@ function Navigation(): React.JSX.Element {
     ...(canRender(state, PERMISSIONS.logsReadApplication) ? [{ to: '/logs', label: 'Logs' }] : []),
     ...(canRender(state, PERMISSIONS.alertRead) ? [{ to: '/alerts', label: 'Alerts' }] : []),
     { to: '/applications', label: 'Applications' },
+    ...(canRender(state, PERMISSIONS.operationApprove)
+      ? [{ to: '/approvals', label: 'Approvals' }]
+      : []),
     ...(canRender(state, PERMISSIONS.adminIntegrations)
       ? [{ to: '/notifications/channels', label: 'Notifications' }]
+      : []),
+    ...(canRender(state, PERMISSIONS.adminPolicies)
+      ? [{ to: '/admin/approval-policies', label: 'Approval policies' }]
       : []),
   ];
   return (
@@ -139,13 +147,14 @@ function Shell(): React.JSX.Element {
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M4.2 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
+            Milestone M4.5 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
             service state, host health from Prometheus, log search, alerts (Prometheus rules through
             Alertmanager, with acknowledge and assign) and notifications (channels, delivery status
             and retry) and service operations (start, stop and restart a registered service: the
-            request, its state machine and its verified result). No cloud provider is connected yet,
-            so a request is refused with the reason until one is; deployments are not implemented,
-            and every section that depends on them says so rather than showing a zero.
+            request, an approval where a policy requires one, its state machine and its verified
+            result). An AWS adapter exists but has been exercised only against test providers, so
+            nothing here has yet been shown to act on a real server; deployments are not
+            implemented, and every section that depends on them says so rather than showing a zero.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -221,6 +230,8 @@ function Shell(): React.JSX.Element {
         <Route path="/servers/:serverId/services/:serviceName" element={<ServiceDetailPage />} />
         <Route path="/services" element={<ServiceList />} />
         <Route path="/operations/:operationId" element={<OperationDetailPage />} />
+        <Route path="/approvals" element={<ApprovalQueue />} />
+        <Route path="/admin/approval-policies" element={<ApprovalPolicies />} />
         <Route path="/compare" element={<Compare />} />
         <Route path="/logs" element={<LogSearch />} />
         <Route path="/alerts" element={<AlertList />} />

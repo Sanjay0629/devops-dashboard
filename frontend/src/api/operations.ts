@@ -157,8 +157,8 @@ export function refusalText(refusal: Refusal): string {
       return 'This portal is in demonstration mode. No operation can run.';
     case 'no_adapter_for_provider':
       return 'No provider integration is configured for this server’s cloud account, so nothing can act on it yet.';
-    case 'approval_workflow_unavailable':
-      return 'This operation needs an approval, and the approval workflow is not available yet, so it cannot be requested.';
+    case 'approval_policy_unsupported':
+      return 'This operation’s approval policy asks for more than one approval, which is not supported yet, so it cannot be requested.';
     case 'cloud_account_not_active':
       return 'This server’s cloud account is not active.';
     default:
@@ -169,7 +169,8 @@ export function refusalText(refusal: Refusal): string {
 /** The closed `failure_reason` codes, as words. An unknown code is shown as itself. */
 const FAILURES: Record<string, string> = {
   PERMISSION_REVOKED: 'The requester no longer has permission for this action.',
-  APPROVAL_REQUIRED: 'An approval is required and was not recorded.',
+  APPROVAL_REQUIRED:
+    'The approval could not be shown when the operation was about to start, so nothing was sent.',
   ACCOUNT_DISABLED: 'The cloud account was disabled before the operation started.',
   ACTION_NOT_ALLOWED: 'The service’s policy no longer allows this action.',
   TARGET_VALIDATION_FAILED:
@@ -190,6 +191,27 @@ const FAILURES: Record<string, string> = {
   DEADLINE_EXCEEDED: 'The operation did not finish before its deadline.',
   EXPIRED_BEFORE_START: 'The deadline passed before a worker picked the operation up.',
 };
+
+/**
+ * Why the worker could not accept an approval (`sanitized_result.reason_code` on an
+ * `APPROVAL_REQUIRED` failure), and why a request ended `CANCELLED` without being run.
+ */
+const APPROVAL_REASONS: Record<string, string> = {
+  approval_missing: 'No approval was recorded for this request.',
+  approval_not_approved: 'The request was not approved.',
+  approver_revoked:
+    'The person who approved it no longer holds the access that allowed them to approve it.',
+  self_approval:
+    'The person who approved it is the person who requested it, which the policy does not allow.',
+  approval_expired: 'The approval window had passed.',
+  approval_policy_unsupported:
+    'The policy now needs more than one approval, which is not supported yet.',
+};
+
+export function approvalReasonText(code: string | null | undefined): string {
+  if (code == null || code === '') return '';
+  return APPROVAL_REASONS[code] ?? code;
+}
 
 export function failureText(code: string | null | undefined): string {
   if (code == null || code === '') return '';

@@ -24,6 +24,7 @@ import { Link, useParams } from 'react-router-dom';
 import {
   CANCELLABLE,
   TERMINAL,
+  approvalReasonText,
   cancelOperation,
   failureText,
   readOperation,
@@ -65,6 +66,64 @@ function when(value: string | null | undefined): React.ReactNode {
     <span style={{ color: 'var(--c-text-muted)' }}>—</span>
   ) : (
     formatInstant(new Date(value).getTime())
+  );
+}
+
+function reasonCodeOf(operation: OperationDetail): string | null {
+  const code = (operation.sanitized_result as { reason_code?: unknown }).reason_code;
+  return typeof code === 'string' ? code : null;
+}
+
+/**
+ * Where the approval stands, in words, and who has to act. Shown whenever the operation had an
+ * approval request; an operation that never needed one shows nothing.
+ */
+function ApprovalState({ operation }: { operation: OperationDetail }): React.JSX.Element | null {
+  const approval = operation.approval;
+  if (approval == null) return null;
+  const code = reasonCodeOf(operation);
+  let text: React.ReactNode;
+  switch (approval.decision) {
+    case 'PENDING':
+      text = (
+        <>
+          Waiting for approval. Someone who holds the <strong>{approval.required_role}</strong>{' '}
+          role, and who is not the requester unless the policy allows it, has to decide this. The
+          request expires {when(approval.expires_at)}, and is cancelled if nobody does.
+        </>
+      );
+      break;
+    case 'APPROVED':
+      text = (
+        <>
+          Approved by <strong>{approval.approved_by?.display_name ?? 'an approver'}</strong>{' '}
+          {when(approval.decided_at)}.
+        </>
+      );
+      break;
+    case 'REJECTED':
+      text = (
+        <>
+          Rejected by <strong>{approval.approved_by?.display_name ?? 'an approver'}</strong>{' '}
+          {when(approval.decided_at)}. Nothing was run.
+        </>
+      );
+      break;
+    case 'EXPIRED':
+      text =
+        code === 'approval_expired'
+          ? 'The approval window passed with no decision, so the request was cancelled and nothing was run.'
+          : 'The request was cancelled before anyone decided it, so its approval was withdrawn.';
+      break;
+  }
+  return (
+    <p
+      className="mt-3 rounded border px-3 py-2 text-sm"
+      style={{ borderColor: 'var(--c-border)' }}
+      data-testid="approval-state"
+    >
+      {text}
+    </p>
   );
 }
 
@@ -169,20 +228,28 @@ export function OperationDetailPage(): React.JSX.Element {
         </p>
       )}
 
-      {terminal && op.execution_status !== 'SUCCEEDED' && op.execution_status !== 'CANCELLED' && (
-        <div
-          role="alert"
-          className="mt-3 rounded border px-3 py-2 text-sm"
-          style={{ borderColor: 'var(--c-critical)' }}
-        >
-          {failure !== '' && <p>{failure}</p>}
-          {unknownOutcome && (
-            <p className="mt-1 font-medium">
-              The provider may have acted. Check the service’s current state before trying again.
-            </p>
-          )}
-        </div>
-      )}
+      <ApprovalState operation={op} />
+
+      {terminal &&
+        op.execution_status !== 'SUCCEEDED' &&
+        op.execution_status !== 'CANCELLED' &&
+        op.execution_status !== 'REJECTED' && (
+          <div
+            role="alert"
+            className="mt-3 rounded border px-3 py-2 text-sm"
+            style={{ borderColor: 'var(--c-critical)' }}
+          >
+            {failure !== '' && <p>{failure}</p>}
+            {op.failure_reason === 'APPROVAL_REQUIRED' && reasonCodeOf(op) !== null && (
+              <p className="mt-1">{approvalReasonText(reasonCodeOf(op))}</p>
+            )}
+            {unknownOutcome && (
+              <p className="mt-1 font-medium">
+                The provider may have acted. Check the service’s current state before trying again.
+              </p>
+            )}
+          </div>
+        )}
 
       {problem !== null && (
         <p role="alert" className="mt-3 text-sm" style={{ color: 'var(--c-critical)' }}>
@@ -212,7 +279,9 @@ export function OperationDetailPage(): React.JSX.Element {
         <Row label="Requested by">{op.requested_by.display_name}</Row>
         <Row label="Reason">{op.requested_reason ?? 'None given'}</Row>
         <Row label="Requested at">{when(op.created_at)}</Row>
-        <Row label="Deadline">{when(op.deadline_at)}</Row>
+        <Row label={op.execution_status === 'AWAITING_APPROVAL' ? 'Expires' : 'Deadline'}>
+          {when(op.deadline_at)}
+        </Row>
         <Row label="Started">{when(op.started_at)}</Row>
         <Row label="Finished">{when(op.completed_at)}</Row>
         <Row label="State before">{op.observed_state_before ?? 'Not observed'}</Row>

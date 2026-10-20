@@ -24,6 +24,7 @@ function service(over: Partial<ServiceDetail> = {}): ServiceDetail {
     environment: 'staging',
     allowed_actions: ['status', 'logs_tail', 'start', 'stop', 'restart'],
     approval_required: false,
+    approval_window_seconds: null,
     ...over,
   } as ServiceDetail;
 }
@@ -211,10 +212,10 @@ describe('OperationActions', () => {
         error: {
           code: 'not_configured',
           message: 'm',
-          details: { reason: 'approval_workflow_unavailable' },
+          details: { reason: 'approval_policy_unsupported' },
         },
       },
-      /needs an approval, and the approval workflow is not available/i,
+      /asks for more than one approval/i,
     ],
     [422, { error: { code: 'unsupported_operation', message: 'm' } }, /not supported by this/i],
     [
@@ -256,11 +257,37 @@ describe('OperationActions', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(words);
   });
 
-  it('warns that an approval is needed and will be refused until that exists', async () => {
-    renderPanel(service({ approval_required: true }));
+  it('says an approval is needed, from an Approver, and how long the request will wait', async () => {
+    renderPanel(service({ approval_required: true, approval_window_seconds: 3600 }));
     await userEvent.click(screen.getByRole('button', { name: 'Restart' }));
-    expect(screen.getByRole('dialog')).toHaveTextContent(/needs an approval/i);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent(/needs an approval from an approver/i);
+    expect(dialog).toHaveTextContent(/someone other than you approves it/i);
+    expect(dialog).toHaveTextContent(/wait up to 60 minutes/i);
+    expect(dialog).not.toHaveTextContent(/not available|refused/i);
     expect(screen.getByText(/reason \(required\)/i)).toBeInTheDocument();
+  });
+
+  it('says so without a number when the window is not known', async () => {
+    renderPanel(service({ approval_required: true, approval_window_seconds: null }));
+    await userEvent.click(screen.getByRole('button', { name: 'Restart' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent(/needs an approval from an approver/i);
+    expect(dialog).not.toHaveTextContent(/wait up to/i);
+  });
+
+  it('follows a request that is now waiting for approval to its operation page', async () => {
+    const fetchMock = mockApi(202, {
+      operation_id: 'op-9',
+      execution_status: 'AWAITING_APPROVAL',
+      idempotent_replay: false,
+    });
+    renderPanel(service({ environment: 'production', approval_required: true }));
+    await userEvent.click(screen.getByRole('button', { name: 'Restart' }));
+    await userEvent.type(screen.getByRole('textbox'), 'CR-9');
+    await userEvent.click(screen.getByRole('button', { name: 'Restart nginx.service' }));
+    expect(await screen.findByText('operation page')).toBeInTheDocument();
+    expect(posts(fetchMock)).toHaveLength(1);
   });
 
   it('closes on Escape and on Cancel without sending anything', async () => {

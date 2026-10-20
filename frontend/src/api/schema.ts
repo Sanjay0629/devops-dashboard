@@ -3805,6 +3805,8 @@ export interface components {
       application_id: string | null;
       /** Approval Required */
       approval_required: boolean;
+      /** Approval Window Seconds */
+      approval_window_seconds: number | null;
       /** Collected At */
       collected_at: string | null;
       /**
@@ -3890,6 +3892,8 @@ export interface components {
       application_id: string | null;
       /** Approval Required */
       approval_required: boolean;
+      /** Approval Window Seconds */
+      approval_window_seconds: number | null;
       /** Collected At */
       collected_at: string | null;
       /**

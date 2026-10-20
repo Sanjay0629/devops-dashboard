@@ -56,6 +56,7 @@ function item(overrides: Record<string, unknown> = {}) {
     server_reachable: true,
     allowed_actions: [],
     approval_required: false,
+    approval_window_seconds: null,
     ...overrides,
   };
 }

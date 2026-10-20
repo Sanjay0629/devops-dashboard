@@ -503,7 +503,8 @@ Validation: `cloud_account_id` must reference an `ACTIVE`, non-deleted account (
   "collected_at": "2026-01-15T09:29:00Z",
   "server_reachable": true,
   "allowed_actions": ["restart"],
-  "approval_required": false
+  "approval_required": false,
+  "approval_window_seconds": null
 }
 ```
 
@@ -522,7 +523,7 @@ Validation: `cloud_account_id` must reference an `ACTIVE`, non-deleted account (
 - **Four fields are always `null` (`OPEN-29`):** `sub_state`, `load_state`, `enabled` and `main_pid`. Neither `node_exporter`'s systemd collector nor `systemd_exporter` exposes them (`TS-02`, [TECH_STACK.md §5.3](TECH_STACK.md#53-systemd-metrics-integration)). `last_state_change_at` is `null` for the same reason: the exporter's start time describes activation only, so §16.4 adds **`started_at`** (null unless the unit is running) rather than mislabelling it. `active/running` and `active/exited` are both `ACTIVE`.
 - **Lists read a cache; detail reads Prometheus.** §16.1 and §16.2 are served from `services.last_observed_*` and never fan out per row, so `restart_count` is `null` there. §16.4 queries Prometheus now and is the only place it is known. A cache older than 180 s, or a host the probe calls `UNREACHABLE`, shows `UNKNOWN` with `data_state: "stale"` and the time it was last true — never the cached state as though it were current. The `state` filter selects on the state a row **shows**, not on the raw column.
 - **Added item fields:** `display_name`, `application_id`, `monitoring_enabled`, and `unavailable_reason` (the closed set from §15). `data_state` is `ok | stale | unavailable | unsupported | not_configured`; `UNCOLLECTED` is `unavailable` + `no_data`.
-- **`allowed_actions` / `approval_required` are hints.** The policy's actions intersected with the caller's permissions (`status` ⇒ `service:read`, `logs_tail` ⇒ `logs:query`); approval is required when the policy's approval policy covers the server's environment. Neither carries authority.
+- **`allowed_actions` / `approval_required` are hints.** The policy's actions intersected with the caller's permissions (`status` ⇒ `service:read`, `logs_tail` ⇒ `logs:query`); approval is required when the policy's approval policy covers the server's environment. Neither carries authority. **M4.5:** `approval_window_seconds` is that policy's window (how long a request would wait for an approver) when `approval_required`, else `null`; a production `stop` is gated by default whether or not a policy row exists, so this hint can say `false` for a request the backend will still queue — the response to §17.1 is what is true.
 - **An action policy is a privilege.** Assigning one at registration, or changing it with §16.5, is Administrator-only (`admin:users` is the stand-in, as for a server's environment change) and refuses as `404`. A change is audited as `SERVICE_ACTION_POLICY_CHANGED` in addition to `SERVICE_UPDATED`; resubmitting the current policy is not a change. `monitoring_enabled: null` is `422`.
 - **§16.7 is routed and validated but cannot answer.** The permission is `logs:read:system` (renamed from the seeded `logs:query` by migration 0007, `OPEN-32`). A valid request for a registered unit returns **`503 not_configured`** until Loki exists (M3.1) — an empty page would read as "no errors". `limit` ≤ 1 000, `from`/`to` carry a timezone and span ≤ 24 h, and any other query parameter is `422`.
 - **No field carries a command.** Bodies are `extra="forbid"`; `command`, `script`, `argv`, `exec` and `action` are `422 unknown_field`, and the unit name is validated with a full match (a trailing newline is refused).
