@@ -26,7 +26,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alerts import queries
-from app.alerts.catalogue import NOT_PRODUCED_YET, OPERATION_RULE, RULES
+from app.alerts.catalogue import APPROVAL_RULE, NOT_PRODUCED_YET, OPERATION_RULE, RULES
 from app.alerts.lifecycle import OPEN_STATUSES, can_transition
 from app.alerts.models import AlertEvent
 from app.alerts.schemas import (
@@ -61,7 +61,9 @@ _HUMAN_ACTIONS = ("ALERT_ACKNOWLEDGED", "ALERT_ASSIGNED")
 def coverage(active_channels: int) -> ConditionCoverage:
     """What produces alerts and what does not yet: never imply a condition is monitored."""
     return ConditionCoverage(
-        produced=sorted({rule.condition for rule in RULES} | {OPERATION_RULE.condition}),
+        produced=sorted(
+            {rule.condition for rule in RULES} | {OPERATION_RULE.condition, APPROVAL_RULE.condition}
+        ),
         not_produced_yet=[
             {"condition": condition, "arrives_in": milestone}
             for condition, milestone in NOT_PRODUCED_YET

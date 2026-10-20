@@ -843,7 +843,7 @@ This example is the required behaviour from PRD §4.10: the pipeline succeeded b
 
 A holder of only `deployment:approve` has no use for these in M4.5 and is refused by the route (`403`).
 
-**22.1** Query: `decision` (`PENDING` by default; `APPROVED`, `REJECTED`, `EXPIRED`), `operation_type` (`SERVICE_OPERATION` only: `DEPLOYMENT` is `422` until M5.4), `environment`, `limit` (1 – 100, default 50), `cursor` (§5). **Scope is applied in the SQL:** only requests whose target server the caller may approve on (`operation:approve` over the server's stored environment) are counted or returned, so a request outside the caller's reach is absent, not forbidden. Items carry the full decision context:
+**22.1** Query: `decision` (`PENDING` by default; `APPROVED`, `REJECTED`, `EXPIRED`), `operation_type` (`SERVICE_OPERATION` only: `DEPLOYMENT` is `422 not_permitted` until M5.4), `environment`, `limit` (default 50, max 200: more is `422`, §5), `cursor` (§5; `invalid_cursor` is `422`), ordered newest first. A `PENDING` request whose window has already passed is not listed (it is the sweep's, and no one can still decide it). **Scope is applied in the SQL:** only requests whose target server the caller may approve on (`operation:approve` over the server's stored environment) are counted or returned, so a request outside the caller's reach is absent, not forbidden. Items carry the full decision context:
 
 ```json
 {
@@ -863,7 +863,7 @@ A holder of only `deployment:approve` has no use for these in M4.5 and is refuse
     "self_requested": false,
     "self_approval_allowed": false
   }],
-  "next_cursor": null
+  "page": { "limit": 50, "next_cursor": null, "has_more": false, "total": null }
 }
 ```
 

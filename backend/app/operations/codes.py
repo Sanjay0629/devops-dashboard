@@ -92,7 +92,7 @@ TIMED_OUT_REASONS: Final[frozenset[str]] = frozenset(
 )
 
 # --- reasons on a request refused with 503 (`details.reason`) ----------------------------------
-APPROVAL_WORKFLOW_UNAVAILABLE: Final = "approval_workflow_unavailable"
+APPROVAL_POLICY_UNSUPPORTED: Final = "approval_policy_unsupported"
 DEMONSTRATION_MODE: Final = "demonstration_mode"
 NO_ADAPTER_FOR_PROVIDER: Final = "no_adapter_for_provider"
 

@@ -4,6 +4,42 @@
  */
 
 export interface paths {
+  '/api/v1/admin/approval-policies': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List approval policies */
+    get: operations['list_policies_api_v1_admin_approval_policies_get'];
+    put?: never;
+    /** Create an approval policy */
+    post: operations['create_policy_api_v1_admin_approval_policies_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/approval-policies/{policy_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Delete an unreferenced approval policy */
+    delete: operations['delete_policy_api_v1_admin_approval_policies__policy_id__delete'];
+    options?: never;
+    head?: never;
+    /** Edit an approval policy */
+    patch: operations['update_policy_api_v1_admin_approval_policies__policy_id__patch'];
+    trace?: never;
+  };
   '/api/v1/admin/permissions': {
     parameters: {
       query?: never;
@@ -312,6 +348,46 @@ export interface paths {
      * @description §18.4. ``slug`` is absent from the request model and so is immutable.
      */
     patch: operations['update_application_api_v1_applications__application_id__patch'];
+    trace?: never;
+  };
+  '/api/v1/approvals': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The approver queue
+     * @description §22.1. Scope-filtered in SQL; ``DEPLOYMENT`` is refused until M5.4.
+     */
+    get: operations['list_approvals_api_v1_approvals_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/approvals/{approval_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Approval detail
+     * @description §22.2. Unknown, or outside the caller's approval scope ⇒ ``404``.
+     */
+    get: operations['read_approval_api_v1_approvals__approval_id__get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
     trace?: never;
   };
   '/api/v1/auth/callback': {
@@ -700,6 +776,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/operations/{operation_id}/approve': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Approve an operation
+     * @description §22.3. Another person, in scope and in the policy's role; ``409`` on a lost race.
+     */
+    post: operations['approve_operation_api_v1_operations__operation_id__approve_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/operations/{operation_id}/cancel': {
     parameters: {
       query?: never;
@@ -714,6 +810,26 @@ export interface paths {
      * @description §17.3. Legal only from ``PENDING`` or ``AWAITING_APPROVAL``; a running one is ``409``.
      */
     post: operations['cancel_operation_api_v1_operations__operation_id__cancel_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/operations/{operation_id}/reject': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Reject an operation
+     * @description §22.4. A reason is required.
+     */
+    post: operations['reject_operation_api_v1_operations__operation_id__reject_post'];
     delete?: never;
     options?: never;
     head?: never;
@@ -1536,9 +1652,111 @@ export interface components {
       /** Status */
       status?: ('ACTIVE' | 'ARCHIVED') | null;
     };
+    /** ApprovalDetail */
+    ApprovalDetail: {
+      /** Action Type */
+      action_type: string;
+      /**
+       * Approval Id
+       * Format: uuid
+       */
+      approval_id: string;
+      approved_by: components['schemas']['ActorView'] | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Decided At */
+      decided_at: string | null;
+      /**
+       * Decision
+       * @enum {string}
+       */
+      decision: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+      /** Decisions So Far */
+      decisions_so_far: components['schemas']['DecisionSoFar'][];
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /**
+       * Operation Id
+       * Format: uuid
+       */
+      operation_id: string;
+      /**
+       * Operation Type
+       * @constant
+       */
+      operation_type: 'SERVICE_OPERATION';
+      policy: components['schemas']['PolicyView'];
+      /** Reason */
+      reason: string | null;
+      requested_by: components['schemas']['ActorView'];
+      /** Self Approval Allowed */
+      self_approval_allowed: boolean;
+      /** Self Requested */
+      self_requested: boolean;
+      target: components['schemas']['TargetView'];
+      target_state: components['schemas']['TargetState'];
+    };
+    /** ApprovalItem */
+    ApprovalItem: {
+      /** Action Type */
+      action_type: string;
+      /**
+       * Approval Id
+       * Format: uuid
+       */
+      approval_id: string;
+      approved_by: components['schemas']['ActorView'] | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Decided At */
+      decided_at: string | null;
+      /**
+       * Decision
+       * @enum {string}
+       */
+      decision: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /**
+       * Operation Id
+       * Format: uuid
+       */
+      operation_id: string;
+      /**
+       * Operation Type
+       * @constant
+       */
+      operation_type: 'SERVICE_OPERATION';
+      /** Reason */
+      reason: string | null;
+      requested_by: components['schemas']['ActorView'];
+      /** Self Approval Allowed */
+      self_approval_allowed: boolean;
+      /** Self Requested */
+      self_requested: boolean;
+      target: components['schemas']['TargetView'];
+    };
+    /** ApprovalList */
+    ApprovalList: {
+      /** Items */
+      items: components['schemas']['ApprovalItem'][];
+      page: components['schemas']['CursorPage'];
+    };
     /**
      * ApprovalSummary
-     * @description Always ``null`` until the approval workflow exists (M4.5, ``OPEN-68``).
+     * @description The operation's approval request (M4.5); ``null`` on an operation that never needed one.
      */
     ApprovalSummary: {
       /**
@@ -1546,6 +1764,14 @@ export interface components {
        * Format: uuid
        */
       approval_id: string;
+      approved_by?: components['schemas']['ActorView'] | null;
+      /** Decided At */
+      decided_at?: string | null;
+      /**
+       * Decision
+       * @enum {string}
+       */
+      decision: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
       /**
        * Expires At
        * Format: date-time
@@ -1553,6 +1779,8 @@ export interface components {
       expires_at: string;
       /** Required Approvals */
       required_approvals: number;
+      /** Required Role */
+      required_role: string;
     };
     /**
      * AssignRequest
@@ -1952,6 +2180,30 @@ export interface components {
       stale_after_seconds?: number | null;
       /** Unavailable Reason */
       unavailable_reason?: string | null;
+    };
+    /**
+     * DecisionRequest
+     * @description §22.3 / §22.4. Optional on approve, **required on reject** (checked in the service).
+     */
+    DecisionRequest: {
+      /** Reason */
+      reason?: string | null;
+    };
+    /** DecisionSoFar */
+    DecisionSoFar: {
+      approved_by: components['schemas']['ActorView'];
+      /**
+       * Decided At
+       * Format: date-time
+       */
+      decided_at: string;
+      /**
+       * Decision
+       * @enum {string}
+       */
+      decision: 'APPROVED' | 'REJECTED';
+      /** Reason */
+      reason: string | null;
     };
     /**
      * DeliveryHealth
@@ -2583,7 +2835,7 @@ export interface components {
        * Approval Status
        * @enum {string}
        */
-      approval_status: 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+      approval_status: 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
       /**
        * Correlation Id
        * Format: uuid
@@ -2639,7 +2891,7 @@ export interface components {
        * Approval Status
        * @enum {string}
        */
-      approval_status: 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+      approval_status: 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
       /** Completed At */
       completed_at: string | null;
       /**
@@ -2726,6 +2978,110 @@ export interface components {
     PermissionList: {
       /** Items */
       items: components['schemas']['PermissionEntry'][];
+    };
+    /** PolicyCreate */
+    PolicyCreate: {
+      /**
+       * Allow Self Approval
+       * @default false
+       */
+      allow_self_approval: boolean;
+      /**
+       * Applies To
+       * @enum {string}
+       */
+      applies_to: 'SERVICE_OPERATION' | 'DEPLOYMENT';
+      /**
+       * Approval Window Seconds
+       * @default 3600
+       */
+      approval_window_seconds: number;
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other' | '*';
+      /** Name */
+      name: string;
+      /**
+       * Required Approvals
+       * @default 1
+       * @constant
+       */
+      required_approvals: 1;
+      /**
+       * Required Role
+       * @default APPROVER
+       */
+      required_role: string;
+    };
+    /** PolicyList */
+    PolicyList: {
+      /** Items */
+      items: components['schemas']['PolicyOut'][];
+    };
+    /** PolicyOut */
+    PolicyOut: {
+      /** Allow Self Approval */
+      allow_self_approval: boolean;
+      /** Applies To */
+      applies_to: string;
+      /** Approval Window Seconds */
+      approval_window_seconds: number;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Environment */
+      environment: string;
+      /** Name */
+      name: string;
+      /**
+       * Policy Id
+       * Format: uuid
+       */
+      policy_id: string;
+      /** Required Approvals */
+      required_approvals: number;
+      /** Required Role */
+      required_role: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /**
+     * PolicyUpdate
+     * @description Only the fields named change. ``applies_to`` is not editable.
+     */
+    PolicyUpdate: {
+      /** Allow Self Approval */
+      allow_self_approval?: boolean | null;
+      /** Approval Window Seconds */
+      approval_window_seconds?: number | null;
+      /** Environment */
+      environment?: ('development' | 'staging' | 'production' | 'other' | '*') | null;
+      /** Name */
+      name?: string | null;
+      /** Required Approvals */
+      required_approvals?: 1 | null;
+      /** Required Role */
+      required_role?: string | null;
+    };
+    /** PolicyView */
+    PolicyView: {
+      /** Allow Self Approval */
+      allow_self_approval: boolean;
+      /** Approval Window Seconds */
+      approval_window_seconds: number;
+      /** Policy Id */
+      policy_id: string | null;
+      /** Required Approvals */
+      required_approvals: number;
+      /** Required Role */
+      required_role: string;
     };
     /** PresetInfo */
     PresetInfo: {
@@ -3732,6 +4088,21 @@ export interface components {
        */
       type: 'server' | 'service' | 'application' | 'deployment' | 'operation';
     };
+    /**
+     * TargetState
+     * @description The service's last observed state. Not a pre-flight read: none is made at request time.
+     */
+    TargetState: {
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'stale' | 'unavailable';
+      /** Observed At */
+      observed_at: string | null;
+      /** State */
+      state: string;
+    };
     /** TargetView */
     TargetView: {
       /** Environment */
@@ -3934,6 +4305,125 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  list_policies_api_v1_admin_approval_policies_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PolicyList'];
+        };
+      };
+    };
+  };
+  create_policy_api_v1_admin_approval_policies_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PolicyCreate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PolicyOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  delete_policy_api_v1_admin_approval_policies__policy_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Approval policy identifier */
+        policy_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_policy_api_v1_admin_approval_policies__policy_id__patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Approval policy identifier */
+        policy_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PolicyUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PolicyOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   list_permissions_api_v1_admin_permissions_get: {
     parameters: {
       query?: never;
@@ -4584,6 +5074,73 @@ export interface operations {
       };
     };
   };
+  list_approvals_api_v1_approvals_get: {
+    parameters: {
+      query?: {
+        decision?: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+        operation_type?: 'SERVICE_OPERATION' | 'DEPLOYMENT';
+        environment?: ('development' | 'staging' | 'production' | 'other') | null;
+        limit?: number;
+        cursor?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalList'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  read_approval_api_v1_approvals__approval_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Approval identifier */
+        approval_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   callback_api_v1_auth_callback_get: {
     parameters: {
       query?: {
@@ -5204,6 +5761,42 @@ export interface operations {
       };
     };
   };
+  approve_operation_api_v1_operations__operation_id__approve_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Operation identifier */
+        operation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['DecisionRequest'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OperationDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   cancel_operation_api_v1_operations__operation_id__cancel_post: {
     parameters: {
       query?: never;
@@ -5215,6 +5808,42 @@ export interface operations {
       cookie?: never;
     };
     requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OperationDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  reject_operation_api_v1_operations__operation_id__reject_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Operation identifier */
+        operation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['DecisionRequest'];
+      };
+    };
     responses: {
       /** @description Successful Response */
       200: {
@@ -5874,7 +6503,7 @@ export interface operations {
           'application/json': components['schemas']['HTTPValidationError'];
         };
       };
-      /** @description Demonstration mode, no adapter, or an approval is required (M4.5). */
+      /** @description Demonstration mode, no adapter, or an unsupported approval policy. */
       503: {
         headers: {
           [name: string]: unknown;

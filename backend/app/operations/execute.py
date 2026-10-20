@@ -38,6 +38,7 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 
 from app.approvals.models import ApprovalPolicy
+from app.approvals.sweep import sweep as sweep_approvals
 from app.audit import service as audit
 from app.auth.models import User
 from app.authz.matcher import Target, permits
@@ -222,7 +223,7 @@ def _finish(
     refused: bool = False,
 ) -> str:
     """Write the terminal state and its audit rows together. ``superseded`` if the row moved on."""
-    fields: dict[str, str] = {}
+    fields: dict[str, Any] = {}
     if failure_reason is not None:
         fields["failure_reason"] = failure_reason
     if before is not None:
@@ -775,9 +776,12 @@ def reap(
     if enqueue_resume is not None:
         for operation_id in stalled:
             enqueue_resume(operation_id)
+    # OPEN-100: an approval window nobody used ends its request, and frees the target's slot.
+    approvals_expired = sweep_approvals(engine)
     return {
         "timed_out": timed_out,
         "expired_before_start": expired,
         "requeued": requeued,
         "resume_requeued": len(stalled),
+        "approvals_expired": approvals_expired,
     }

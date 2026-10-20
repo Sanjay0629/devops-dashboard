@@ -82,6 +82,12 @@ SYSTEM_RULES: Final[tuple[AlertRule, ...]] = (
 #: :data:`SYSTEM_RULES` it is deliberately not in :data:`RULES`, so no webhook payload can forge it.
 OPERATION_RULE: Final = AlertRule("OperationFailed", "operation_timed_out_or_failed", "WARNING")
 
+#: A service operation is waiting for an approver (``OPEN-101``), raised in the request's
+#: transaction and resolved when the request is approved, rejected, expired or cancelled. About the
+#: target service; the approver queue is where the person acts. Not in :data:`RULES`, for the same
+#: reason as the rule above.
+APPROVAL_RULE: Final = AlertRule("ApprovalPending", "operation_approval_pending", "WARNING")
+
 #: PRD §4.8 conditions DCP has no producer for yet (``OPEN-40``). Listed so the UI and
 #: the status row can say so instead of implying they are monitored.
 NOT_PRODUCED_YET: Final[tuple[tuple[str, str], ...]] = (

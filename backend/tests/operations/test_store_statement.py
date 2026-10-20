@@ -99,3 +99,42 @@ def test_only_the_named_columns_can_be_set() -> None:
     for name in ("execution_status", "requested_by", "environment", "deadline_at", "provider"):
         with pytest.raises(TypeError, match="not a settable"):
             transition_statement(OP, "PENDING", "RUNNING", **{name: "x"})
+
+
+def test_an_approval_move_sets_the_approval_status_and_restarts_the_deadline_in_one_statement() -> (
+    None
+):
+    approved = _sql(
+        transition_statement(
+            OP,
+            "AWAITING_APPROVAL",
+            "APPROVED",
+            approval_status="APPROVED",
+            deadline_after_seconds=300,
+        )
+    )
+    assert "approval_status=" in approved.replace(" ", "")
+    assert "deadline_at=(now()+" in approved.replace(" ", "")
+    assert "completed_at" not in approved  # still in flight
+    assert "operations.execution_status = %(execution_status_1)s" in approved  # the guard stays
+
+
+def test_a_cancel_or_rejection_from_awaiting_approval_is_terminal_and_stamps_completion() -> None:
+    for new in ("CANCELLED", "REJECTED"):
+        statement = _sql(
+            transition_statement(
+                OP,
+                "AWAITING_APPROVAL",
+                new,
+                approval_status="EXPIRED" if new == "CANCELLED" else "REJECTED",
+                result={"reason_code": "x"},
+            )
+        )
+        assert "completed_at" in statement and "approval_status" in statement
+
+
+def test_an_approval_move_that_is_not_in_the_table_is_still_refused() -> None:
+    with pytest.raises(states.InvalidTransitionError):
+        transition_statement(OP, "AWAITING_APPROVAL", "RUNNING", approval_status="APPROVED")
+    with pytest.raises(states.InvalidTransitionError):
+        transition_statement(OP, "APPROVED", "REJECTED", approval_status="REJECTED")

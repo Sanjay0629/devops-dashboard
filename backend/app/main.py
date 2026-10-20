@@ -25,6 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.admin.router import router as admin_router
 from app.alerts.router import router as alerts_router
 from app.alerts.webhook import router as alert_webhook_router
+from app.approvals.policy_admin import router as approval_policies_router
+from app.approvals.router import router as approvals_router
 from app.auth.router import router as auth_router
 from app.core.config import Settings, get_settings
 from app.core.csrf import CsrfMiddleware
@@ -124,6 +126,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # capabilities null rather than disappearing.
     app.include_router(providers_router, prefix=settings.api_base_path)
     app.include_router(operations_router, prefix=settings.api_base_path)
+    app.include_router(approvals_router, prefix=settings.api_base_path)
+    app.include_router(approval_policies_router, prefix=settings.api_base_path)
     # §20.5 (M3.3). Mounted even with no secret configured: it answers 503
     # not_configured rather than disappearing.
     app.include_router(alert_webhook_router, prefix=settings.api_base_path)

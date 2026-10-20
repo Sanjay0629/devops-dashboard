@@ -187,6 +187,23 @@ def test_admin_routes_declare_the_permissions_the_contract_names(app: FastAPI) -
         assert declared.get(key) == permission, f"{key} declares {declared.get(key)!r}"
 
 
+def test_approval_routes_declare_the_permissions_the_contract_names(app: FastAPI) -> None:
+    """docs/API_CONTRACTS.md §22 and §25.11 – §25.14 (M4.5), transcribed from the contract."""
+    expected: dict[tuple[str, str], tuple[str, str]] = {
+        ("GET", "/api/v1/approvals"): ("operation", "approve"),
+        ("GET", "/api/v1/approvals/{approval_id}"): ("operation", "approve"),
+        ("POST", "/api/v1/operations/{operation_id}/approve"): ("operation", "approve"),
+        ("POST", "/api/v1/operations/{operation_id}/reject"): ("operation", "approve"),
+        ("GET", "/api/v1/admin/approval-policies"): ("admin", "policies"),
+        ("POST", "/api/v1/admin/approval-policies"): ("admin", "policies"),
+        ("PATCH", "/api/v1/admin/approval-policies/{policy_id}"): ("admin", "policies"),
+        ("DELETE", "/api/v1/admin/approval-policies/{policy_id}"): ("admin", "policies"),
+    }
+    declared = {(info.method, info.path): _declared_permission(info) for info in routes_of(app)}
+    for key, permission in expected.items():
+        assert declared.get(key) == permission, f"{key} declares {declared.get(key)!r}"
+
+
 def test_openapi_and_docs_are_local_only(monkeypatch: pytest.MonkeyPatch) -> None:
     """The documentation routes exist in local development and nowhere else."""
     from app.core.config import get_settings
