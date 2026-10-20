@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowOnlyTheRegisteredServiceControlDocument",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": ["arn:aws:ssm:REGION:ACCOUNT_ID:document/DCP-ServiceControl"]
+    },
+    {
+      "Sid": "AllowTargetingOnlyManagedTaggedInstances",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ec2:REGION:ACCOUNT_ID:instance/*",
+      "Condition": { "StringEquals": { "ssm:resourceTag/DcpManaged": "true" } }
+    },
+    {
+      "Sid": "AllowReadingCommandResultsAndInventory",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "ssm:ListCommands",
+        "ssm:DescribeInstanceInformation",
+        "ssm:DescribeDocument"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyGeneralPurposeShellDocuments",
+      "Effect": "Deny",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:*::document/AWS-RunShellScript",
+        "arn:aws:ssm:*::document/AWS-RunPowerShellScript"
+      ]
+    }
+  ]
+}
