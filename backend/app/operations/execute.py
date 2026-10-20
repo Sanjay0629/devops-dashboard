@@ -44,7 +44,7 @@ from app.authz.matcher import Target, permits
 from app.authz.service import resolve_grants_sync
 from app.core.logging import get_logger
 from app.inventory.models import CloudAccount, Server, Service, ServiceActionPolicy
-from app.operations import codes, states
+from app.operations import alerting, codes, states
 from app.operations.evaluator import ApprovalPolicyView, approval_required
 from app.operations.models import Operation
 from app.operations.store import (
@@ -189,6 +189,25 @@ def _closed(code: str | None) -> str | None:
     return code if code is not None and _CODE.fullmatch(code) else None
 
 
+def _alert(session: Session, op: _Op, new: str, reason: str | None) -> None:
+    """The failure alert follows the terminal state, in the same transaction (``OPEN-89``)."""
+    if new in (states.FAILED, states.TIMED_OUT):
+        alerting.raise_failure(
+            session,
+            operation_id=op.id,
+            server_id=op.server_id,
+            service_id=op.service_id,
+            environment=op.environment,
+            action=op.action,
+            status=new,
+            reason=reason or "UNKNOWN",
+        )
+    elif new == states.SUCCEEDED:
+        alerting.clear_failure(
+            session, operation_id=op.id, server_id=op.server_id, service_id=op.service_id
+        )
+
+
 def _finish(
     engine: Engine,
     op: _Op,
@@ -222,6 +241,7 @@ def _finish(
             session.rollback()
             logger.warning("operation_finish_superseded", operation_id=str(op.id))
             return "superseded"
+        _alert(session, op, new, failure_reason)
         if refused:
             _audit(
                 session,
@@ -299,6 +319,7 @@ def _expire_unclaimed(session: Session, op: _Op) -> str:
     if won is None:
         session.rollback()
         return "lost_claim"
+    _alert(session, op, states.TIMED_OUT, codes.EXPIRED_BEFORE_START)
     _audit(
         session,
         op,

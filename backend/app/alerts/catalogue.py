@@ -76,10 +76,15 @@ SYSTEM_RULES: Final[tuple[AlertRule, ...]] = (
     ),
 )
 
+#: A privileged operation that ended ``FAILED`` or ``TIMED_OUT`` (``OPEN-89``; PRD §4.8), raised
+#: by the operation executor in the transaction that ends the operation, and resolved by the next
+#: ``SUCCEEDED`` operation on the same target (``source = DCP_OPERATION`` resolves its own). Like
+#: :data:`SYSTEM_RULES` it is deliberately not in :data:`RULES`, so no webhook payload can forge it.
+OPERATION_RULE: Final = AlertRule("OperationFailed", "operation_timed_out_or_failed", "WARNING")
+
 #: PRD §4.8 conditions DCP has no producer for yet (``OPEN-40``). Listed so the UI and
 #: the status row can say so instead of implying they are monitored.
 NOT_PRODUCED_YET: Final[tuple[tuple[str, str], ...]] = (
     ("application_health_check_failed", "M5"),
     ("deployment_failed", "M5"),
-    ("operation_timed_out_or_failed", "M4"),
 )

@@ -52,12 +52,12 @@ const PRODUCED: Record<string, string> = {
   memory: 'sustained high memory use',
   disk: 'a nearly full filesystem',
   unit_failed: 'a failed systemd service',
+  operation_timed_out_or_failed: 'an operation that fails or times out',
 };
 
 const NOT_PRODUCED: Record<string, string> = {
   application_health_check_failed: 'a failed application health check',
   deployment_failed: 'a failed deployment',
-  operation_timed_out_or_failed: 'an operation that times out or fails',
 };
 
 /** Which conditions can raise an alert, and which cannot yet: never imply coverage. */
