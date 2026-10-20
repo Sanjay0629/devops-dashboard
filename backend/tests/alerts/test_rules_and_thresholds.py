@@ -14,6 +14,7 @@ from app.alerts import rulegen
 from app.alerts.catalogue import (
     BY_NAME,
     NOT_PRODUCED_YET,
+    OPERATION_RULE,
     RULES,
     UNIT_FAILED_FOR_SECONDS,
     WATCHDOG_RULE,
@@ -132,11 +133,14 @@ def test_catalogue_names_are_unique_and_severity_agrees_with_the_name() -> None:
 def test_every_condition_the_prd_lists_is_produced_or_named_as_not_produced() -> None:
     produced = {r.condition for r in RULES}
     assert produced == {"host_not_reporting", "cpu", "memory", "disk", "unit_failed"}
+    # M4.3 gave the third its producer (``OPEN-89``): it moved out of this list, not into RULES,
+    # because the webhook accepts only Prometheus conditions and must not be able to forge it.
     assert {name for name, _ in NOT_PRODUCED_YET} == {
         "application_health_check_failed",
         "deployment_failed",
-        "operation_timed_out_or_failed",
     }
+    assert OPERATION_RULE.condition == "operation_timed_out_or_failed"
+    assert OPERATION_RULE.name not in BY_NAME
 
 
 # --- the generated file -------------------------------------------------------------

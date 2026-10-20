@@ -322,9 +322,9 @@ async def test_a_list_item_carries_what_the_contract_names(rig: Rig) -> None:
     assert body["coverage"]["not_produced_yet"] == [
         {"condition": "application_health_check_failed", "arrives_in": "M5"},
         {"condition": "deployment_failed", "arrives_in": "M5"},
-        {"condition": "operation_timed_out_or_failed", "arrives_in": "M4"},
     ]
     assert "cpu" in body["coverage"]["produced"]
+    assert "operation_timed_out_or_failed" in body["coverage"]["produced"]  # M4.3, OPEN-89
 
 
 async def test_filters_severity_environment_target_text_and_time(rig: Rig) -> None:

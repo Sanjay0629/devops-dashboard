@@ -36,19 +36,24 @@ def _call(adapter: ProviderAdapter, what: str, fn: Callable[[], Any], demo: bool
     assert result.demo_mode is demo, f"{what} carries the wrong demo_mode"
 
 
-def check(adapter: ProviderAdapter, *, demo: bool) -> None:
+def check(adapter: ProviderAdapter, *, demo: bool, server: ServerRef = SERVER) -> None:
     assert re.fullmatch(r"[a-z][a-z0-9_]{0,31}", adapter.adapter_id), "adapter_id is malformed"
     assert violations(type(adapter)) == [], violations(type(adapter))
     caps = adapter.capabilities()
     assert isinstance(caps, CapabilitySet)
 
-    _call(adapter, "get_server_info", lambda: adapter.get_server_info(SERVER), demo)
-    _call(adapter, "check_connectivity", lambda: adapter.check_connectivity(SERVER), demo)
-    _call(adapter, "list_managed_services", lambda: adapter.list_managed_services(SERVER), demo)
+    _call(adapter, "get_server_info", lambda: adapter.get_server_info(server), demo)
+    _call(adapter, "check_connectivity", lambda: adapter.check_connectivity(server), demo)
+    _call(
+        adapter,
+        "list_managed_services",
+        lambda: adapter.list_managed_services(server, SERVICE),
+        demo,
+    )
 
     for action in ServiceAction:
         try:
-            handle = adapter.execute_operation(SERVER, SERVICE, action, operation_id=uuid.uuid4())
+            handle = adapter.execute_operation(server, SERVICE, action, operation_id=uuid.uuid4())
         except (UnsupportedOperation, NotConfigured) as refusal:
             assert caps.actions[action] is not Support.SUPPORTED, (
                 f"{action} is declared supported but refused as {type(refusal).__name__}"
@@ -63,5 +68,8 @@ def check(adapter: ProviderAdapter, *, demo: bool) -> None:
         assert caps.actions[action] is Support.SUPPORTED, f"{action} ran although not supported"
         assert handle.adapter_id == adapter.adapter_id
         _call(
-            adapter, "get_operation_status", lambda h=handle: adapter.get_operation_status(h), demo
+            adapter,
+            "get_operation_status",
+            lambda h=handle: adapter.get_operation_status(server, h),
+            demo,
         )

@@ -149,6 +149,8 @@ Per adapter (AWS, Azure, agent, demo), against mocked provider APIs:
 - `scripts/check_provider_branching.py` (in `check-all.sh`): no provider token outside `app/providers/` except in a reviewed, pinned allowlist; a planted violation must fail it.
 - One provider's outage does not affect another account's operations (isolation test).
 
+**What M4.3 tests for AWS (`OPEN-90`).** `botocore.stub.Stubber` at the botocore boundary (no `moto`): the full error matrix (success, throttle with and without `retry_after`, authentication, authorisation, not found, timeout, unavailable, a failed invocation), a write client that cannot retry, `Throttled` retried at most three times, static-key refusal, the capability column pinned to ARCHITECTURE §7.2, and parser tests on the committed SSM document and IAM policy (each shown to fail against a weakened copy). **None of this proves AWS accepts the document or the calls**; that is the real-integration check below.
+
 ---
 
 ## 7. Background worker tests
@@ -158,7 +160,7 @@ Per adapter (AWS, Azure, agent, demo), against mocked provider APIs:
 - Terminal result written with status, timestamps, `sanitized_result` and (for success) `observed_state_after`.
 - **Verification mismatch ⇒ `FAILED`**, never `SUCCEEDED` (mandatory rule 8).
 - **Worker crash mid-operation** (PRD §12): kill the worker; assert the reaper moves the row to `TIMED_OUT` past `deadline_at`, that the provider is **not** re-invoked, and that the row is flagged for reconciliation when no handle was recorded.
-- Worker restart mid-poll resumes from the persisted handle. **Moved to M4.3 (`OPEN-70`):** M4.2 has no resume (it needs a real provider to resume against). In M4.2 a row left `RUNNING` by a killed worker is timed out by the reaper with `reconciliation_required`, the provider is not re-invoked, and the persisted handle is kept for an operator.
+- **Built in M4.3 (`OPEN-84`):** a killed worker with a recorded handle is resumed by the healer's `resume` task without a second `_submit`; two resumers produce one winner; a row without a handle still times out with `reconciliation_required`. *(The sentence below describes M4.2.)* Worker restart mid-poll resumes from the persisted handle. **Moved to M4.3 (`OPEN-70`):** M4.2 has no resume (it needs a real provider to resume against). In M4.2 a row left `RUNNING` by a killed worker is timed out by the reaper with `reconciliation_required`, the provider is not re-invoked, and the persisted handle is kept for an operator.
 - The reaper times out an unclaimed `PENDING` / `APPROVED` row past `deadline_at` (`EXPIRED_BEFORE_START`) without calling a provider; the healer re-enqueues a row whose queue message was lost.
 - Every `SUCCEEDED` is refused by the state machine without a verification result **and** by `ck_operations_verified_success` without `observed_state_after`; a mutation that removes either guard alone fails a named test.
 - A row needing approval without an approved decision, a re-labelled server, a disabled account and a policy that no longer allows the action are each refused by the worker with zero provider invocations.
@@ -479,6 +481,8 @@ DCP_AUTH_RATE_LIMIT_MAX=100         # the suite signs in legitimately, several t
 uv run pytest -q -m real_integration --integration-profile=nonprod-sandbox
 ```
 
+**As built in M4.3 (`OPEN-90`):** the `real_integration` marker exists and is excluded from the default run and from CI; without `--integration-profile` its tests skip with a reason. The runbook is in `infra/aws/README.md`. The result is a dated manual check in `PROGRESS.md`, never an automated pass.
+
 ### Everything a contributor should run before opening a PR
 
 ```bash
@@ -581,7 +585,7 @@ Coverage is a signal, not a target. The floor applies to **changed code** (initi
 |---|---|---|
 | TS-03 | Python package manager, which fixes the command prefix in §16 | Any, with a committed lockfile; commands shown with `uv` |
 | OPEN-22 | Coverage floor and whether it gates per-file or per-diff | 80 % on changed code |
-| OPEN-23 | Who owns the non-production sandbox for real-integration tests, and its lifecycle | Unassigned — needed before M4.3 |
+| ~~OPEN-23~~ | Who owns the non-production sandbox for real-integration tests, and its lifecycle | **RESOLVED 2026-10-20 (M4.3, `OPEN-90`): the project owner.** No one else is named and the implementation sessions have no cloud account. The lifecycle is the runbook in `infra/aws/README.md` |
 | OPEN-24 | Load-test tooling (k6, Locust, Artillery) | Undecided; Phase 6 |
 | OPEN-25 | Mutation testing on the permission matcher and state machines | Deferred; **[RECOMMENDED]** |
 

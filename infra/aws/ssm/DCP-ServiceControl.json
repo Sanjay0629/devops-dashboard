@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "2.2",
+  "description": "DCP service control. Starts, stops, restarts or reports the state of ONE named systemd unit. Security-critical: this is the only place a shell line exists. Both parameters arrive as environment data (interpolationType ENV_VAR), are constrained by SSM, and are validated again in the script.",
+  "parameters": {
+    "Action": {
+      "type": "String",
+      "description": "One of start, stop, restart, status.",
+      "allowedValues": ["start", "stop", "restart", "status"],
+      "interpolationType": "ENV_VAR"
+    },
+    "UnitName": {
+      "type": "String",
+      "description": "A systemd unit name such as nginx.service.",
+      "allowedPattern": "^[A-Za-z0-9@._-]{1,128}\\.(service|socket|timer|target)$",
+      "interpolationType": "ENV_VAR"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "controlUnit",
+      "inputs": {
+        "timeoutSeconds": "60",
+        "runCommand": [
+          "set -eu",
+          "action=\"${SSM_Action:-}\"",
+          "unit=\"${SSM_UnitName:-}\"",
+          "case \"$action\" in start|stop|restart|status) ;; *) echo invalid_action >&2; exit 64 ;; esac",
+          "case \"$unit\" in ''|-*|*[!A-Za-z0-9@._-]*) echo invalid_unit >&2; exit 64 ;; esac",
+          "case \"$unit\" in *.service|*.socket|*.timer|*.target) ;; *) echo invalid_unit >&2; exit 64 ;; esac",
+          "if [ \"${#unit}\" -gt 160 ]; then echo invalid_unit >&2; exit 64; fi",
+          "load=\"$(systemctl show --property=LoadState --value -- \"$unit\")\"",
+          "if [ \"$load\" = not-found ]; then echo unit_not_found >&2; exit 4; fi",
+          "case \"$action\" in",
+          "  start) systemctl start -- \"$unit\" ;;",
+          "  stop) systemctl stop -- \"$unit\" ;;",
+          "  restart) systemctl restart -- \"$unit\" ;;",
+          "  status) systemctl show --property=ActiveState --value -- \"$unit\" ;;",
+          "esac"
+        ]
+      }
+    }
+  ]
+}

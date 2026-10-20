@@ -43,6 +43,31 @@ def execute_operation(operation_id: str) -> dict[str, Any]:
     return {"outcome": outcome}
 
 
+@celery_app.task(
+    name="dcp.operations.resume",
+    queue="operations",
+    time_limit=HARD_LIMIT_SECONDS,
+    soft_time_limit=SOFT_LIMIT_SECONDS,
+)
+def resume_operation(operation_id: str) -> dict[str, Any]:
+    """Continue polling an operation whose worker died (``OPEN-84``). An id and nothing else.
+
+    It never submits: the provider already holds the command.
+    """
+    try:
+        identifier = uuid.UUID(operation_id)
+    except (ValueError, AttributeError, TypeError):
+        logger.error("operation_task_bad_id")
+        return {"outcome": "bad_id"}
+    return {"outcome": execute.resume(get_sync_engine(), identifier)}
+
+
+def _requeue_resume(operation_id: uuid.UUID) -> None:
+    celery_app.send_task(
+        "dcp.operations.resume", args=[str(operation_id)], queue="operations", retry=False
+    )
+
+
 def _requeue(operation_id: uuid.UUID) -> None:
     celery_app.send_task(
         "dcp.operations.execute", args=[str(operation_id)], queue="operations", retry=False
@@ -52,6 +77,6 @@ def _requeue(operation_id: uuid.UUID) -> None:
 @celery_app.task(name="dcp.operations.reap", queue="maintenance")
 def reap_operations() -> dict[str, int]:
     """Time out what ran out of time and re-enqueue what was never claimed."""
-    summary = execute.reap(get_sync_engine(), enqueue=_requeue)
+    summary = execute.reap(get_sync_engine(), enqueue=_requeue, enqueue_resume=_requeue_resume)
     logger.info("operations_reaped", **summary)
     return summary

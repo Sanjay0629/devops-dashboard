@@ -18,11 +18,17 @@ import detailSource from '@/pages/alerts/AlertDetail.tsx?raw';
  */
 
 const COVERAGE = {
-  produced: ['cpu', 'disk', 'host_not_reporting', 'memory', 'unit_failed'],
+  produced: [
+    'cpu',
+    'disk',
+    'host_not_reporting',
+    'memory',
+    'operation_timed_out_or_failed',
+    'unit_failed',
+  ],
   not_produced_yet: [
     { condition: 'application_health_check_failed', arrives_in: 'M5' },
     { condition: 'deployment_failed', arrives_in: 'M5' },
-    { condition: 'operation_timed_out_or_failed', arrives_in: 'M4' },
   ],
   notification_channels_active: 2,
 };
@@ -222,7 +228,9 @@ describe('AlertList', () => {
     expect(note).toHaveTextContent('a host that stops reporting');
     expect(note).toHaveTextContent('Not raised yet');
     expect(note).toHaveTextContent('a failed deployment (arrives in M5)');
-    expect(note).toHaveTextContent('an operation that times out or fails (arrives in M4)');
+    // M4.3 gave operations a producer: it is now listed as watched, and no longer as missing.
+    expect(note).toHaveTextContent('an operation that fails or times out');
+    expect(note).not.toHaveTextContent('an operation that fails or times out (arrives');
     expect(note).toHaveTextContent(/nothing is watching it, not that it is fine/);
   });
 

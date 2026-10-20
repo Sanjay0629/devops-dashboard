@@ -189,6 +189,15 @@ def world(migrated: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
     built = World(migrated, user, account_id(migrated), monkeypatch)
     monkeypatch.setitem(registry._FACTORIES, "ON_PREM", lambda: built.adapter)
     yield built
+    # A failed operation raises an alert (OPEN-89); leave none behind for tests that count them.
+    with migrated.begin() as connection:
+        connection.execute(
+            text(
+                "DELETE FROM alert_open_keys WHERE dedup_key IN"
+                " (SELECT dedup_key FROM alert_events WHERE source = 'DCP_OPERATION')"
+            )
+        )
+        connection.execute(text("DELETE FROM alert_events WHERE source = 'DCP_OPERATION'"))
     revoke_all(migrated, user)
     retire_servers(migrated, built.servers)
     get_settings.cache_clear()

@@ -75,6 +75,8 @@ class Operation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    #: Written by the worker on every poll (M4.3, ``OPEN-84``); a quiet one makes a row resumable.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     __table_args__ = (
         enum_check("environment", ENVIRONMENTS, "environment"),

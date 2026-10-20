@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowOnlyTheDcpRuntimeRoleToAssume",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::MANAGEMENT_ACCOUNT_ID:role/DCP_RUNTIME_ROLE_NAME" },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}

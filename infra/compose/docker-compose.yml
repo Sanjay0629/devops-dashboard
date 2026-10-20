@@ -58,6 +58,8 @@ x-backend-env: &backend-env
   DCP_LOKI_URL: ${DCP_LOKI_URL:-http://loki:3100}
   DCP_LOKI_TIMEOUT_SECONDS: ${DCP_LOKI_TIMEOUT_SECONDS:-15.0}
   DCP_LOG_RETENTION_DAYS: ${DCP_LOG_RETENTION_DAYS:-14}
+  # M4.3. Unset means the AWS adapter is not configured (OPEN-81).
+  DCP_AWS_SSM_DOCUMENT_VERSION: ${DCP_AWS_SSM_DOCUMENT_VERSION:-}
   # M2.3 (OPEN-14). The worker writes this file to a volume Prometheus mounts
   # read-only; the other services carry the same value because they share this
   # block, and only the worker has the volume. Both timing settings are

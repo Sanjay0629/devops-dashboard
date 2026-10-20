@@ -35,6 +35,7 @@ from app.metrics.schemas import (
     MetricTemplateList,
 )
 from app.notifications import status as notification_status
+from app.providers import status as cloud_status
 
 #: §15.2: "max range 30 days".
 MAX_RANGE_SECONDS: Final = 30 * 24 * 3600
@@ -242,6 +243,11 @@ async def integration_status(db: AsyncSession | None = None) -> IntegrationStatu
         if name == "Notification channels" and db is not None:
             rows.extend(await notification_status.channel_rows(db))
             continue
+        if name == "Cloud accounts" and db is not None:
+            per_account = await cloud_status.account_rows(db)
+            if per_account is not None:
+                rows.extend(per_account)
+                continue
         if name == "Cloud accounts" and settings.demo_mode:
             reason = "Demonstration mode: the demonstration adapter asserts nothing about a host."
         rows.append(

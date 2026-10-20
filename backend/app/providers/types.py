@@ -20,6 +20,9 @@ UNIT_NAME: Final = re.compile(r"[A-Za-z0-9@._\-]{1,128}\.(service|socket|timer|t
 _RESOURCE_ID: Final = re.compile(r"[A-Za-z0-9/][A-Za-z0-9._:/@=\-]{0,255}")
 _ACCOUNT_REFERENCE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@=\-]{0,255}")
 _REGION: Final = re.compile(r"[A-Za-z0-9._\-]{1,64}")
+#: A role ARN or a secret-store path. A pointer, never a secret (SECURITY.md §9): the shape
+#: check cannot tell the two apart, which is why the account API refuses anything but an ARN.
+_CREDENTIAL_REFERENCE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@=+,\-]{0,511}")
 _METHOD: Final = re.compile(r"[A-Z][A-Z_]{0,31}")
 _EXECUTION_ID: Final = re.compile(r"[A-Za-z0-9._:/\-]{1,256}")
 _CODE: Final = re.compile(r"[a-z][a-z0-9_]{0,63}")
@@ -57,6 +60,9 @@ class ServerRef:
     account_reference: str
     management_method: str
     region: str | None = None
+    #: The account's ``credential_reference``: for AWS a role ARN (``OPEN-79``, ``OPEN-80``).
+    #: Not a secret. ``None`` for an account that has none.
+    credential_reference: str | None = None
 
     def __post_init__(self) -> None:
         _check("provider_resource_id", self.provider_resource_id, _RESOURCE_ID)
@@ -64,6 +70,8 @@ class ServerRef:
         _check("management_method", self.management_method, _METHOD)
         if self.region is not None:
             _check("region", self.region, _REGION)
+        if self.credential_reference is not None:
+            _check("credential_reference", self.credential_reference, _CREDENTIAL_REFERENCE)
 
 
 @dataclass(frozen=True)

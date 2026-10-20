@@ -62,7 +62,9 @@ class DemoAdapter(ProviderAdapter):
     def check_connectivity(self, ref: ServerRef) -> AdapterResult[ConnectivityResult]:
         self._refuse()
 
-    def list_managed_services(self, ref: ServerRef) -> AdapterResult[list[ServiceSnapshot]]:
+    def list_managed_services(
+        self, ref: ServerRef, service: ServiceRef
+    ) -> AdapterResult[list[ServiceSnapshot]]:
         self._refuse()
 
     def _submit(
@@ -72,7 +74,9 @@ class DemoAdapter(ProviderAdapter):
         # so that a future change to the gate cannot turn the demo adapter into a writer.
         self._refuse()
 
-    def get_operation_status(self, handle: ExecutionHandle) -> AdapterResult[ExecutionStatus]:
+    def get_operation_status(
+        self, ref: ServerRef, handle: ExecutionHandle
+    ) -> AdapterResult[ExecutionStatus]:
         self._refuse()
 
     def _refuse(self) -> NoReturn:

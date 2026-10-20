@@ -13,6 +13,7 @@ the schema's CHECKs are the second guard behind it.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 from sqlalchemy import Update, func, literal, update
@@ -110,7 +111,53 @@ def record_handle_statement(
         .where(Operation.id == operation_id, Operation.execution_status == states.RUNNING)
         .values(
             external_execution_id=external_execution_id,
+            heartbeat_at=func.clock_timestamp(),
             observed_state_before=observed_state_before,
+            sanitized_result=Operation.sanitized_result.op("||", return_type=JSONB)(
+                literal({"steps": steps}, type_=JSONB)
+            ),
+        )
+        .returning(Operation.id)
+    )
+
+
+def heartbeat_statement(operation_id: uuid.UUID) -> Update:
+    """Say "still polling" (``OPEN-84``). Guarded on ``RUNNING``: never touches a finished row."""
+    return (
+        update(Operation)
+        .where(Operation.id == operation_id, Operation.execution_status == states.RUNNING)
+        .values(heartbeat_at=func.clock_timestamp())
+        .returning(Operation.id)
+    )
+
+
+def resume_claim_statement(
+    operation_id: uuid.UUID,
+    seen_heartbeat: datetime | None,
+    *,
+    stale_after_seconds: int,
+    steps: list[str],
+) -> Update:
+    """Take over a ``RUNNING`` row whose worker has gone quiet (``OPEN-84``).
+
+    Two guards in one statement: the row must still be ``RUNNING`` with a recorded handle and
+    a heartbeat (or, failing that, a start) older than ``stale_after_seconds`` **by the
+    database's clock**, and the heartbeat must still be the value the caller saw -- so of two
+    resumers racing one row, exactly one gets a ``RETURNING`` row. It never changes the status:
+    resuming is polling, not a transition.
+    """
+    return (
+        update(Operation)
+        .where(
+            Operation.id == operation_id,
+            Operation.execution_status == states.RUNNING,
+            Operation.external_execution_id.is_not(None),
+            Operation.heartbeat_at.is_not_distinct_from(seen_heartbeat),
+            func.coalesce(Operation.heartbeat_at, Operation.started_at)
+            < func.now() - timedelta(seconds=stale_after_seconds),
+        )
+        .values(
+            heartbeat_at=func.clock_timestamp(),
             sanitized_result=Operation.sanitized_result.op("||", return_type=JSONB)(
                 literal({"steps": steps}, type_=JSONB)
             ),

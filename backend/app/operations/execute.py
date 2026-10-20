@@ -44,10 +44,15 @@ from app.authz.matcher import Target, permits
 from app.authz.service import resolve_grants_sync
 from app.core.logging import get_logger
 from app.inventory.models import CloudAccount, Server, Service, ServiceActionPolicy
-from app.operations import codes, states
+from app.operations import alerting, codes, states
 from app.operations.evaluator import ApprovalPolicyView, approval_required
 from app.operations.models import Operation
-from app.operations.store import record_handle_statement, transition_statement
+from app.operations.store import (
+    heartbeat_statement,
+    record_handle_statement,
+    resume_claim_statement,
+    transition_statement,
+)
 from app.providers import registry
 from app.providers.base import ProviderAdapter
 from app.providers.capabilities import ensure_supported
@@ -82,6 +87,10 @@ VERIFY_INTERVAL_SECONDS: Final = 2.0
 MAX_POLL_ERRORS: Final = 3
 #: An unclaimed row older than this is handed to the queue again (``OPEN-70``).
 HEALER_AGE_SECONDS: Final = 30
+#: A `RUNNING` row with a handle whose worker has been quiet this long is resumed
+#: (`OPEN-84`). Longer than a poll, because one provider read may itself take close to a
+#: minute (botocore retries a read up to five times); a working default, not a measurement.
+RESUME_STALE_SECONDS: Final = 120
 
 _CODE: Final = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _SETTLING: Final = frozenset({"ACTIVATING", "DEACTIVATING"})
@@ -115,6 +124,11 @@ class _Op:
     server_id: uuid.UUID
     service_id: uuid.UUID | None
     status: str
+    handle: str | None = None
+    before: str | None = None
+    started_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    steps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -122,7 +136,7 @@ class _Ready:
     adapter: ProviderAdapter
     ref: ServerRef
     service: ServiceRef
-    before: str
+    before: str | None
 
 
 @dataclass(frozen=True)
@@ -144,6 +158,11 @@ def _op(row: Operation) -> _Op:
         row.target_server_id,
         row.target_service_id,
         row.execution_status,
+        row.external_execution_id,
+        row.observed_state_before,
+        row.started_at,
+        row.heartbeat_at,
+        tuple((row.sanitized_result or {}).get("steps", ())),
     )
 
 
@@ -168,6 +187,25 @@ def _audit(
 def _closed(code: str | None) -> str | None:
     """A reason code from an adapter is kept only if it is a closed code, never free text."""
     return code if code is not None and _CODE.fullmatch(code) else None
+
+
+def _alert(session: Session, op: _Op, new: str, reason: str | None) -> None:
+    """The failure alert follows the terminal state, in the same transaction (``OPEN-89``)."""
+    if new in (states.FAILED, states.TIMED_OUT):
+        alerting.raise_failure(
+            session,
+            operation_id=op.id,
+            server_id=op.server_id,
+            service_id=op.service_id,
+            environment=op.environment,
+            action=op.action,
+            status=new,
+            reason=reason or "UNKNOWN",
+        )
+    elif new == states.SUCCEEDED:
+        alerting.clear_failure(
+            session, operation_id=op.id, server_id=op.server_id, service_id=op.service_id
+        )
 
 
 def _finish(
@@ -203,6 +241,7 @@ def _finish(
             session.rollback()
             logger.warning("operation_finish_superseded", operation_id=str(op.id))
             return "superseded"
+        _alert(session, op, new, failure_reason)
         if refused:
             _audit(
                 session,
@@ -280,6 +319,7 @@ def _expire_unclaimed(session: Session, op: _Op) -> str:
     if won is None:
         session.rollback()
         return "lost_claim"
+    _alert(session, op, states.TIMED_OUT, codes.EXPIRED_BEFORE_START)
     _audit(
         session,
         op,
@@ -294,8 +334,12 @@ def _expire_unclaimed(session: Session, op: _Op) -> str:
 # --- 2/3. re-authorise, validate, pre-flight reads ---------------------------------------------
 
 
-def _prepare(engine: Engine, op: _Op) -> _Ready | _Refusal:
-    """Everything that must still be true. Any doubt is a refusal (fail closed)."""
+def _prepare(engine: Engine, op: _Op, *, resume: bool = False) -> _Ready | _Refusal:
+    """Everything that must still be true. Any doubt is a refusal (fail closed).
+
+    A resumer runs every check except the pre-flight reads: the command is already running,
+    ``observed_state_before`` is already stored, and nothing is about to be sent.
+    """
     with Session(engine) as session:
         user = session.get(User, op.requested_by)
         server = session.get(Server, op.server_id)
@@ -315,6 +359,11 @@ def _prepare(engine: Engine, op: _Op) -> _Ready | _Refusal:
             or account.deleted_at is not None
         ):
             return _Refusal(codes.TARGET_VALIDATION_FAILED)
+        # The account's regional boundary (PRD §4.11). Provider-neutral: an account that
+        # configures no `allowed_regions` has no regional boundary; one that does is enforced.
+        allowed = (account.region_configuration or {}).get("allowed_regions")
+        if allowed is not None and (not isinstance(allowed, list) or server.region not in allowed):
+            return _Refusal(codes.TARGET_VALIDATION_FAILED, "region_not_allowed")
 
         target = Target(
             environment=op.environment,
@@ -356,6 +405,7 @@ def _prepare(engine: Engine, op: _Op) -> _Ready | _Refusal:
                 account_reference=account.account_reference,
                 management_method=server.management_method,
                 region=server.region,
+                credential_reference=account.credential_reference,
             )
             service_ref = ServiceRef(service.id, service.service_name)
         except ValueError:
@@ -376,11 +426,14 @@ def _prepare(engine: Engine, op: _Op) -> _Ready | _Refusal:
             _SUBMIT_REASON.get(type(error), codes.NOT_CONFIGURED), error.provider_error_class
         )
 
+    if resume:
+        return _Ready(adapter, ref, service_ref, op.before)
+
     # Provider-side identity (SECURITY §14.5): inventory can be stale, and acting on a recycled
     # identifier is how one restarts the wrong host. Reads only; nothing here changes anything.
     try:
         info = adapter.get_server_info(ref)
-        units = adapter.list_managed_services(ref)
+        units = adapter.list_managed_services(ref, service_ref)
     except ProviderError as error:
         return _Refusal(codes.TARGET_VALIDATION_FAILED, error.provider_error_class)
     if info.data_state != "ok" or info.value is None:
@@ -444,12 +497,24 @@ def _submit(engine: Engine, op: _Op, ready: _Ready, steps: list[str]) -> Executi
     return handle
 
 
+def _beat(engine: Engine, op: _Op) -> None:
+    """Say "still here" (`OPEN-84`). A failure to write it is logged and never stops the work."""
+    try:
+        with Session(engine) as session:
+            session.execute(heartbeat_statement(op.id))
+            session.commit()
+    except Exception as error:
+        logger.warning(
+            "operation_heartbeat_failed", operation_id=str(op.id), error=type(error).__name__
+        )
+
+
 def _status(
-    adapter: ProviderAdapter, handle: ExecutionHandle
+    adapter: ProviderAdapter, ref: ServerRef, handle: ExecutionHandle
 ) -> tuple[ExecutionStatus | None, str]:
     """``(status, "")``, or ``(None, why)`` when the read failed. A failed read is not a result."""
     try:
-        result = adapter.get_operation_status(handle)
+        result = adapter.get_operation_status(ref, handle)
     except ProviderError as error:
         return None, error.provider_error_class
     if result.data_state != "ok" or result.value is None:
@@ -470,9 +535,10 @@ def _poll(
     errors = 0
     attempt = 0
     while True:
+        _beat(engine, op)
         if datetime.now(UTC) >= op.deadline_at:
             return _fail(engine, op, codes.DEADLINE_EXCEEDED, steps, before=ready.before)
-        status, why = _status(ready.adapter, handle)
+        status, why = _status(ready.adapter, ready.ref, handle)
         if status is None:
             errors += 1
             if errors >= MAX_POLL_ERRORS:
@@ -507,10 +573,11 @@ def _verify(
     """
     observed: str | None = None
     for attempt in range(VERIFY_READS):
+        _beat(engine, op)
         if datetime.now(UTC) >= op.deadline_at:
             return _fail(engine, op, codes.DEADLINE_EXCEEDED, steps, before=ready.before)
         try:
-            snapshot = ready.adapter.list_managed_services(ready.ref)
+            snapshot = ready.adapter.list_managed_services(ready.ref, ready.service)
         except ProviderError:
             snapshot = None
         if snapshot is not None and snapshot.data_state == "ok" and snapshot.value is not None:
@@ -566,6 +633,74 @@ def run(
     return _verify(engine, op, prepared, steps, sleep)
 
 
+# --- resume ---------------------------------------------------------------------------------
+
+
+def _claim_resume(engine: Engine, operation_id: uuid.UUID) -> tuple[_Op | None, str]:
+    """Take over a quiet ``RUNNING`` row, or say why not. One statement decides (``OPEN-84``)."""
+    with Session(engine) as session:
+        row = session.get(Operation, operation_id)
+        if (
+            row is None
+            or row.execution_status != states.RUNNING
+            or row.external_execution_id is None
+        ):
+            return None, "not_resumable"
+        op = _op(row)
+        if datetime.now(UTC) >= op.deadline_at:
+            return None, "past_deadline"  # the reaper ends it; a resumer must not start polling
+        steps = [*op.steps, "resumed"]
+        won = session.execute(
+            resume_claim_statement(
+                op.id, op.heartbeat_at, stale_after_seconds=RESUME_STALE_SECONDS, steps=steps
+            )
+        ).first()
+        if won is None:
+            session.rollback()
+            return None, "lost_claim"
+        _audit(session, op, "SERVICE_OPERATION_RESUMED", "SUCCESS", {"provider": op.provider})
+        session.commit()
+    return op, ""
+
+
+def resume(
+    engine: Engine, operation_id: uuid.UUID, *, sleep: Callable[[float], None] = time.sleep
+) -> str:
+    """Continue an operation whose worker died after the provider accepted the command.
+
+    Never calls ``execute_operation``: the command is already running and sending it again is
+    exactly the duplicate this design exists to prevent. It re-checks everything a worker
+    checks (the permission may have been revoked meanwhile), then polls from the persisted
+    handle and verifies. A re-check that refuses ends the row ``FAILED`` / ``RESUME_REFUSED``
+    **flagged for reconciliation**, because a command may still be running that nobody follows.
+    """
+    op, outcome = _claim_resume(engine, operation_id)
+    if op is None:
+        return outcome
+    if op.handle is None:  # the claim statement requires one; narrowing for the type checker
+        return "not_resumable"
+    steps = [*op.steps, "resumed"]
+
+    prepared = _prepare(engine, op, resume=True)
+    if isinstance(prepared, _Refusal):
+        return _fail(
+            engine,
+            op,
+            codes.RESUME_REFUSED,
+            steps,
+            detail=prepared.reason.lower(),
+            before=op.before,
+            refused=True,
+        )
+    handle = ExecutionHandle(
+        prepared.adapter.adapter_id, op.handle, op.started_at or datetime.now(UTC)
+    )
+    ended = _poll(engine, op, prepared, handle, steps, sleep)
+    if ended is not None:
+        return ended
+    return _verify(engine, op, prepared, steps, sleep)
+
+
 # --- the reaper and the healer ------------------------------------------------------------------
 
 
@@ -573,7 +708,9 @@ def reap(
     engine: Engine,
     *,
     enqueue: Callable[[uuid.UUID], None],
+    enqueue_resume: Callable[[uuid.UUID], None] | None = None,
     healer_age_seconds: int = HEALER_AGE_SECONDS,
+    resume_after_seconds: int = RESUME_STALE_SECONDS,
 ) -> dict[str, int]:
     """Time out what ran out of time, and hand unclaimed rows to the queue again (``OPEN-70``).
 
@@ -603,6 +740,20 @@ def reap(
                 )
             ).scalars()
         ]
+    stalled: list[uuid.UUID] = []
+    if enqueue_resume is not None:
+        with Session(engine) as session:
+            stalled = list(
+                session.execute(
+                    select(Operation.id).where(
+                        Operation.execution_status == states.RUNNING,
+                        Operation.external_execution_id.is_not(None),
+                        Operation.deadline_at >= func.now(),
+                        func.coalesce(Operation.heartbeat_at, Operation.started_at)
+                        < func.now() - timedelta(seconds=resume_after_seconds),
+                    )
+                ).scalars()
+            )
     for op in overdue:
         if op.status == states.RUNNING:
             outcome = _finish(
@@ -621,4 +772,12 @@ def reap(
     for operation_id in waiting:
         enqueue(operation_id)
         requeued += 1
-    return {"timed_out": timed_out, "expired_before_start": expired, "requeued": requeued}
+    if enqueue_resume is not None:
+        for operation_id in stalled:
+            enqueue_resume(operation_id)
+    return {
+        "timed_out": timed_out,
+        "expired_before_start": expired,
+        "requeued": requeued,
+        "resume_requeued": len(stalled),
+    }
