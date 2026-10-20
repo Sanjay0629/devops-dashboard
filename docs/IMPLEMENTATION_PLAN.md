@@ -685,6 +685,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M4.5 — Approval workflow
 
+**Status: in progress (2026-10-20) on `phase-M4.5`; not pushed.** Plan: [`M4.5_PLAN.md`](M4.5_PLAN.md); decisions `OPEN-93` – `OPEN-105` closed before code at the owner's instruction. **Adjustments to the tasks below:** one approval only (a policy needing more is refused at request time); approver notification is a pending-approval alert through the existing channels, not a new subsystem; the worker's re-check reads an `approvals` row, not the flag; **an Administrator editor for approval policies is in this milestone** (`OPEN-105`, owner's instruction), where the plan had proposed leaving it out. Like all of Phase 4 it is proven against stubbed providers only until the owner's manual AWS check ([`PROGRESS.md`](../PROGRESS.md) issue 146). M4.4 (Azure) is deferred (`OPEN-92`) and nothing here depends on it.
+
 **Tasks:** policy evaluation at request time and re-check at execution; approval creation, decision endpoints, expiry sweep; **self-approval denial**; approver queue UI with the `self_requested` flag; approval notifications; audit with approval references.
 
 **Acceptance:** a production operation under a policy cannot execute without an approval; a requester cannot approve their own request unless the policy explicitly allows it (PRD §3.6); an expired approval window cancels rather than lingering as live production intent.

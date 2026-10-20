@@ -417,7 +417,7 @@ Service operations (PRD §4.6). **† = addition beyond PRD §6.**
 | `action_type` | `text` | NOT NULL, CHECK in (`start`,`stop`,`restart`,`status`,`logs_tail`) | Closed enum (rule 1) |
 | `requested_by` | `uuid` | NOT NULL, FK → `users(id)` ON DELETE RESTRICT | |
 | `requested_reason` | **†** `text` | NULL | Required by policy for production actions |
-| `approval_status` | `text` | NOT NULL, CHECK in (`NOT_REQUIRED`,`PENDING`,`APPROVED`,`REJECTED`) | |
+| `approval_status` | `text` | NOT NULL, CHECK in (`NOT_REQUIRED`,`PENDING`,`APPROVED`,`REJECTED`,`EXPIRED`) | `EXPIRED` added in M4.5 (migration `0012`, `OPEN-94`): nobody decided, or the request was cancelled |
 | `execution_status` | `text` | NOT NULL, CHECK in (`PENDING`,`AWAITING_APPROVAL`,`APPROVED`,`RUNNING`,`SUCCEEDED`,`FAILED`,`TIMED_OUT`,`CANCELLED`,`REJECTED`) | Exactly PRD §4.6 |
 | `idempotency_key` | `text` | NOT NULL | |
 | `correlation_id` | **†** `uuid` | NOT NULL | |
@@ -470,6 +470,8 @@ Indexes: `(target_server_id, created_at DESC)`, `(execution_status) WHERE execut
 - `failure_reason` is a closed code set in code (API_CONTRACTS §17.2); the column stays free text so a client tolerates new values.
 
 **Added in M4.3 (`OPEN-84`):** `heartbeat_at timestamptz NULL`, written by the worker on every poll. A `RUNNING` row with a recorded `external_execution_id`, a heartbeat older than 120 s (a working default: one provider read can itself take close to a minute) and a future `deadline_at` is picked up by the healer; the resumer takes it with a compare-and-set on the old value, so exactly one worker wins. `NULL` means "never polled", which is not the same as stale and is not resumable.
+
+**Changed in M4.5 (`OPEN-94`, `OPEN-96`):** `approval_status` gains `EXPIRED`. While a row is `AWAITING_APPROVAL`, `deadline_at` is the end of its approval window (the reaper's deadline sweep skips that status) and is reset to `decided_at + operation_timeout_seconds` on approval. A row ended by the approval sweep or a cancel is `CANCELLED` with `failure_reason` `NULL`.
 - `verified_at` (API) is `completed_at`; no column.
 - `uq_operations_single_inflight` treats `NULL` `target_service_id` values as distinct, so it does not guard server-level operations; none are built. It is also per `(server, service)`, so `service_action_policies.max_concurrent_operations` above 1 is **not honoured** (one in flight is SECURITY §13's rule).
 - `parent_operation_id` exists and is `NULL` on every row: no code sets it until a retry trigger is decided (`OPEN-77`).
@@ -507,6 +509,17 @@ CREATE UNIQUE INDEX uq_approvals_one_decision_per_approver
 ```
 
 Indexes: `(operation_type, operation_id)`, `(decision) WHERE decision = 'PENDING'` for the approver queue, `(expires_at) WHERE decision = 'PENDING'` for the expiry sweep.
+
+**Added in M4.5 (`OPEN-94`, migration `0012`):**
+
+```sql
+-- One open request per operation, in storage.
+CREATE UNIQUE INDEX uq_approvals_one_open_per_operation
+  ON approvals (operation_type, operation_id)
+  WHERE decision = 'PENDING';
+```
+
+There is **one row per request** (created `PENDING` in the request's transaction); deciding it sets `decision`, `approved_by`, `reason` and `decided_at`. `approved_by` also records a *rejecter* — the column keeps its documented name. `EXPIRED` is a request nobody decided or one withdrawn by a cancel; its `reason` is `NULL` and the operation's `sanitized_result.reason_code` says which. `approval_policy_id` is `NULL` when the built-in defaults applied (a production `stop` with no policy). The table also carries the CHECKs `ck_approvals_decision` (the four values), `ck_approvals_operation_type`, `ck_approvals_decided_consistent` and `ck_approvals_decider_present` (a decided, non-expired row names its decider). The table is created by migration `0012`, which also adds the `admin:policies` permission (§4.7's editor, `OPEN-105`).
 
 Self-approval is rejected in the approval service by comparing `requested_by` with the acting identity against `approval_policies.allow_self_approval`; a database-level `CHECK` cannot express the policy-dependent exception, so the rule lives in one tested function. Never deleted.
 
@@ -782,6 +795,6 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 
 **Created in M3.3** (migration `0008`): `alert_events` (partitioned monthly) and `alert_open_keys`. **Created in M3.4** (migration `0009`): `notification_channels` and `notification_deliveries`, with their `updated_at` triggers ([§9.2](#92-notification_channels--added-entity-phase-3), [§9.3](#93-notification_deliveries--added-entity-phase-3)); the schema is at revision `0009`.
 
-**Not yet created** — each arrives with the milestone that writes to it: `deployment_targets`, `deployments`, `operations`, `approvals` (M4–M5).
+**Not yet created** — each arrives with the milestone that writes to it: `deployment_targets`, `deployments` (M5). `operations` (M4.2, migration `0010`) and `approvals` (M4.5, migration `0012`) now exist.
 
 `OPEN-02` is **resolved** (2026-10-14): applications are environment-agnostic, confirming `AD-12`. `applications` was created without an `environment` column and stays that way, so the decision cost nothing to settle.

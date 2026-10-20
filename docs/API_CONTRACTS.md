@@ -207,7 +207,7 @@ ServiceState       ACTIVE | INACTIVE | FAILED | ACTIVATING | DEACTIVATING | UNCO
 OperationAction    start | stop | restart | status | logs_tail
 OperationStatus    PENDING | AWAITING_APPROVAL | APPROVED | RUNNING | SUCCEEDED | FAILED | TIMED_OUT | CANCELLED | REJECTED
 DeploymentStatus   REQUESTED | AWAITING_APPROVAL | APPROVED | QUEUED | RUNNING | SUCCEEDED | FAILED | CANCELLED | ROLLED_BACK
-ApprovalStatus     NOT_REQUIRED | PENDING | APPROVED | REJECTED
+ApprovalStatus     NOT_REQUIRED | PENDING | APPROVED | REJECTED | EXPIRED
 ApprovalDecision   PENDING | APPROVED | REJECTED | EXPIRED
 AlertSeverity      INFO | WARNING | CRITICAL
 AlertStatus        FIRING | ACKNOWLEDGED | RESOLVED | EXPIRED
@@ -550,7 +550,7 @@ The most security-sensitive group ([SECURITY.md §16](SECURITY.md#16-safe-start-
 
 Validation, in order ([SECURITY.md §16](SECURITY.md#16-safe-start--stop--restart-workflow)): `Idempotency-Key` present → `action` ∈ `{start, stop, restart}` (`status` and `logs_tail` are `422` here: §16.4 and §16.7 serve them) → server exists, `MANAGED`, not deleted → cloud account `ACTIVE` → service registered **to this server** → action in the service's policy `allowed_actions` → caller holds `service:{action}` on the server's **stored** environment → **idempotency replay** → an adapter resolves and supports the action → approval policy evaluated → rate limit → no in-flight operation for this target. The replay lookup precedes the rate limit and the in-flight guard so that a replay of a running operation returns the original and spends no budget (`OPEN-73`). `reason` is required for `production` and wherever approval is required, 1–500 chars, stored and audited.
 
-**Until M4.5 an operation that needs approval is refused, not queued** (`OPEN-68`): a policy that requires approval, a `stop` on `production`, or an unreadable policy gives `503 not_configured` with `details.reason = "approval_workflow_unavailable"` and no row. **Until a real provider exists (M4.3)** a request gives `503 not_configured` with `details.reason` `demonstration_mode` or `no_adapter_for_provider`, and `422 unsupported_operation` when the adapter's capability for the action is `unsupported` (`OPEN-75`). None of these creates an `operations` row.
+**An operation that needs approval is queued, not refused (M4.5, `OPEN-96`).** A policy that requires approval, a `stop` on `production`, or an unreadable policy creates the operation `AWAITING_APPROVAL` with an `approvals` row and answers `202`; nothing is enqueued until an approver decides (§22). A policy with `required_approvals > 1` gives `503 not_configured` with `details.reason = "approval_policy_unsupported"` and no row (`OPEN-95`). While the request waits its `deadline_at` is the end of the approval window, and it holds the target's one in-flight slot. **Until a real provider exists (M4.3)** a request gives `503 not_configured` with `details.reason` `demonstration_mode` or `no_adapter_for_provider`, and `422 unsupported_operation` when the adapter's capability for the action is `unsupported` (`OPEN-75`). None of these creates an `operations` row. *(The M4.2 refusal `approval_workflow_unavailable` no longer exists.)*
 
 Response `202`:
 
@@ -577,7 +577,7 @@ Response `202`:
 
 The echoed `target` is what the UI must have displayed in the confirmation dialog (PRD §4.6).
 
-Errors: `403 forbidden` (permission or action not allowlisted — audited `AUTHZ_DENIED`), `404 not_found` (unknown/out-of-scope server or unregistered service), `409 operation_in_progress`, `409 conflict` (idempotency key reused with a different body), `422 validation_failed`, `422 unsupported_operation`, `423 read_only_mode`, `429 rate_limited`, `503 not_configured` (demonstration mode, an unconfigured provider, or approval required before M4.5 — see above). Timeouts: the API call returns in under 1 s — execution is asynchronous (PRD §5.3); the operation's own deadline comes from its action policy (default 300 s). Audit `SERVICE_OPERATION_REQUESTED`, and on denial `SERVICE_OPERATION_DENIED`.
+Errors: `403 forbidden` (permission or action not allowlisted — audited `AUTHZ_DENIED`), `404 not_found` (unknown/out-of-scope server or unregistered service), `409 operation_in_progress`, `409 conflict` (idempotency key reused with a different body), `422 validation_failed`, `422 unsupported_operation`, `423 read_only_mode`, `429 rate_limited`, `503 not_configured` (demonstration mode, an unconfigured provider, or an unsupported approval policy — see above). Timeouts: the API call returns in under 1 s — execution is asynchronous (PRD §5.3); the operation's own deadline comes from its action policy (default 300 s). Audit `SERVICE_OPERATION_REQUESTED`, and on denial `SERVICE_OPERATION_DENIED`.
 
 **17.2** Response adds `observed_state_before`, `observed_state_after`, `sanitized_result`, `failure_reason`, `external_execution_id`, `started_at`, `completed_at`, `approval` detail, and `poll_after_seconds` while non-terminal.
 
@@ -599,7 +599,9 @@ Errors: `403 forbidden` (permission or action not allowlisted — audited `AUTHZ
 
 `SUCCEEDED` is accompanied by `observed_state_after` and `verified_at` — the schema itself refuses a success without verification evidence ([DATABASE.md §6.1](DATABASE.md#61-constraints-that-carry-security-meaning), mandatory rule 8). A failure returns `sanitized_result` and a `failure_reason` code, readable only by identities scoped to the target (PRD §4.6). Visibility: the requester always; others need `operation:read` on the target's environment ⇒ `403`.
 
-**17.3** Legal only from `PENDING` or `AWAITING_APPROVAL`; otherwise `409 invalid_state_transition`. A `RUNNING` operation cannot be cancelled in v1 — the provider call is already in flight and a false "cancelled" would be a lie about system state. Audit `SERVICE_OPERATION_CANCELLED`.
+**17.3** Legal only from `PENDING` or `AWAITING_APPROVAL`; otherwise `409 invalid_state_transition`. A `RUNNING` operation cannot be cancelled in v1 — the provider call is already in flight and a false "cancelled" would be a lie about system state. Audit `SERVICE_OPERATION_CANCELLED`. **From `AWAITING_APPROVAL` (M4.5, `OPEN-100`)** the cancel also ends the operation's approval (`decision = EXPIRED`, `reason_code = cancelled`) and resolves its pending-approval alert in the same transaction, and a cancel that loses a race with a decision gets `409`.
+
+**The `approval` object (M4.5).** Present on §17.1 and §17.2 whenever the operation has an approval request, otherwise `null`: `approval_id`, `required_approvals` (always `1` in M4.5), `expires_at`, and — `PENDING` while it waits — `decision` (`PENDING | APPROVED | REJECTED | EXPIRED`), `required_role`, `approved_by` (`{id, display_name}`, the decider, also for a rejection; `null` until decided) and `decided_at`. `approval_status` on the operation is `NOT_REQUIRED | PENDING | APPROVED | REJECTED | EXPIRED`; `EXPIRED` means nobody decided before the window closed, or the request was cancelled. An operation ended by the sweep is `CANCELLED` with `failure_reason = null` and `sanitized_result.reason_code = "approval_expired"`.
 
 ---
 
@@ -830,20 +832,52 @@ This example is the required behaviour from PRD §4.10: the pipeline succeeded b
 
 ## 22. Approvals
 
-**Built in M4.5, not M4.2** (`OPEN-67`): the `approvals` table these endpoints read does not exist before then, and IMPLEMENTATION_PLAN's M4.2 task line that listed them was amended.
+**Built in M4.5** (`OPEN-93` – `OPEN-104`): the `approvals` table these endpoints read arrives in migration `0012`. Only `operation_type = SERVICE_OPERATION` exists; deployments reuse the table and these rules in M5.4 (§21.4, §21.5).
 
 | # | Method | Path | Purpose | Permission |
 |---|---|---|---|---|
-| 22.1 | GET | `/api/v1/approvals` | Pending/decided approval queue | `operation:approve` or `deployment:approve` |
-| 22.2 | GET | `/api/v1/approvals/{approval_id}` | Request detail for a decision | as above |
+| 22.1 | GET | `/api/v1/approvals` | Pending/decided approval queue | `operation:approve` |
+| 22.2 | GET | `/api/v1/approvals/{approval_id}` | Request detail for a decision | `operation:approve` |
 | 22.3 | POST | `/api/v1/operations/{operation_id}/approve` | Approve an operation | `operation:approve` |
 | 22.4 | POST | `/api/v1/operations/{operation_id}/reject` | Reject an operation | `operation:approve` |
 
-**22.1** Query: `decision` (default `PENDING`), `operation_type`, `environment`, cursor pagination. Scope-filtered to environments the approver may approve in. Items include the full decision context — requester, target, environment, action, reason, `expires_at` and a `self_requested` flag so the UI can disable the control before the server rejects it.
+A holder of only `deployment:approve` has no use for these in M4.5 and is refused by the route (`403`).
 
-**22.2** Includes `policy` (`required_approvals`, `allow_self_approval`, `required_role`), `decisions_so_far[]` and the sanitised target state at request time.
+**22.1** Query: `decision` (`PENDING` by default; `APPROVED`, `REJECTED`, `EXPIRED`), `operation_type` (`SERVICE_OPERATION` only: `DEPLOYMENT` is `422` until M5.4), `environment`, `limit` (1 – 100, default 50), `cursor` (§5). **Scope is applied in the SQL:** only requests whose target server the caller may approve on (`operation:approve` over the server's stored environment) are counted or returned, so a request outside the caller's reach is absent, not forbidden. Items carry the full decision context:
 
-**22.3 / 22.4** Mirror 21.4 / 21.5 for operations. On approval, `approval_status → APPROVED`, `execution_status → APPROVED`, and the execution task is enqueued **in that transaction's commit**. The worker **re-checks** the requester's permission and the approval state before invoking the provider — permissions may have been revoked while the request waited ([SECURITY.md §22](SECURITY.md#22-background-worker-security)). An expired approval window gives `409 invalid_state_transition` with `details.reason = "approval_expired"`. Audit `OPERATION_APPROVED` / `OPERATION_REJECTED`.
+```json
+{
+  "items": [{
+    "approval_id": "00000000-0000-0000-0000-000000000000",
+    "operation_id": "00000000-0000-0000-0000-000000000000",
+    "operation_type": "SERVICE_OPERATION",
+    "requested_by": { "id": "00000000-0000-0000-0000-000000000000", "display_name": "Example Operator" },
+    "target": { "server_id": "00000000-0000-0000-0000-000000000000", "server_display_name": "Placeholder Web 01", "service_name": "placeholder-api.service", "environment": "production" },
+    "action_type": "restart",
+    "reason": "Placeholder change reference CR-0000",
+    "decision": "PENDING",
+    "expires_at": "2026-01-15T10:30:00Z",
+    "created_at": "2026-01-15T09:30:00Z",
+    "decided_at": null,
+    "approved_by": null,
+    "self_requested": false,
+    "self_approval_allowed": false
+  }],
+  "next_cursor": null
+}
+```
+
+`self_requested` is true when the requester is the caller; `self_approval_allowed` is the governing policy's `allow_self_approval` (the built-in default is `false`). The UI disables the control when the first is true and the second is false — that is advice, and §22.3 refuses it again.
+
+**22.2** Adds `policy` (`required_approvals`, `allow_self_approval`, `required_role`, `approval_window_seconds`, and `policy_id`, `null` for the built-in default), `decisions_so_far[]` (`approved_by`, `decision`, `reason`, `decided_at`; at most one in M4.5) and `target_state`: the service's **last observed** state with `observed_at` and `data_state` (`ok` | `stale` | `unavailable`) — a pre-flight read is not made at request time, and the approver is told that. `404` for an unknown approval or one the caller may not approve on.
+
+**22.3 / 22.4** Body `{"reason": "Placeholder approval note"}` (`reason` is optional on approve and **required on reject**, 1 – 500 printable characters). The response is the §17.2 operation detail. Checks, in order: session → `operation:approve` → the operation exists and is visible to the caller (`404`) → it is `AWAITING_APPROVAL` with a `PENDING` approval (`409 invalid_state_transition`; `details.reason = "approval_expired"` when the window has passed — the sweep's effect is applied first — otherwise `"not_awaiting_approval"`) → scope: `operation:approve` over the stored environment and server (`403`, audited `SERVICE_OPERATION_DENIED`) → **separation of duties** (`403` with `details.reason = "self_approval_not_permitted"` unless the governing policy explicitly allows it, PRD §3.6) → the policy's `required_role` (`403`, `details.reason = "approver_role_required"`) → a reject without a reason is `422`.
+
+The decision is one transaction: the approval row, the operation (`APPROVED` with `approval_status = APPROVED` and `deadline_at = decided_at + the action policy's timeout`; or `REJECTED`), the audit row, and the resolution of the pending-approval alert commit together. The loser of any race — two approvers, an approver against a cancel, an approver against the expiry sweep — gets `409`, never a false success. On approval the execution task is enqueued **after the commit** (the healer re-enqueues an unclaimed `APPROVED` row if the message is lost). The worker **re-checks from evidence** — an `approvals` row with `decision = APPROVED`, an approver who is still active, in scope and in role, not the requester unless the policy allows it, inside the window — and refuses with `failure_reason = APPROVAL_REQUIRED` and a closed `sanitized_result.reason_code` (`approval_missing`, `approval_not_approved`, `approver_revoked`, `self_approval`, `approval_expired`) if any of it is gone ([SECURITY.md §16](SECURITY.md#16-safe-start--stop--restart-workflow), §22). Audit `SERVICE_OPERATION_APPROVED` / `SERVICE_OPERATION_REJECTED` with the approval reference; a refusal is `SERVICE_OPERATION_DENIED` (`reason` one of `self_approval_not_permitted`, `approver_role_required`, `out_of_scope`). A rejecter's reason is audited by its length only.
+
+**Expiry.** A request nobody decides becomes `EXPIRED`, its operation `CANCELLED`, and its slot is freed, by the reaper's sweep (every 30 s), audited `SERVICE_OPERATION_CANCELLED` by `system:approval-sweeper` on behalf of the requester. A decision after the window is `409 approval_expired` whether or not the sweep has run.
+
+**Notification.** A pending request opens a `WARNING` alert `ApprovalPending` on the target service (§20), delivered to the existing notification channels by their existing routing; it resolves on approve, reject, expiry or cancel (`OPEN-101`).
 
 ---
 
@@ -920,6 +954,33 @@ Validation: `role_name` ∈ the five roles; `scope_definition` keys ∈ `{enviro
 **25.6** Audit `ROLE_REVOKED`. The system refuses to remove the last Administrator grant (`409 conflict`), counting only unexpired grants held by active users.
 
 **25.7** Audit `SESSION_TERMINATED`, with the count and never a session identifier. Zero is a success: the user simply had none live.
+
+### 25.11 – 25.14 Approval policies
+
+Added in M4.5 at the owner's instruction (`OPEN-105`). Approval policies were seeded only; without an editor a team that cannot separate requester from approver had no way to say so from the application.
+
+| # | Method | Path | Purpose | Permission |
+|---|---|---|---|---|
+| 25.11 | GET | `/api/v1/admin/approval-policies` | List approval policies | `admin:policies` |
+| 25.12 | POST | `/api/v1/admin/approval-policies` | Create a policy | `admin:policies` |
+| 25.13 | PATCH | `/api/v1/admin/approval-policies/{policy_id}` | Edit a policy | `admin:policies` |
+| 25.14 | DELETE | `/api/v1/admin/approval-policies/{policy_id}` | Delete an unreferenced policy | `admin:policies` |
+
+```json
+{
+  "name": "production-service-operations",
+  "environment": "production",
+  "applies_to": "SERVICE_OPERATION",
+  "required_approvals": 1,
+  "allow_self_approval": false,
+  "required_role": "APPROVER",
+  "approval_window_seconds": 3600
+}
+```
+
+Validation (`extra="forbid"`): `name` 1 – 128 characters from `[A-Za-z0-9 ._-]`, unique (`409 duplicate_resource`); `environment` one of the four environments or `*`; `applies_to` `SERVICE_OPERATION` or `DEPLOYMENT`, **fixed at creation** (not accepted by 25.13); `required_approvals` **only `1`** (a policy needing more is refused at request time, so it cannot be saved); `required_role` must name an existing role; `approval_window_seconds` 60 – 86 400. 25.13 changes only the fields it names. **25.14 answers `409 conflict` while a service action policy links the policy or any approval request references it** — removing a policy that something points at would silently remove a gate. A change takes effect on the **next** request and the next worker re-check; a request already waiting keeps the window it was created with. Each of 25.12 – 25.14 writes one `APPROVAL_POLICY_CHANGED` audit row in the same transaction, with `change` (`created`, `updated`, `deleted`) and the before and after of every field (closed values and the policy's name only). `423` in read-only mode. The response of 25.11 – 25.13 is the policy (`policy_id`, the seven fields above, `created_at`, `updated_at`); 25.14 answers `204`.
+
+**What the editor can do, so it is not a surprise:** it can set `allow_self_approval` to `true`, and it can move a policy to another environment, either of which weakens a gate. Both are privileged, Administrator-only and audited; neither is otherwise guarded in M4.5.
 
 ### 25.10 Read-only mode
 
@@ -1028,7 +1089,7 @@ Performance figures are PRD §10 design budgets, explicitly **not** measured res
 
 ## 28. Audit `action_type` catalogue (initial, extensible)
 
-`LOGIN_SUCCEEDED`, `LOGIN_FAILED`, `LOGIN_DENIED`, `LOGOUT`, `SESSION_TERMINATED`, `AUTHZ_DENIED`, `SERVER_REGISTERED`, `SERVER_UPDATED`, `SERVER_ENVIRONMENT_CHANGED`, `SERVER_RETIRED`, `SERVER_STATUS_CHANGED`, `SERVER_CONNECTIVITY_CHECKED`, `SERVICE_REGISTERED`, `SERVICE_UPDATED`, `SERVICE_ACTION_POLICY_CHANGED`, `SERVICE_DEREGISTERED`, `APPLICATION_REGISTERED`, `APPLICATION_UPDATED`, `APPLICATION_ARCHIVED`, `SERVICE_OPERATION_REQUESTED`, `SERVICE_OPERATION_DENIED`, `SERVICE_OPERATION_APPROVED`, `SERVICE_OPERATION_REJECTED`, `SERVICE_OPERATION_CANCELLED`, `SERVICE_OPERATION_STARTED`, `SERVICE_OPERATION_COMPLETED`, `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_DENIED`, `DEPLOYMENT_APPROVED`, `DEPLOYMENT_REJECTED`, `DEPLOYMENT_CANCELLED`, `DEPLOYMENT_STARTED`, `DEPLOYMENT_COMPLETED`, `DEPLOYMENT_ROLLBACK_REQUESTED`, `ALERT_ACKNOWLEDGED`, `ALERT_ASSIGNED`, `ALERT_INGESTED`, `ROLE_GRANTED`, `ROLE_REVOKED`, `USER_CREATED`, `USER_DISABLED`, `USER_ENABLED`, `CLOUD_ACCOUNT_REGISTERED`, `CLOUD_ACCOUNT_UPDATED`, `CLOUD_ACCOUNT_DISABLED`, `CLOUD_ACCOUNT_VERIFIED`, `CLOUD_ACCOUNT_SYNC_REQUESTED`, `CLOUD_ACCOUNT_SYNCED` (M4.3), `SERVICE_OPERATION_RESUMED` (M4.3), `DEPLOYMENT_TARGET_REGISTERED`, `DEPLOYMENT_TARGET_UPDATED`, `APPROVAL_POLICY_CHANGED`, `NOTIFICATION_CHANNEL_CHANGED`, `NOTIFICATION_RETRY_REQUESTED`, `AUDIT_QUERIED`, `AUDIT_EXPORTED`, `READ_ONLY_MODE_CHANGED`.
+`LOGIN_SUCCEEDED`, `LOGIN_FAILED`, `LOGIN_DENIED`, `LOGOUT`, `SESSION_TERMINATED`, `AUTHZ_DENIED`, `SERVER_REGISTERED`, `SERVER_UPDATED`, `SERVER_ENVIRONMENT_CHANGED`, `SERVER_RETIRED`, `SERVER_STATUS_CHANGED`, `SERVER_CONNECTIVITY_CHECKED`, `SERVICE_REGISTERED`, `SERVICE_UPDATED`, `SERVICE_ACTION_POLICY_CHANGED`, `SERVICE_DEREGISTERED`, `APPLICATION_REGISTERED`, `APPLICATION_UPDATED`, `APPLICATION_ARCHIVED`, `SERVICE_OPERATION_REQUESTED`, `SERVICE_OPERATION_DENIED`, `SERVICE_OPERATION_APPROVED`, `SERVICE_OPERATION_REJECTED`, `SERVICE_OPERATION_CANCELLED`, `SERVICE_OPERATION_STARTED`, `SERVICE_OPERATION_COMPLETED`, `DEPLOYMENT_REQUESTED`, `DEPLOYMENT_DENIED`, `DEPLOYMENT_APPROVED`, `DEPLOYMENT_REJECTED`, `DEPLOYMENT_CANCELLED`, `DEPLOYMENT_STARTED`, `DEPLOYMENT_COMPLETED`, `DEPLOYMENT_ROLLBACK_REQUESTED`, `ALERT_ACKNOWLEDGED`, `ALERT_ASSIGNED`, `ALERT_INGESTED`, `ROLE_GRANTED`, `ROLE_REVOKED`, `USER_CREATED`, `USER_DISABLED`, `USER_ENABLED`, `CLOUD_ACCOUNT_REGISTERED`, `CLOUD_ACCOUNT_UPDATED`, `CLOUD_ACCOUNT_DISABLED`, `CLOUD_ACCOUNT_VERIFIED`, `CLOUD_ACCOUNT_SYNC_REQUESTED`, `CLOUD_ACCOUNT_SYNCED` (M4.3), `SERVICE_OPERATION_RESUMED` (M4.3), `DEPLOYMENT_TARGET_REGISTERED`, `DEPLOYMENT_TARGET_UPDATED`, `APPROVAL_POLICY_CHANGED`, `NOTIFICATION_CHANNEL_CHANGED`, `NOTIFICATION_RETRY_REQUESTED`, `AUDIT_QUERIED`, `AUDIT_EXPORTED`, `READ_ONLY_MODE_CHANGED`. M4.5 produces `SERVICE_OPERATION_APPROVED`, `SERVICE_OPERATION_REJECTED` and `APPROVAL_POLICY_CHANGED` (all three were already listed) and uses `SERVICE_OPERATION_DENIED` and `SERVICE_OPERATION_CANCELLED` for the approval paths; `approval_id` is set on every row that concerns an approval.
 
 ---
 

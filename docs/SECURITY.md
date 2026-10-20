@@ -121,6 +121,7 @@ Representative matrix (full list in [API_CONTRACTS.md](API_CONTRACTS.md), per en
 | `audit:read` | — | — | — | ✅ | ✅ |
 | `admin:users` / `admin:roles` | — | — | — | — | ✅ |
 | `admin:manage` (system settings, e.g. read-only mode) | — | — | — | — | ✅ |
+| `admin:policies` (approval policies, M4.5; added by migration `0012`) | — | — | — | — | ✅ |
 | `admin:integrations` — **renamed from the seeded `integration:manage` by migration 0004** (2026-10-14), closing [PROGRESS.md](../PROGRESS.md) issue 39's integration half | — | — | — | — | ✅ |
 
 `deployment:approve` and `operation:approve` are intentionally **not** granted to Administrator, to keep separation of duties meaningful (OPEN-10).
@@ -378,7 +379,8 @@ graph TD
 Additional requirements:
 
 - **Amended in M4.2 (`OPEN-73`):** the idempotency replay check precedes the rate limit and the one-in-flight guard. Taken after them, a replay of a still-running operation would be refused with `409 operation_in_progress` instead of returning the original, and would spend rate-limit budget.
-- **Until the approval workflow exists (M4.5) "requires approval" is refused, not queued** (`OPEN-68`): the request gets `503 not_configured` and no row. The worker's re-check (below) is built now and refuses a row that needs approval and has none.
+- **Built in M4.5 (`OPEN-96`, `OPEN-99`):** "requires approval" is now queued — `AWAITING_APPROVAL`, an `approvals` row, a pending-approval alert, nothing enqueued — and the diagram's gated branch is real. The decision is made by a different identity, in scope and in the policy's role, in one guarded transaction. **The worker no longer trusts `approval_status`:** it reads an `approvals` row and refuses (`APPROVAL_REQUIRED`, zero provider calls) unless a decision of `APPROVED` exists, was made inside the window by someone who is still active, still holds `operation:approve` over the stored environment and server and still holds the policy's role, and is not the requester unless the policy allows it. The same check runs in the resumer. A policy that needs more than one approval, or that cannot be read, fails closed (`503` at request time, or the built-in single-approval defaults for a production `stop`); an approval nobody gives expires to `CANCELLED` and frees the target.
+- **Editing an approval policy is a privilege (`OPEN-105`):** `admin:policies`, Administrator only, audited `APPROVAL_POLICY_CHANGED`. It can turn self-approval on; nothing else guards that in M4.5.
 - The confirmation dialog restates **server, service, environment and action** before submission (PRD §4.6). Production targets are visually distinct.
 - `stop` on a production service is treated as high-impact and defaults to requiring approval.
 - The worker **re-checks** permission and approval state immediately before invocation — permissions may have been revoked while the request sat in a queue (PRD §12 failure scenario).
