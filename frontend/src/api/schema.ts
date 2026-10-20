@@ -398,6 +398,50 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/cloud-accounts': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List cloud accounts
+     * @description At most 200 accounts, newest configuration first by name. No secret is ever returned.
+     */
+    get: operations['list_accounts_api_v1_cloud_accounts_get'];
+    put?: never;
+    /**
+     * Register a cloud account
+     * @description The credential is a *reference* (an IAM role ARN for AWS); a key is a ``422``.
+     */
+    post: operations['create_account_api_v1_cloud_accounts_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/cloud-accounts/{account_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Edit or disable a cloud account
+     * @description ``DISABLED`` stops every operation against the account's servers at once.
+     */
+    patch: operations['update_account_api_v1_cloud_accounts__account_id__patch'];
+    trace?: never;
+  };
   '/api/v1/cloud-accounts/{account_id}/capabilities': {
     parameters: {
       query?: never;
@@ -412,6 +456,46 @@ export interface paths {
     get: operations['account_capabilities_api_v1_cloud_accounts__account_id__capabilities_get'];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/cloud-accounts/{account_id}/sync': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Reconcile the account's registered servers with the provider
+     * @description Never registers a server and never changes an environment (``OPEN-88``).
+     */
+    post: operations['sync_account_api_v1_cloud_accounts__account_id__sync_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/cloud-accounts/{account_id}/verify': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Verify an account's credentials and reads
+     * @description Read-only: ``ssm:SendCommand`` is reported in ``not_probed``, never tried.
+     */
+    post: operations['verify_account_api_v1_cloud_accounts__account_id__verify_post'];
     delete?: never;
     options?: never;
     head?: never;
@@ -739,6 +823,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/servers/{server_id}/connectivity-check': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Can DCP reach this server through its provider?
+     * @description Changes nothing about the server; ``reachable: false`` is an answer, not an error.
+     */
+    post: operations['connectivity_check_api_v1_servers__server_id__connectivity_check_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/servers/{server_id}/metrics': {
     parameters: {
       query?: never;
@@ -989,6 +1093,81 @@ export interface components {
       provider: string;
       /** Reason */
       reason: string | null;
+    };
+    /** AccountCreate */
+    AccountCreate: {
+      /** Account Reference */
+      account_reference: string;
+      /** Credential Reference */
+      credential_reference: string;
+      /** Display Name */
+      display_name: string;
+      /**
+       * Provider
+       * @enum {string}
+       */
+      provider: 'AWS' | 'AZURE' | 'ON_PREM' | 'OTHER';
+      region_configuration: components['schemas']['RegionConfiguration'];
+    };
+    /** AccountList */
+    AccountList: {
+      /** Items */
+      items: components['schemas']['AccountOut'][];
+    };
+    /** AccountOut */
+    AccountOut: {
+      /** Account Reference */
+      account_reference: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Credential Fingerprint */
+      credential_fingerprint: string | null;
+      /** Credential Reference */
+      credential_reference: string | null;
+      /** Display Name */
+      display_name: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Last Sync At */
+      last_sync_at: string | null;
+      /** Last Sync Error */
+      last_sync_error: string | null;
+      /** Provider */
+      provider: string;
+      /** Region Configuration */
+      region_configuration: {
+        [key: string]: unknown;
+      };
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'ACTIVE' | 'DISABLED' | 'ERROR';
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+      verification: components['schemas']['VerificationOut'] | null;
+    };
+    /**
+     * AccountUpdate
+     * @description Everything optional. The provider and the account reference cannot change.
+     */
+    AccountUpdate: {
+      /** Credential Reference */
+      credential_reference?: string | null;
+      /** Display Name */
+      display_name?: string | null;
+      region_configuration?: components['schemas']['RegionConfiguration'] | null;
+      /** Status */
+      status?: ('ACTIVE' | 'DISABLED') | null;
     };
     /** AcknowledgeRequest */
     AcknowledgeRequest: {
@@ -1604,6 +1783,28 @@ export interface components {
       notification_channels_active: number;
       /** Produced */
       produced: string[];
+    };
+    /**
+     * ConnectivityOut
+     * @description §14.8. ``reachable = false`` is an answer; a provider that cannot answer is an error.
+     */
+    ConnectivityOut: {
+      /**
+       * Checked At
+       * Format: date-time
+       */
+      checked_at: string;
+      /**
+       * Data State
+       * @constant
+       */
+      data_state: 'ok';
+      /** Message */
+      message: string;
+      /** Provider Status */
+      provider_status: string;
+      /** Reachable */
+      reachable: boolean;
     };
     /**
      * CreateUserRequest
@@ -2699,6 +2900,16 @@ export interface components {
       /** Unavailable Reason */
       unavailable_reason?: string | null;
     };
+    /**
+     * RegionConfiguration
+     * @description Allowed regions are an authorisation boundary (PRD §4.11), not a convenience.
+     */
+    RegionConfiguration: {
+      /** Allowed Regions */
+      allowed_regions: string[];
+      /** Default Region */
+      default_region: string;
+    };
     /** RoleDetail */
     RoleDetail: {
       /** Description */
@@ -3498,6 +3709,11 @@ export interface components {
      * @enum {string}
      */
     Support: 'supported' | 'unsupported' | 'not_configured';
+    /** SyncAccepted */
+    SyncAccepted: {
+      /** Task Id */
+      task_id: string;
+    };
     /**
      * TargetRef
      * @description The row an alert is about, **as found by lookup** (``OPEN-45``), never as labelled.
@@ -3659,6 +3875,27 @@ export interface components {
       msg: string;
       /** Error Type */
       type: string;
+    };
+    /**
+     * VerificationOut
+     * @description §26.5. ``ssm:SendCommand`` is listed in ``not_probed``, never guessed (``OPEN-87``).
+     */
+    VerificationOut: {
+      /**
+       * Checked At
+       * Format: date-time
+       */
+      checked_at: string;
+      /** Message */
+      message: string;
+      /** Missing Permissions */
+      missing_permissions: string[];
+      /** Not Probed */
+      not_probed: string[];
+      /** Permissions Ok */
+      permissions_ok: boolean;
+      /** Reachable */
+      reachable: boolean;
     };
     /**
      * WebhookAlertResult
@@ -4448,6 +4685,94 @@ export interface operations {
       };
     };
   };
+  list_accounts_api_v1_cloud_accounts_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AccountList'];
+        };
+      };
+    };
+  };
+  create_account_api_v1_cloud_accounts_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AccountCreate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AccountOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_account_api_v1_cloud_accounts__account_id__patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        account_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AccountUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AccountOut'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   account_capabilities_api_v1_cloud_accounts__account_id__capabilities_get: {
     parameters: {
       query?: never;
@@ -4466,6 +4791,68 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['AccountCapabilities'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  sync_account_api_v1_cloud_accounts__account_id__sync_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        account_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SyncAccepted'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  verify_account_api_v1_cloud_accounts__account_id__verify_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        account_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['VerificationOut'];
         };
       };
       /** @description Validation Error */
@@ -5085,6 +5472,37 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  connectivity_check_api_v1_servers__server_id__connectivity_check_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        server_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ConnectivityOut'];
+        };
       };
       /** @description Validation Error */
       422: {

@@ -23,6 +23,11 @@ from app.providers.errors import NotConfigured
 _FACTORIES: Final[dict[str, Callable[[], ProviderAdapter]]] = {"AWS": _build_aws}
 
 
+def registered_providers() -> frozenset[str]:
+    """The providers a real adapter exists for. Registration of an account requires one."""
+    return frozenset(_FACTORIES)
+
+
 def resolve_adapter(provider: str, *, demo_mode: bool | None = None) -> ProviderAdapter:
     """The adapter for ``provider``, or ``NotConfigured``. Never returns ``None``."""
     if get_settings().demo_mode if demo_mode is None else demo_mode:

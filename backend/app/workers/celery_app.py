@@ -129,6 +129,7 @@ def create_celery_app() -> Celery:
             "app.workers.tasks.monitoring",
             "app.workers.tasks.notifications",
             "app.workers.tasks.operations",
+            "app.workers.tasks.cloud",
         ),
     )
     return celery_app
