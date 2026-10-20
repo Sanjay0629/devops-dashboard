@@ -313,6 +313,8 @@ done unmet and makes M1.6 large.
 **Why:** PRD §4.11 — no inbound SSH, provider-native auditability, IAM-scoped.
 **Rules:** role-based credentials only, no static access keys; IAM conditions restrict the document name and target resource tags; throttling handled with `retry_after`-aware backoff. Any use of a general shell document (e.g. `AWS-RunShellScript`) is prohibited ([SECURITY.md §1](SECURITY.md#1-mandatory-rules)).
 
+**As built (M4.3, `OPEN-90`).** `boto3` is a runtime dependency (already the approved SDK). Against [§10](#10-rules-for-introducing-a-new-dependency): rungs 1 - 3 failed because SigV4 signing and STS credential refresh are not a few lines. Rejected: `aioboto3` (the adapter interface is synchronous, `OPEN-58`), raw `httpx` with hand-written SigV4 (a signing implementation is the one thing not to write), `moto` (a large dev dependency whose SSM fidelity is weaker than the error matrix needs; `botocore.stub.Stubber` ships with botocore). `boto3` and `botocore` are untyped, so mypy treats them through a narrow override and the adapter talks to a small `Protocol` of the client methods it uses.
+
 ### 6.3 Azure management APIs
 
 **Responsibility:** VM inventory, Run Command for registered scripts, Azure Arc for supported external servers, Azure Monitor where required.

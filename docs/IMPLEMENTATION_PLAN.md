@@ -653,6 +653,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M4.3 — AWS SSM adapter
 
+**Status: in progress (2026-10-20), on branch `phase-M4.3`.** Plan: [`M4.3_PLAN.md`](M4.3_PLAN.md). Decisions `OPEN-78` - `OPEN-91` closed before code at the owner's instruction to take the recommended option. **Adjustments to the tasks below:** the work includes what M4.1 / M4.2 handed over (§14.8, §26.2 - §26.6, resume from the handle, the operation-failure alert); inventory sync *reconciles registered servers and never registers one* (`OPEN-88`); the execution role's deny of the shell documents is verified *offline*, not at runtime (`OPEN-87`); no cloud-accounts page; **the acceptance criterion "a restart on a real instance succeeded and was verified" needs the owner's manual run and is not claimed by the build.**
+
 **Tasks:** `boto3` client with role-based credentials and adaptive retries; invoke the **registered document** with typed parameters; persist `CommandId` **before** polling; poll with backoff; verification read; throttling honoured via `retry_after`; `DescribeInstanceInformation` connectivity; inventory sync; error-class mapping.
 
 **Acceptance:** a restart on a non-production test instance succeeds and is verified; a throttled response backs off instead of hammering; a permission error surfaces as a configuration problem with actionable text.

@@ -230,6 +230,7 @@ The explicit `Deny` matters: it means that even a code defect or a compromised b
 - **Separate execution identities per environment.** The production execution role is distinct from the non-production one and is never assumable by a non-production code path.
 - Credentials are fetched at runtime from the secrets manager / instance metadata, cached in memory with a short TTL, and never written to disk or logs.
 - Permission and throttling errors are surfaced as *configuration* problems with actionable messages, never as generic failures (PRD §4.11).
+- **As built (M4.3, `OPEN-79`, `OPEN-81`, `OPEN-87`):** an AWS account's `credential_reference` is a role ARN; DCP's ambient identity assumes it with a session name carrying the operation id; the adapter factory **refuses to run when `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` is present**. The document `DCP-ServiceControl` takes its two parameters as environment data (`interpolationType: ENV_VAR`), constrains them with `allowedValues` / `allowedPattern` and re-validates them in the script. The deny of the two shell documents is verified **offline** (tests on the committed policy, `scripts/verify_aws_role.py`); the runtime never sends a command to "prove" a deny. Nothing here has been run against AWS.
 
 **[RECOMMENDED]** an external-id-style guard on cross-account assumption; periodic least-privilege review against CloudTrail/Azure activity logs.
 
