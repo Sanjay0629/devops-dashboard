@@ -68,7 +68,9 @@ class Scripted(ScriptedAdapter):
             ServerInfo(self.info_resource or ref.provider_resource_id, ref.region, "up")
         )
 
-    def list_managed_services(self, ref: ServerRef) -> AdapterResult[list[ServiceSnapshot]]:
+    def list_managed_services(
+        self, ref: ServerRef, service: ServiceRef
+    ) -> AdapterResult[list[ServiceSnapshot]]:
         self.list_calls += 1
         if self.list_error is not None:
             raise self.list_error
@@ -99,7 +101,9 @@ class Scripted(ScriptedAdapter):
             raise self.submit_error
         return super()._submit(ref, service, action, operation_id=operation_id)
 
-    def get_operation_status(self, handle: ExecutionHandle) -> AdapterResult[ExecutionStatus]:
+    def get_operation_status(
+        self, ref: ServerRef, handle: ExecutionHandle
+    ) -> AdapterResult[ExecutionStatus]:
         self.status_calls += 1
         if self.on_status is not None:
             self.on_status()

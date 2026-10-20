@@ -108,3 +108,24 @@ def all_checks_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(checks, "check_database", ok)
     monkeypatch.setattr(checks, "check_broker", ok)
     monkeypatch.setattr(checks, "check_migrations", ok)
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--integration-profile",
+        action="store",
+        default=None,
+        help="name of a NON-PRODUCTION profile; required to run real_integration tests",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """A real-integration test never runs by accident (docs/TESTING.md §2.1)."""
+    if config.getoption("--integration-profile"):
+        return
+    skip = pytest.mark.skip(
+        reason="real_integration: pass --integration-profile=<non-production profile> to run"
+    )
+    for item in items:
+        if "real_integration" in item.keywords:
+            item.add_marker(skip)

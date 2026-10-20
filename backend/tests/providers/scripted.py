@@ -51,7 +51,9 @@ class ScriptedAdapter(ProviderAdapter):
     def check_connectivity(self, ref: ServerRef) -> AdapterResult[ConnectivityResult]:
         return self._ok(ConnectivityResult(True, "scripted"))
 
-    def list_managed_services(self, ref: ServerRef) -> AdapterResult[list[ServiceSnapshot]]:
+    def list_managed_services(
+        self, ref: ServerRef, service: ServiceRef
+    ) -> AdapterResult[list[ServiceSnapshot]]:
         return self._ok([ServiceSnapshot("nginx.service", "ACTIVE")])
 
     def _submit(
@@ -62,5 +64,7 @@ class ScriptedAdapter(ProviderAdapter):
             self.adapter_id, f"scripted-{len(self.submitted)}", datetime.now(UTC)
         )
 
-    def get_operation_status(self, handle: ExecutionHandle) -> AdapterResult[ExecutionStatus]:
+    def get_operation_status(
+        self, ref: ServerRef, handle: ExecutionHandle
+    ) -> AdapterResult[ExecutionStatus]:
         return self._ok(ExecutionStatus("COMPLETED"))

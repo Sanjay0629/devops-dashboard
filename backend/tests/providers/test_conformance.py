@@ -73,7 +73,7 @@ class LiesAboutSupport(ScriptedAdapter):
 
 
 class StatusLeaks(ScriptedAdapter):
-    def get_operation_status(self, handle: ExecutionHandle) -> Any:
+    def get_operation_status(self, ref: ServerRef, handle: ExecutionHandle) -> Any:
         raise KeyError(handle.external_execution_id)
 
 

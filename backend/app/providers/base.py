@@ -53,7 +53,10 @@ class ProviderAdapter(ABC):
     def check_connectivity(self, ref: ServerRef) -> AdapterResult[ConnectivityResult]: ...
 
     @abstractmethod
-    def list_managed_services(self, ref: ServerRef) -> AdapterResult[list[ServiceSnapshot]]: ...
+    def list_managed_services(
+        self, ref: ServerRef, service: ServiceRef
+    ) -> AdapterResult[list[ServiceSnapshot]]:
+        """The state of the one registered unit asked about (``OPEN-80``)."""
 
     @abstractmethod
     def _submit(
@@ -62,7 +65,10 @@ class ProviderAdapter(ABC):
         """Invoke the provider's registered artifact. Never blind-retried by the caller."""
 
     @abstractmethod
-    def get_operation_status(self, handle: ExecutionHandle) -> AdapterResult[ExecutionStatus]: ...
+    def get_operation_status(
+        self, ref: ServerRef, handle: ExecutionHandle
+    ) -> AdapterResult[ExecutionStatus]:
+        """Poll an invocation. ``ref`` names the target the handle alone cannot (``OPEN-80``)."""
 
     def execute_operation(
         self, ref: ServerRef, service: ServiceRef, action: ServiceAction, *, operation_id: uuid.UUID

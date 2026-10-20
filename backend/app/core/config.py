@@ -142,6 +142,12 @@ class Settings(BaseSettings):
     #: because an empty answer for a range Loki no longer holds reads as "no logs".
     log_retention_days: int = Field(default=14, ge=1, le=3_650)
 
+    # --- AWS SSM (M4.3, OPEN-81) ------------------------------------------------
+    #: The version of the registered ``DCP-ServiceControl`` document DCP invokes. A version
+    #: number, so an edit made in AWS changes nothing until DCP is told. **Unset means the
+    #: AWS adapter is not configured** (fail closed), not "use the default version".
+    aws_ssm_document_version: str | None = Field(default=None, pattern=r"^[1-9][0-9]{0,5}$")
+
     # --- Alertmanager and the alert webhook (M3.3, OPEN-43, OPEN-47) ----------
     #: Base URL of Alertmanager, used only for the §26.1 readiness probe. Optional:
     #: unset, the integration row says ``not_configured``. Deployment configuration
@@ -287,6 +293,7 @@ class Settings(BaseSettings):
         "smtp_from",
         "smtp_username",
         "smtp_password",
+        "aws_ssm_document_version",
         mode="before",
     )
     @classmethod

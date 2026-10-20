@@ -25,6 +25,7 @@ dependencies = [
     # lines. Pulls `cryptography`. Alternatives: authlib (larger surface,
     # bundles an OAuth client we do not want), python-jose (stale).
     "pyjwt[crypto]>=2.10,<3.0",
+    "boto3>=1.35,<2",
 ]
 
 [dependency-groups]
@@ -114,8 +115,15 @@ show_error_codes = true
 pretty = true
 
 [[tool.mypy.overrides]]
-module = ["celery.*", "kombu.*"]
+module = ["celery.*", "kombu.*", "boto3.*", "botocore.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# boto3 and botocore ship no type information (TECH_STACK.md §6.2). Narrowed to the one
+# package that imports them; the adapter's own surface stays fully typed.
+module = ["app.providers.aws.*"]
+disallow_any_unimported = false
+disable_error_code = ["no-any-unimported"]
 
 [[tool.mypy.overrides]]
 # Celery and kombu ship no py.typed marker, so their decorators and return

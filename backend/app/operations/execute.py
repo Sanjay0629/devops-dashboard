@@ -356,6 +356,7 @@ def _prepare(engine: Engine, op: _Op) -> _Ready | _Refusal:
                 account_reference=account.account_reference,
                 management_method=server.management_method,
                 region=server.region,
+                credential_reference=account.credential_reference,
             )
             service_ref = ServiceRef(service.id, service.service_name)
         except ValueError:
@@ -380,7 +381,7 @@ def _prepare(engine: Engine, op: _Op) -> _Ready | _Refusal:
     # identifier is how one restarts the wrong host. Reads only; nothing here changes anything.
     try:
         info = adapter.get_server_info(ref)
-        units = adapter.list_managed_services(ref)
+        units = adapter.list_managed_services(ref, service_ref)
     except ProviderError as error:
         return _Refusal(codes.TARGET_VALIDATION_FAILED, error.provider_error_class)
     if info.data_state != "ok" or info.value is None:
@@ -445,11 +446,11 @@ def _submit(engine: Engine, op: _Op, ready: _Ready, steps: list[str]) -> Executi
 
 
 def _status(
-    adapter: ProviderAdapter, handle: ExecutionHandle
+    adapter: ProviderAdapter, ref: ServerRef, handle: ExecutionHandle
 ) -> tuple[ExecutionStatus | None, str]:
     """``(status, "")``, or ``(None, why)`` when the read failed. A failed read is not a result."""
     try:
-        result = adapter.get_operation_status(handle)
+        result = adapter.get_operation_status(ref, handle)
     except ProviderError as error:
         return None, error.provider_error_class
     if result.data_state != "ok" or result.value is None:
@@ -472,7 +473,7 @@ def _poll(
     while True:
         if datetime.now(UTC) >= op.deadline_at:
             return _fail(engine, op, codes.DEADLINE_EXCEEDED, steps, before=ready.before)
-        status, why = _status(ready.adapter, handle)
+        status, why = _status(ready.adapter, ready.ref, handle)
         if status is None:
             errors += 1
             if errors >= MAX_POLL_ERRORS:
@@ -510,7 +511,7 @@ def _verify(
         if datetime.now(UTC) >= op.deadline_at:
             return _fail(engine, op, codes.DEADLINE_EXCEEDED, steps, before=ready.before)
         try:
-            snapshot = ready.adapter.list_managed_services(ready.ref)
+            snapshot = ready.adapter.list_managed_services(ready.ref, ready.service)
         except ProviderError:
             snapshot = None
         if snapshot is not None and snapshot.data_state == "ok" and snapshot.value is not None:
