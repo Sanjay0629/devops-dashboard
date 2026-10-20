@@ -503,7 +503,13 @@ class TestSeededReferenceData:
     def test_no_seeded_policy_grants_a_stop_action(self, connection: Connection) -> None:
         """Stopping a service and leaving it down is not a default capability."""
         rows = connection.execute(
-            text("SELECT name, allowed_actions FROM service_action_policies")
+            # The *seeded* policies: other suites commit test-only policies (``test-ops-all``)
+            # into this shared schema, and which of them have run before this test depends on
+            # file order -- M4.5's ``test_approval*`` files sort ahead of this one.
+            text(
+                "SELECT name, allowed_actions FROM service_action_policies"
+                " WHERE name IN ('read-only', 'restart-only')"
+            )
         ).fetchall()
         assert rows
         for name, actions in rows:

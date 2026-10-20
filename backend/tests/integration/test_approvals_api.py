@@ -50,6 +50,23 @@ from tests.operations.fakes import Scripted
 PRODUCTION_POLICY = "production-service-operations"
 
 
+@pytest.fixture(autouse=True)
+def _leave_no_expired_operation_behind(migrated: Engine) -> Iterator[None]:
+    """Rows are shared with the rest of the session, and one thing must not outlive these tests:
+    an operation whose approval is ``EXPIRED`` has no older equivalent, so migration 0012's
+    downgrade refuses while one exists -- which is the behaviour, and would fail the migration
+    round-trip test for the wrong reason if another suite ran after this one."""
+    yield
+    with migrated.begin() as connection:
+        connection.execute(
+            text(
+                "DELETE FROM approvals WHERE operation_id IN"
+                " (SELECT id FROM operations WHERE approval_status = 'EXPIRED')"
+            )
+        )
+        connection.execute(text("DELETE FROM operations WHERE approval_status = 'EXPIRED'"))
+
+
 @dataclass
 class Actor:
     client: httpx.AsyncClient
