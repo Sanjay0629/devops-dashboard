@@ -15,7 +15,13 @@ from app.operations import states
 REQUESTABLE_ACTIONS: Final[tuple[str, ...]] = ("start", "stop", "restart")
 #: The table's CHECK: the contract's full enum.
 ACTION_TYPES: Final[tuple[str, ...]] = ("start", "stop", "restart", "status", "logs_tail")
-APPROVAL_STATUSES: Final[tuple[str, ...]] = ("NOT_REQUIRED", "PENDING", "APPROVED", "REJECTED")
+APPROVAL_STATUSES: Final[tuple[str, ...]] = (
+    "NOT_REQUIRED",
+    "PENDING",
+    "APPROVED",
+    "REJECTED",
+    "EXPIRED",
+)
 
 # --- failure reasons (the row's `failure_reason`) ---------------------------------------------
 # refused by a re-check, before anything was sent

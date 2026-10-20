@@ -19,6 +19,7 @@ EXPECTED_TABLES = {
     "application_servers",
     "applications",
     "approval_policies",
+    "approvals",
     "audit_events",
     "cloud_accounts",
     "notification_channels",
@@ -257,3 +258,35 @@ def test_log_permissions_take_the_contract_names_and_no_role_gains_or_loses_one(
     assert _log_grants(rebuilt) == {"read": everyone, "query": system}
     command.upgrade(alembic_config, "head")
     assert _log_grants(rebuilt) == {"read:application": everyone, "read:system": system}
+
+
+def test_downgrading_past_0012_refuses_while_an_operation_is_expired(
+    rebuilt: Engine, alembic_config: Config
+) -> None:
+    """``EXPIRED`` has no older equivalent, so the downgrade stops instead of rewriting history."""
+    from tests.integration.test_alert_schema import a_user
+    from tests.integration.test_constraints import _account, _server
+    from tests.integration.test_operation_schema import _operation, _service
+
+    with rebuilt.begin() as connection:
+        server = _server(connection, _account(connection))
+        operation = _operation(
+            connection,
+            server,
+            _service(connection, server),
+            a_user(connection),
+            status="AWAITING_APPROVAL",
+        )
+        connection.execute(
+            text("UPDATE operations SET approval_status = 'EXPIRED' WHERE id = :id"),
+            {"id": operation},
+        )
+    try:
+        with pytest.raises(RuntimeError, match="EXPIRED"):
+            command.downgrade(alembic_config, "0011")
+        with rebuilt.connect() as connection:
+            revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert revision == "0012"  # the refusal rolled back; nothing half-applied
+    finally:
+        _drop_everything(rebuilt)
+        command.upgrade(alembic_config, "head")
