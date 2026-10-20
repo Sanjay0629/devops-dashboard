@@ -131,6 +131,7 @@ def test_reconciliation_marks_exactly_the_outcomes_where_the_provider_may_have_a
         "PROVIDER_UNAVAILABLE",
         "PROVIDER_PARTIAL_FAILURE",
         "VERIFICATION_UNAVAILABLE",
+        "RESUME_REFUSED",
         "DEADLINE_EXCEEDED",
     }
     # Nothing was sent, so there is nothing to reconcile.
