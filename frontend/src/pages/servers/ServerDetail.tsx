@@ -32,6 +32,7 @@ import { HealthBadge, LastSeen } from '@/components/HealthCell';
 import { StatusBadge } from '@/components/StatusBadge';
 import { useCursorPaging } from '@/components/useCursorPaging';
 import { useLatestResponse } from '@/components/useLatestResponse';
+import { ConnectivityCheck } from '@/pages/servers/ConnectivityCheck';
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -380,6 +381,13 @@ export function ServerDetail(): React.JSX.Element {
             `${String(server.open_alerts.counts.critical)} critical, ${String(server.open_alerts.counts.warning)} warning`
           )}
         </Row>
+        {mayWrite && (
+          // §14.8 asks the provider now. It changes nothing above: the agent state and last
+          // seen are the Prometheus probe's. Hidden for usability only (SECURITY.md §6).
+          <Row label="Provider connectivity">
+            <ConnectivityCheck serverId={server.id} disabled={server.status === 'RETIRED'} />
+          </Row>
+        )}
         <Row label="Registered services">{server.registered_service_count}</Row>
         <Row label="Management capabilities">
           {server.management_capabilities.capabilities == null ? (
