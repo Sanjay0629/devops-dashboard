@@ -34,7 +34,8 @@ ExecutionStatus = Literal[
     "CANCELLED",
     "REJECTED",
 ]
-ApprovalStatus = Literal["NOT_REQUIRED", "PENDING", "APPROVED", "REJECTED"]
+ApprovalStatus = Literal["NOT_REQUIRED", "PENDING", "APPROVED", "REJECTED", "EXPIRED"]
+ApprovalDecisionValue = Literal["PENDING", "APPROVED", "REJECTED", "EXPIRED"]
 #: §17.1 accepts these three; ``status`` and ``logs_tail`` are served by §16.4 and §16.7.
 RequestableAction = Literal["start", "stop", "restart"]
 
@@ -60,11 +61,17 @@ class ActorView(BaseModel):
 
 
 class ApprovalSummary(BaseModel):
-    """Always ``null`` until the approval workflow exists (M4.5, ``OPEN-68``)."""
+    """The operation's approval request (M4.5); ``null`` on an operation that never needed one."""
 
     approval_id: uuid.UUID
+    #: Always ``1`` in M4.5: a policy asking for more is refused at request time (``OPEN-95``).
     required_approvals: int
     expires_at: datetime
+    decision: ApprovalDecisionValue
+    required_role: str
+    #: The decider, also for a rejection; ``null`` until decided.
+    approved_by: ActorView | None = None
+    decided_at: datetime | None = None
 
 
 class OperationBase(BaseModel):

@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import ReadBudget, client_ip, user_agent
 from app.authz.dependencies import Authorized, require_permission
 from app.db.session import get_session
-from app.operations import service
+from app.operations import service, states
 from app.operations.schemas import OperationAccepted, OperationDetail, OperationRequest
 
 router = APIRouter(tags=["operations"])
@@ -73,7 +73,7 @@ def _origin(request: Request, authorized: Authorized) -> service.Origin:
     summary="Request an allowlisted operation",
     responses={
         200: {"description": "An idempotent replay: the original operation, nothing re-executed."},
-        503: {"description": "Demonstration mode, no adapter, or an approval is required (M4.5)."},
+        503: {"description": "Demonstration mode, no adapter, or an unsupported approval policy."},
     },
 )
 async def request_operation(
@@ -98,7 +98,8 @@ async def request_operation(
     )
     if replayed:
         response.status_code = 200
-    else:
+    elif operation.execution_status == states.PENDING:
+        # A request waiting for an approval is not handed to a worker; the approver's decision is.
         await service.enqueue_execution(operation.id)
     return await service.accepted_view(db, operation, replayed=replayed)
 

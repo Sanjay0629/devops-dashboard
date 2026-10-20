@@ -45,6 +45,10 @@ export const PERMISSIONS = {
   serverWrite: 'server:write',
   /** Register and edit applications and integrations. Administrator only. */
   adminIntegrations: 'admin:integrations',
+  /** See the approver queue and decide requests (§22). Scope is checked per request. */
+  operationApprove: 'operation:approve',
+  /** Create, edit and delete approval policies (§25.11 – §25.14). Administrator only. */
+  adminPolicies: 'admin:policies',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

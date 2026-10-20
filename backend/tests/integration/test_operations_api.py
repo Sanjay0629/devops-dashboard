@@ -717,20 +717,25 @@ async def test_an_unconfigured_caller_learns_nothing_about_configuration(
         ("gated.service", "restart", "policy"),  # the seeded production approval policy
     ],
 )
-async def test_an_operation_that_needs_approval_is_refused_not_queued_until_m4_5(
+async def test_an_operation_that_needs_approval_is_queued_for_a_person_not_run_or_refused(
     rig: Rig, unit: str, action: str, basis: str
 ) -> None:
+    """M4.5 (`OPEN-96`): after M4.2 this was a 503; now the request waits. The lifecycle around
+    it is in ``test_approvals_api.py``; this is the request path's half."""
     response = await rig.ask(rig.production, unit, action=action)
-    assert response.status_code == 503, response.text
-    error = response.json()["error"]
-    assert error["code"] == "not_configured"
-    assert error["details"]["reason"] == "approval_workflow_unavailable"
-    assert error["details"]["basis"] == basis
-    service_id = rig.service_id(rig.production, unit)
-    assert rig.rows(target_service_id=service_id) == []  # no AWAITING_APPROVAL row to wedge it
-    assert rig.enqueued == []
-    [event] = denied(rig, service_id)
-    assert event["sanitized_metadata"]["reason"] == "approval_workflow_unavailable"
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["execution_status"] == "AWAITING_APPROVAL"
+    assert body["approval_status"] == "PENDING"
+    assert body["approval"]["decision"] == "PENDING"
+    assert body["approval"]["required_approvals"] == 1
+    assert body["deadline_at"] == body["approval"]["expires_at"]
+    [row] = rig.rows(id=body["operation_id"])
+    assert row["execution_status"] == "AWAITING_APPROVAL"
+    assert rig.enqueued == []  # nothing goes to a worker until an approver decides
+    [event] = rig.audit("SERVICE_OPERATION_REQUESTED", target_id=body["operation_id"])
+    assert event["sanitized_metadata"]["approval_basis"] == basis
+    assert denied(rig, rig.service_id(rig.production, unit)) == []
 
 
 async def test_the_same_policy_does_not_gate_staging(rig: Rig) -> None:

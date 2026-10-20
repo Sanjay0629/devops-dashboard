@@ -669,6 +669,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M4.4 — Azure adapter
 
+**Status: DEFERRED (2026-10-20, by the owner: there is no Azure estate to manage; `OPEN-92`).** Nothing below is built, and nothing later in the plan depends on it. The plan text is kept unchanged so the milestone can be picked up if an Azure estate appears. PRD §4.11's Azure requirements are therefore **not met by this release** and `AZURE` accounts are refused at registration (`no_adapter_for_provider`). Consequences recorded in [`PROGRESS.md`](../PROGRESS.md) issue 159.
+
 **Tasks:** managed-identity credential; ARM inventory; Run Command with a registered script; Azure Arc for supported external servers; **model Azure's per-VM serialisation and async semantics explicitly**; capability set reflecting real differences.
 
 **Acceptance:** unsupported operations are reported explicitly as unsupported, never as a generic failure (PRD §4.11 acceptance criterion); Azure-specific limits are visible in the capability matrix.
@@ -682,6 +684,8 @@ backend/tests/dashboard/test_summary.py
 ---
 
 ## M4.5 — Approval workflow
+
+**Status: complete locally (2026-10-20), on branch `phase-M4.5`; not pushed, not on hosted CI; the Compose smoke test was not run; never run against AWS.** Plan: [`M4.5_PLAN.md`](M4.5_PLAN.md); decisions `OPEN-93` – `OPEN-105` closed before code at the owner's instruction. **Adjustments to the tasks below:** one approval only (a policy needing more is refused at request time); approver notification is a pending-approval alert through the existing channels, not a new subsystem; the worker's re-check reads an `approvals` row, not the flag; **an Administrator editor for approval policies is in this milestone** (`OPEN-105`, owner's instruction), where the plan had proposed leaving it out. Like all of Phase 4 it is proven against stubbed providers only until the owner's manual AWS check ([`PROGRESS.md`](../PROGRESS.md) issue 146). M4.4 (Azure) is deferred (`OPEN-92`) and nothing here depends on it.
 
 **Tasks:** policy evaluation at request time and re-check at execution; approval creation, decision endpoints, expiry sweep; **self-approval denial**; approver queue UI with the `self_requested` flag; approval notifications; audit with approval references.
 

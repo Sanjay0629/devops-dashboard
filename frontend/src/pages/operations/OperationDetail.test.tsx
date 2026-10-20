@@ -310,4 +310,158 @@ describe('OperationDetailPage', () => {
     const results = await axe.run(container);
     expect(results.violations).toEqual([]);
   });
+
+  describe('an operation with an approval request (M4.5)', () => {
+    const approval = (over: Record<string, unknown> = {}) => ({
+      approval_id: 'ap-1',
+      required_approvals: 1,
+      expires_at: '2026-10-19T10:30:00Z',
+      decision: 'PENDING',
+      required_role: 'APPROVER',
+      approved_by: null,
+      decided_at: null,
+      ...over,
+    });
+
+    const show = (body: Record<string, unknown>): void => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(() => reply(200, body)),
+      );
+      renderPage();
+    };
+
+    it('says who has to decide, until when, and that it is cancelled if nobody does', async () => {
+      show(
+        op({
+          execution_status: 'AWAITING_APPROVAL',
+          approval_status: 'PENDING',
+          approval: approval(),
+          deadline_at: '2026-10-19T10:30:00Z',
+        }),
+      );
+      expect(await screen.findByText('Waiting for approval')).toBeInTheDocument();
+      const note = await screen.findByTestId('approval-state');
+      expect(note).toHaveTextContent(/someone who holds the approver role/i);
+      expect(note).toHaveTextContent(/not the requester unless the policy allows it/i);
+      expect(note).toHaveTextContent(/expires/i);
+      expect(note).toHaveTextContent(/cancelled if nobody does/i);
+      expect(screen.getByText('Expires')).toBeInTheDocument(); // the deadline row is the window
+      expect(screen.getByRole('button', { name: /cancel this operation/i })).toBeEnabled();
+    });
+
+    it('names the approver and when, once approved', async () => {
+      show(
+        op({
+          execution_status: 'APPROVED',
+          approval_status: 'APPROVED',
+          approval: approval({
+            decision: 'APPROVED',
+            approved_by: { id: 'u9', display_name: 'Sam Approver' },
+            decided_at: '2026-10-19T09:40:00Z',
+          }),
+        }),
+      );
+      expect(await screen.findByText('Approved, waiting for a worker')).toBeInTheDocument();
+      const note = await screen.findByTestId('approval-state');
+      expect(note).toHaveTextContent('Approved by Sam Approver');
+      expect(
+        screen.queryByRole('button', { name: /cancel this operation/i }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('says a rejected request was not run, without an empty failure box', async () => {
+      show(
+        op({
+          execution_status: 'REJECTED',
+          approval_status: 'REJECTED',
+          poll_after_seconds: null,
+          completed_at: '2026-10-19T09:41:00Z',
+          approval: approval({
+            decision: 'REJECTED',
+            approved_by: { id: 'u9', display_name: 'Sam Approver' },
+            decided_at: '2026-10-19T09:41:00Z',
+          }),
+        }),
+      );
+      expect(await screen.findByText('Rejected')).toBeInTheDocument();
+      expect(await screen.findByTestId('approval-state')).toHaveTextContent(
+        /rejected by sam approver.*nothing was run/i,
+      );
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('says an expired window cancelled the request and nothing ran', async () => {
+      show(
+        op({
+          execution_status: 'CANCELLED',
+          approval_status: 'EXPIRED',
+          poll_after_seconds: null,
+          completed_at: '2026-10-19T10:31:00Z',
+          sanitized_result: { reason_code: 'approval_expired' },
+          approval: approval({ decision: 'EXPIRED' }),
+        }),
+      );
+      expect(await screen.findByText('Cancelled')).toBeInTheDocument();
+      expect(await screen.findByTestId('approval-state')).toHaveTextContent(
+        /window passed with no decision.*nothing was run/i,
+      );
+    });
+
+    it('says a request cancelled before anyone decided it had its approval withdrawn', async () => {
+      show(
+        op({
+          execution_status: 'CANCELLED',
+          approval_status: 'EXPIRED',
+          poll_after_seconds: null,
+          completed_at: '2026-10-19T09:35:00Z',
+          sanitized_result: { reason_code: 'cancelled' },
+          approval: approval({ decision: 'EXPIRED' }),
+        }),
+      );
+      expect(await screen.findByTestId('approval-state')).toHaveTextContent(
+        /cancelled before anyone decided it/i,
+      );
+    });
+
+    it('explains why the worker would not accept an approval, in words', async () => {
+      show(
+        op({
+          execution_status: 'FAILED',
+          approval_status: 'APPROVED',
+          poll_after_seconds: null,
+          failure_reason: 'APPROVAL_REQUIRED',
+          sanitized_result: { reason_code: 'approver_revoked' },
+          approval: approval({
+            decision: 'APPROVED',
+            approved_by: { id: 'u9', display_name: 'Sam Approver' },
+            decided_at: '2026-10-19T09:40:00Z',
+          }),
+        }),
+      );
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(/approval could not be shown.*nothing was sent/i);
+      expect(alert).toHaveTextContent(/no longer holds the access/i);
+    });
+
+    it('shows nothing about approval for an operation that never needed one', async () => {
+      show(op());
+      await screen.findByText('Waiting for a worker');
+      expect(screen.queryByTestId('approval-state')).not.toBeInTheDocument();
+    });
+
+    it('has no axe violations while waiting for approval', async () => {
+      show(
+        op({
+          execution_status: 'AWAITING_APPROVAL',
+          approval_status: 'PENDING',
+          approval: approval(),
+        }),
+      );
+      const { container } = { container: document.body };
+      await screen.findByTestId('approval-state');
+      const results = await axe.run(container);
+      expect(results.violations).toEqual([]);
+    });
+  });
 });

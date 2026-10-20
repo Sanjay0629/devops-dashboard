@@ -67,6 +67,56 @@ class World:
     monkeypatch: pytest.MonkeyPatch
     adapter: Scripted = field(default_factory=Scripted)
     servers: list[str] = field(default_factory=list)
+    approvers: list[uuid.UUID] = field(default_factory=list)
+
+    def approve(
+        self,
+        operation: uuid.UUID,
+        *,
+        decision: str = "APPROVED",
+        approver: uuid.UUID | None = None,
+        roles: tuple[str, ...] = ("APPROVER",),
+        scope: str = FULL_SCOPE,
+        decided_offset: float = 0.0,
+        window: float = 3600.0,
+        for_operation: uuid.UUID | None = None,
+        requested_by: uuid.UUID | None = None,
+    ) -> uuid.UUID:
+        """The evidence the worker reads: an ``approvals`` row and a decider with standing.
+
+        ``decided_offset`` is seconds after the request; past ``window`` it is a decision made
+        after the window closed. Returns the decider's user id.
+        """
+        decider = approver
+        if decider is None:
+            decider = a_user_committed(self.engine)
+            self.approvers.append(decider)
+            for role in roles:
+                grant(self.engine, decider, role, scope)
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO approvals (id, operation_type, operation_id, requested_by,"
+                    " approved_by, decision, expires_at, created_at, decided_at)"
+                    " SELECT gen_random_uuid(), 'SERVICE_OPERATION', COALESCE(:other, o.id),"
+                    " COALESCE(:req, o.requested_by),"
+                    " CASE WHEN :d IN ('APPROVED', 'REJECTED') THEN :who END, :d,"
+                    " o.created_at + make_interval(secs => CAST(:w AS float8)), o.created_at,"
+                    " CASE WHEN :d <> 'PENDING' THEN"
+                    " o.created_at + make_interval(secs => CAST(:off AS float8)) END"
+                    " FROM operations o WHERE o.id = :o"
+                ),
+                {
+                    "o": operation,
+                    "other": for_operation,
+                    "req": requested_by,
+                    "d": decision,
+                    "who": decider,
+                    "w": window,
+                    "off": decided_offset,
+                },
+            )
+        return decider
 
     def add(
         self, *, environment: str = "staging", policy: str | None = ALL, unit: str = UNIT
@@ -199,6 +249,8 @@ def world(migrated: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
         )
         connection.execute(text("DELETE FROM alert_events WHERE source = 'DCP_OPERATION'"))
     revoke_all(migrated, user)
+    for approver in built.approvers:
+        revoke_all(migrated, approver)
     retire_servers(migrated, built.servers)
     get_settings.cache_clear()
 
@@ -256,6 +308,7 @@ def test_a_stop_is_verified_as_inactive(world: World) -> None:
 
 def test_an_approved_row_is_claimed_like_a_pending_one(world: World) -> None:
     operation = world.operation(world.add(), status="APPROVED", approval="APPROVED")
+    world.approve(operation)  # a row that carries an approval must have its evidence (OPEN-99)
     assert world.run(operation) == "SUCCEEDED"
 
 
@@ -624,6 +677,7 @@ def test_the_same_row_with_a_recorded_approval_proceeds(world: World) -> None:
     world.adapter = Scripted(before="ACTIVE", after=("INACTIVE",))
     target = world.add(environment="production")
     operation = world.operation(target, action="stop", status="APPROVED", approval="APPROVED")
+    world.approve(operation)
     assert world.run(operation) == "SUCCEEDED"
 
 
@@ -755,6 +809,7 @@ def test_a_second_reap_finds_nothing_more_to_do(world: World) -> None:
 def test_the_healer_requeues_an_unclaimed_row_whose_message_was_lost(world: World) -> None:
     lost = world.operation(world.add(), status="PENDING")  # created a minute ago by the helper
     approved = world.operation(world.add(), status="APPROVED", approval="APPROVED")
+    world.approve(approved)
     young = world.operation(world.add(), status="PENDING")
     world.set("UPDATE operations SET created_at = now() WHERE id = :i", i=young)
     running = world.operation(world.add(), status="RUNNING")

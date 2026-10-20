@@ -38,6 +38,13 @@ const VERB: Record<OperationAction, string> = {
   restart: 'Restart',
 };
 
+function windowText(seconds: number): string {
+  const minutes = Math.round(seconds / 60);
+  return minutes >= 120
+    ? `${String(Math.round(minutes / 60))} hours`
+    : `${String(minutes)} minutes`;
+}
+
 function problemText(result: Exclude<Requested, { kind: 'ok' }>): string {
   switch (result.kind) {
     case 'refused':
@@ -104,6 +111,8 @@ function ConfirmDialog({
     );
     setBusy(false);
     if (result.kind === 'ok') {
+      // A request that needs an approval is not running yet: the operation page says who has to
+      // decide it and until when.
       void navigate(`/operations/${result.operation.operation_id}`);
       return;
     }
@@ -166,8 +175,12 @@ function ConfirmDialog({
       </label>
       {service.approval_required && (
         <p className="mt-2" style={{ color: 'var(--c-warning)' }}>
-          This operation needs an approval. The approval workflow is not available yet, so the
-          request will be refused.
+          This needs an approval from an Approver. Nothing runs until someone other than you
+          approves it
+          {service.approval_window_seconds != null
+            ? `; it will wait up to ${windowText(service.approval_window_seconds)} for one, and is then cancelled`
+            : ''}
+          .
         </p>
       )}
       {problem !== null && (

@@ -183,6 +183,9 @@ def _item(
         "server_reachable": verdict.server_reachable,
         "allowed_actions": allowed_actions(policy, server, authorized),
         "approval_required": approval_required(approval, server),
+        "approval_window_seconds": approval.approval_window_seconds
+        if approval is not None and approval_required(approval, server)
+        else None,
     }
 
 

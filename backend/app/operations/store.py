@@ -41,7 +41,9 @@ def transition_statement(
     *,
     action: str | None = None,
     result: dict[str, Any] | None = None,
-    **fields: str,
+    approval_status: str | None = None,
+    deadline_after_seconds: int | None = None,
+    **fields: Any,
 ) -> Update:
     """``UPDATE operations … WHERE id = :id AND execution_status = <stored current> RETURNING id``.
 
@@ -53,6 +55,9 @@ def transition_statement(
     * ``new`` in ``FAILED`` / ``TIMED_OUT`` needs a ``failure_reason`` that belongs to that status;
       ``reconciliation_required`` is then set from the reason, so a caller cannot forget it.
     * ``result`` is merged into ``sanitized_result`` (closed fields only; see ``OPEN-74``).
+    * ``approval_status`` is set in the same statement (the approval workflow's moves, M4.5);
+      ``deadline_after_seconds`` restarts the deadline at the database's ``now()`` -- an approved
+      operation gets its full timeout from the moment it was approved (``OPEN-96``).
     """
     if new == states.VERIFYING:
         raise ValueError("VERIFYING is never written")
@@ -73,6 +78,10 @@ def transition_statement(
         raise ValueError("failure_reason belongs to FAILED and TIMED_OUT only")
 
     values["execution_status"] = new
+    if approval_status is not None:
+        values["approval_status"] = approval_status
+    if deadline_after_seconds is not None:
+        values["deadline_at"] = func.now() + timedelta(seconds=deadline_after_seconds)
     if new == states.RUNNING:
         values["started_at"] = func.now()
     if new in states.TERMINAL:

@@ -78,6 +78,10 @@ class ServiceItem(BaseModel):
     #: A UI convenience that carries no authority (mandatory rule 4).
     allowed_actions: list[ServiceAction]
     approval_required: bool
+    #: How long a request would wait for an approver, when ``approval_required`` (M4.5). A hint
+    #: for the confirmation dialog; ``null`` otherwise, including for a production ``stop`` that
+    #: needs approval by default and has no policy row to read the window from.
+    approval_window_seconds: int | None
 
 
 class ServiceDetail(ServiceItem):

@@ -19,13 +19,16 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.approvals import requests as approval_requests
+from app.approvals.rules import resolve_policy
+from app.approvals.standing import policy_row
 from app.audit import service as audit
 from app.auth.models import User
 from app.authz import service as authz_service
@@ -42,7 +45,7 @@ from app.inventory.service import (
     server_target,
 )
 from app.operations import codes, states
-from app.operations.evaluator import ApprovalPolicyView, approval_required, reason_required
+from app.operations.evaluator import reason_required
 from app.operations.guard import OperationInProgressError
 from app.operations.models import Operation
 from app.operations.schemas import (
@@ -246,16 +249,14 @@ async def request_operation(
             target=refusal,
         )
 
-    approval = approval_required(
+    resolution = resolve_policy(
         environment=environment,
         action=action,
         policy_linked=policy.approval_policy_id is not None,
-        policy=None
-        if approval_policy is None
-        else ApprovalPolicyView(approval_policy.applies_to, approval_policy.environment),
+        policy=policy_row(approval_policy),
     )
     if body.reason is None and reason_required(
-        environment=environment, approval_needed=approval.required
+        environment=environment, approval_needed=resolution.required
     ):
         raise field_error(
             ["body", "reason"], "required", "A reason is required for this environment or action."
@@ -283,15 +284,17 @@ async def request_operation(
             target=refusal,
         )
 
-    if approval.required:
-        # OPEN-68: no approval workflow exists before M4.5, so "required" is refused, not queued.
+    if resolution.required and resolution.unsupported:
+        # OPEN-95: the governing policy asks for more than one approval. Treating that as "one
+        # will do" would silently weaken it, so it is refused, not queued.
         await _refuse(
             db,
             origin,
-            reason=codes.APPROVAL_WORKFLOW_UNAVAILABLE,
+            reason=codes.APPROVAL_POLICY_UNSUPPORTED,
             error=NotConfiguredError(
-                "This operation needs an approval, and the approval workflow is not available.",
-                details={"reason": codes.APPROVAL_WORKFLOW_UNAVAILABLE, "basis": approval.basis},
+                "This operation's approval policy needs more than one approval, which is not "
+                "supported.",
+                details={"reason": codes.APPROVAL_POLICY_UNSUPPORTED, "basis": resolution.basis},
             ),
             target=refusal,
         )
@@ -332,6 +335,10 @@ async def request_operation(
         )
 
     now = datetime.now(UTC)
+    terms = resolution.terms if resolution.required else None
+    # OPEN-96: a request that must be approved waits, and while it waits its only deadline is
+    # the end of its approval window; an approved one gets its full timeout from the approval.
+    expires_at = now + timedelta(seconds=terms.approval_window_seconds) if terms else None
     operation = Operation(
         target_server_id=server_pk,
         target_service_id=service_pk,
@@ -339,14 +346,14 @@ async def request_operation(
         action_type=action,
         requested_by=user_id,
         requested_reason=body.reason,
-        approval_status="NOT_REQUIRED",
-        execution_status=states.PENDING,
+        approval_status="PENDING" if terms else "NOT_REQUIRED",
+        execution_status=states.AWAITING_APPROVAL if terms else states.PENDING,
         idempotency_key=idempotency_key,
         correlation_id=audit.correlation_uuid(),
         provider=adapter.adapter_id,
         sanitized_result={"adapter_id": adapter.adapter_id},
         created_at=now,
-        deadline_at=states.deadline_at(now, timeout_seconds),
+        deadline_at=expires_at or states.deadline_at(now, timeout_seconds),
     )
     db.add(operation)
     try:
@@ -376,14 +383,25 @@ async def request_operation(
                 target=refusal,
             )
         raise
-    _audit(
+    approval_id = None
+    if terms is not None and expires_at is not None:
+        approval_id = (
+            await approval_requests.open_request(
+                db, operation=operation, terms=terms, unit=unit, expires_at=expires_at
+            )
+        ).id
+    audit.record(
         db,
-        origin,
-        "SERVICE_OPERATION_REQUESTED",
+        action_type="SERVICE_OPERATION_REQUESTED",
         outcome="SUCCESS",
+        actor_id=origin.actor_id,
+        actor_label=origin.actor_label,
         target_type="operation",
         target_id=operation.id,
         environment=environment,
+        approval_id=approval_id,
+        client_ip=origin.client_ip,
+        user_agent=origin.user_agent,
         metadata={
             "server_id": str(server_pk),
             "service_id": str(service_pk),
@@ -391,6 +409,8 @@ async def request_operation(
             "action": action,
             "provider": adapter.adapter_id,
             "reason_given": body.reason is not None,
+            "approval_required": approval_id is not None,
+            **({"approval_basis": resolution.basis} if approval_id is not None else {}),
         },
     )
     await db.commit()
@@ -460,6 +480,7 @@ async def accepted_view(
         ),
         requested_by=ActorView(id=operation.requested_by, display_name=requester),
         requested_reason=operation.requested_reason,
+        approval=await approval_requests.summary(db, operation),
         deadline_at=operation.deadline_at,
         created_at=operation.created_at,
         correlation_id=operation.correlation_id,
@@ -487,7 +508,7 @@ async def detail_view(db: AsyncSession, operation: Operation) -> OperationDetail
     )
 
 
-async def _visible(
+async def visible_operation(
     db: AsyncSession, authorized: Authorized, operation_id: uuid.UUID
 ) -> tuple[Operation, Server | None]:
     """The operation, if this caller may see it -- otherwise ``404``, never ``403`` (§2).
@@ -510,7 +531,7 @@ async def _visible(
 async def read_operation(
     db: AsyncSession, authorized: Authorized, operation_id: uuid.UUID
 ) -> OperationDetail:
-    operation, _ = await _visible(db, authorized, operation_id)
+    operation, _ = await visible_operation(db, authorized, operation_id)
     return await detail_view(db, operation)
 
 
@@ -518,7 +539,7 @@ async def cancel_operation(
     db: AsyncSession, origin: Origin, authorized: Authorized, operation_id: uuid.UUID
 ) -> OperationDetail:
     """§17.3. Legal only before a worker has claimed the row."""
-    operation, server = await _visible(db, authorized, operation_id)
+    operation, server = await visible_operation(db, authorized, operation_id)
     is_requester = operation.requested_by == authorized.user.id
     if not is_requester and (
         server is None or not authorized.permits("operation", "approve", server_target(server))
@@ -540,8 +561,15 @@ async def cancel_operation(
         await db.commit()
         raise ForbiddenError
 
+    awaiting = operation.execution_status == states.AWAITING_APPROVAL
     try:
-        statement = transition_statement(operation.id, operation.execution_status, states.CANCELLED)
+        statement = transition_statement(
+            operation.id,
+            operation.execution_status,
+            states.CANCELLED,
+            approval_status="EXPIRED" if awaiting else None,
+            result={"reason_code": "cancelled"} if awaiting else None,
+        )
     except states.InvalidTransitionError as illegal:
         raise InvalidStateTransitionError(
             "That operation can no longer be cancelled.",
@@ -552,19 +580,26 @@ async def cancel_operation(
         "action": operation.action_type,
         "from": operation.execution_status,
     }
+    # OPEN-100: the approval row is written first. Its guard decides a race with a decision or
+    # the sweep, and a cancel ends the open request so none outlives its operation.
+    approval_id = await approval_requests.withdraw(db, operation) if awaiting else None
     if (await db.execute(statement)).first() is None:
-        # A worker claimed it between the read and the write: a false "cancelled" would be a
-        # lie about system state (API_CONTRACTS §17.3).
+        # A worker claimed it, or an approver decided it, between the read and the write: a
+        # false "cancelled" would be a lie about system state (API_CONTRACTS §17.3).
         await db.rollback()
         raise InvalidStateTransitionError("That operation can no longer be cancelled.")
-    _audit(
+    audit.record(
         db,
-        origin,
-        "SERVICE_OPERATION_CANCELLED",
+        action_type="SERVICE_OPERATION_CANCELLED",
         outcome="SUCCESS",
+        actor_id=origin.actor_id,
+        actor_label=origin.actor_label,
         target_type="operation",
         target_id=operation_pk,
         environment=environment,
+        approval_id=approval_id,
+        client_ip=origin.client_ip,
+        user_agent=origin.user_agent,
         metadata=metadata,
     )
     await db.commit()
