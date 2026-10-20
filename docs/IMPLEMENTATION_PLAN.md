@@ -669,6 +669,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M4.4 — Azure adapter
 
+**Status: DEFERRED (2026-10-20, by the owner: there is no Azure estate to manage; `OPEN-92`).** Nothing below is built, and nothing later in the plan depends on it. The plan text is kept unchanged so the milestone can be picked up if an Azure estate appears. PRD §4.11's Azure requirements are therefore **not met by this release** and `AZURE` accounts are refused at registration (`no_adapter_for_provider`). Consequences recorded in [`PROGRESS.md`](../PROGRESS.md) issue 159.
+
 **Tasks:** managed-identity credential; ARM inventory; Run Command with a registered script; Azure Arc for supported external servers; **model Azure's per-VM serialisation and async semantics explicitly**; capability set reflecting real differences.
 
 **Acceptance:** unsupported operations are reported explicitly as unsupported, never as a generic failure (PRD §4.11 acceptance criterion); Azure-specific limits are visible in the capability matrix.
