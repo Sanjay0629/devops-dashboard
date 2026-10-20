@@ -26,6 +26,8 @@ from sqlalchemy import Engine, text
 
 from app.approvals import sweep
 from app.approvals.store import decide_statement, expire_statement
+from app.operations import execute
+from app.providers import registry
 from tests.integration.inventory_helpers import (
     STAGING_SCOPE,
     call,
@@ -43,6 +45,7 @@ from tests.integration.test_operations_api import (  # noqa: F401 -- fixtures us
     rig,
     subject,
 )
+from tests.operations.fakes import Scripted
 
 PRODUCTION_POLICY = "production-service-operations"
 
@@ -779,3 +782,63 @@ async def test_a_second_decision_statement_finds_nothing_to_decide(
         ).first()
     assert first is not None and second is None
     assert approval_row(rig.engine, body["operation_id"])["approved_by"] == approver.id
+
+
+# --- the whole path: request, approve, then the worker ----------------------------------------
+
+
+def _provider(rig: Rig, **script: Any) -> Scripted:
+    fake = Scripted(unit="gated.service", before="INACTIVE", after=("ACTIVE",), **script)
+    rig.monkeypatch.setitem(registry._FACTORIES, "ON_PREM", lambda: fake)
+    return fake
+
+
+async def test_a_gated_restart_requested_approved_and_run_ends_succeeded_and_verified(
+    rig: Rig,
+    approver: Actor,
+) -> None:
+    fake = _provider(rig)
+    body = await waiting(rig)
+    operation = uuid.UUID(body["operation_id"])
+    assert (await decide(approver, str(operation))).status_code == 200
+    assert rig.enqueued == [operation]
+
+    outcome = await asyncio.to_thread(execute.run, rig.engine, operation, sleep=lambda _: None)
+
+    assert outcome == "SUCCEEDED"
+    [row] = rig.rows(id=str(operation))
+    assert row["execution_status"] == "SUCCEEDED" and row["approval_status"] == "APPROVED"
+    assert row["observed_state_after"] == "ACTIVE" and row["failure_reason"] is None
+    assert fake.submitted == [(execute.ServiceAction.RESTART, operation)]
+    # The audit trail names the person who asked, the person who decided, and the worker.
+    assert rig.audit("SERVICE_OPERATION_REQUESTED", target_id=str(operation))
+    assert rig.audit("SERVICE_OPERATION_APPROVED", target_id=str(operation))
+    [completed] = rig.audit("SERVICE_OPERATION_COMPLETED", target_id=str(operation))
+    assert completed["outcome"] == "SUCCESS"
+
+
+async def test_a_direct_execution_attempt_on_a_waiting_request_does_nothing(
+    rig: Rig,
+) -> None:
+    """The adversarial case in IMPLEMENTATION_PLAN M4.5: skipping the approval step entirely."""
+    fake = _provider(rig)
+    body = await waiting(rig)
+    operation = uuid.UUID(body["operation_id"])
+
+    outcome = await asyncio.to_thread(execute.run, rig.engine, operation, sleep=lambda _: None)
+
+    assert outcome == "not_claimable"
+    assert fake.submit_attempts == 0 and fake.submitted == []
+    assert rig.rows(id=str(operation))[0]["execution_status"] == "AWAITING_APPROVAL"
+
+
+async def test_a_rejected_request_cannot_be_run(rig: Rig, approver: Actor) -> None:
+    fake = _provider(rig)
+    body = await waiting(rig)
+    operation = uuid.UUID(body["operation_id"])
+    assert (await decide(approver, str(operation), "reject", reason="No")).status_code == 200
+
+    outcome = await asyncio.to_thread(execute.run, rig.engine, operation, sleep=lambda _: None)
+
+    assert outcome == "not_claimable"
+    assert fake.submit_attempts == 0

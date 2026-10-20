@@ -37,7 +37,9 @@ from typing import Any, Final
 from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 
-from app.approvals.models import ApprovalPolicy
+from app.approvals import rules as approval_rules
+from app.approvals.models import Approval, ApprovalPolicy
+from app.approvals.standing import policy_row, roles_held_sync
 from app.approvals.sweep import sweep as sweep_approvals
 from app.audit import service as audit
 from app.auth.models import User
@@ -46,7 +48,6 @@ from app.authz.service import resolve_grants_sync
 from app.core.logging import get_logger
 from app.inventory.models import CloudAccount, Server, Service, ServiceActionPolicy
 from app.operations import alerting, codes, states
-from app.operations.evaluator import ApprovalPolicyView, approval_required
 from app.operations.models import Operation
 from app.operations.store import (
     heartbeat_statement,
@@ -249,7 +250,11 @@ def _finish(
                 op,
                 "SERVICE_OPERATION_DENIED",
                 "DENIED",
-                {"reason": failure_reason, "phase": "worker"},
+                {
+                    "reason": failure_reason,
+                    "phase": "worker",
+                    **({"reason_code": result["reason_code"]} if "reason_code" in result else {}),
+                },
             )
         _audit(
             session,
@@ -335,6 +340,59 @@ def _expire_unclaimed(session: Session, op: _Op) -> str:
 # --- 2/3. re-authorise, validate, pre-flight reads ---------------------------------------------
 
 
+def _approval_unmet(
+    session: Session, op: _Op, resolution: approval_rules.Resolution, target: Target
+) -> str | None:
+    """Why the approval cannot be shown, or ``None`` if it can (``OPEN-99``).
+
+    Reads an ``approvals`` row and the approver's standing *now* -- the approver may have been
+    disabled, or lost the role or the scope, since deciding -- and hands them to the one pure
+    function. A policy that needs more than one approval is refused: this milestone cannot
+    honour it, and one is not "enough".
+    """
+    if resolution.required and resolution.unsupported:
+        return approval_rules.APPROVAL_POLICY_UNSUPPORTED
+    row = session.execute(
+        select(Approval)
+        .where(
+            Approval.operation_type == approval_rules.SERVICE_OPERATION,
+            Approval.operation_id == op.id,
+        )
+        .order_by(Approval.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    evidence = (
+        None
+        if row is None
+        else approval_rules.Evidence(
+            operation_type=row.operation_type,
+            operation_id=row.operation_id,
+            requested_by=row.requested_by,
+            decision=row.decision,
+            approved_by=row.approved_by,
+            decided_at=row.decided_at,
+            expires_at=row.expires_at,
+        )
+    )
+    decider = None
+    if row is not None and row.approved_by is not None:
+        approver = session.get(User, row.approved_by)
+        if approver is not None:
+            decider = approval_rules.Decider(
+                active=approver.status == "ACTIVE",
+                grants=resolve_grants_sync(session, approver.id),
+                roles=roles_held_sync(session, approver.id),
+            )
+    return approval_rules.approval_valid_for_execution(
+        operation_id=op.id,
+        requested_by=op.requested_by,
+        target=target,
+        policy=resolution.terms or approval_rules.DEFAULT_TERMS,
+        evidence=evidence,
+        decider=decider,
+    )
+
+
 def _prepare(engine: Engine, op: _Op, *, resume: bool = False) -> _Ready | _Refusal:
     """Everything that must still be true. Any doubt is a refusal (fail closed).
 
@@ -379,21 +437,23 @@ def _prepare(engine: Engine, op: _Op, *, resume: bool = False) -> _Ready | _Refu
             if service.action_policy_id is None
             else session.get(ServiceActionPolicy, service.action_policy_id)
         )
-        approval_policy = None
-        if policy is not None and policy.approval_policy_id is not None:
-            found = session.get(ApprovalPolicy, policy.approval_policy_id)
-            if found is not None:
-                approval_policy = ApprovalPolicyView(found.applies_to, found.environment)
-        if (
-            approval_required(
-                environment=op.environment,
-                action=op.action,
-                policy_linked=policy is not None and policy.approval_policy_id is not None,
-                policy=approval_policy,
-            ).required
-            and op.approval_status != "APPROVED"
-        ):
-            return _Refusal(codes.APPROVAL_REQUIRED)
+        approval_policy = (
+            session.get(ApprovalPolicy, policy.approval_policy_id)
+            if policy is not None and policy.approval_policy_id is not None
+            else None
+        )
+        resolution = approval_rules.resolve_policy(
+            environment=op.environment,
+            action=op.action,
+            policy_linked=policy is not None and policy.approval_policy_id is not None,
+            policy=policy_row(approval_policy),
+        )
+        # OPEN-99: the flag on the row proves nothing. A row that needs an approval -- or that
+        # claims to carry one -- must show the evidence, read now, from the database.
+        if resolution.required or op.approval_status != "NOT_REQUIRED":
+            unmet = _approval_unmet(session, op, resolution, target)
+            if unmet is not None:
+                return _Refusal(codes.APPROVAL_REQUIRED, unmet)
 
         if account.status != "ACTIVE":
             return _Refusal(codes.ACCOUNT_DISABLED)
@@ -689,7 +749,11 @@ def resume(
             op,
             codes.RESUME_REFUSED,
             steps,
-            detail=prepared.reason.lower(),
+            detail=(
+                prepared.detail
+                if prepared.reason == codes.APPROVAL_REQUIRED and prepared.detail
+                else prepared.reason.lower()
+            ),
             before=op.before,
             refused=True,
         )
