@@ -203,8 +203,18 @@ print('ping -> pong')
 # evidence is its container state and its own startup line.
 beat_state="$(docker inspect --format '{{.State.Status}}' "$("${COMPOSE[@]}" ps -q beat)")"
 [[ "$beat_state" == "running" ]] || fail "beat is not running (state: $beat_state)"
-"${COMPOSE[@]}" logs beat 2>&1 | grep -q 'beat: Starting' \
-  || fail "beat did not log that the scheduler started"
+# Polled, not read once: beat's healthcheck only proves PID 1 is `celery beat`, so the
+# container is "healthy" before the scheduler has logged anything, and importing the
+# application takes tens of seconds (measured: 29 s to the banner, 41 s to this line,
+# on a cold Docker Desktop). Captured, then
+# grepped, for the reason given at the target-file wait below: under `set -o pipefail`
+# `grep -q` closing the pipe early makes `logs` exit non-zero, and a match reads as a
+# failure. The log tail is printed on failure so a crashing beat explains itself.
+deadline=$((SECONDS + 90))
+until beat_log="$("${COMPOSE[@]}" logs beat 2>&1)" && grep -q 'beat: Starting' <<<"$beat_log"; do
+  (( SECONDS < deadline )) || { printf '%s\n' "$beat_log" | tail -n 40; fail "beat did not log that the scheduler started"; }
+  sleep 2
+done
 printf 'beat state=%s, scheduler started\n' "$beat_state"
 
 log "13. Mock IdP login completes end to end (§11.7)"
