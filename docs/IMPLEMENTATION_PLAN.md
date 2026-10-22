@@ -699,6 +699,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M4.6 — Audit API and operations history
 
+**Status: in progress (plan agreed 2026-10-22), on branch `phase-M4.6`; commit 1 (contracts) only.** Plan: [`M4.6_PLAN.md`](M4.6_PLAN.md); decisions `OPEN-106` – `OPEN-117` closed before code at the owner's agreement. **Adjustments to the tasks below:** the export needs somewhere to live and a way to be fetched, so endpoints **24.4** (status) and **24.5** (download once) are added and a table, `audit_exports` (migration `0013`), holds the file; the operations history is scoped on the **stored** environment, which also fixes PROGRESS issue 164 in M4.2's visibility check; an audit event is scoped on its environment alone, so a grant on a server or account reaches no audit row and an event with no environment is Administrator-only; the dashboard's `recent_operations` is flipped (issue 143). "Immutability under the app role" is shown for the triggers on the role the application uses — a least-privilege role is M6.2. Like all of Phase 4 the history shows what stubbed providers and one sandbox run produced.
+
 **Tasks:** endpoints 23.1–23.2 and 24.1–24.3; the export task; frontend operations-history and audit-log pages with filters.
 
 **Acceptance (PRD §4.12 criteria):** every privileged operation traces to its initiating identity; operation history includes result and execution id; **audit records cannot be altered through ordinary APIs**.

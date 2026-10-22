@@ -56,6 +56,7 @@ erDiagram
     users ||--o{ approvals : "decided"
 
     users ||--o{ audit_events : "actor of"
+    users ||--o{ audit_exports : "requested"
     users ||--o{ system_settings : "last changed"
     servers ||--o{ alert_events : "about"
     services ||--o{ alert_events : "about"
@@ -555,6 +556,33 @@ Append-only (AD-11, [SECURITY.md §18](SECURITY.md#18-audit-logging-and-audit-pr
 - **Triggers, because grants alone were measured to be insufficient.** A `BEFORE UPDATE OR DELETE` row trigger and a `BEFORE TRUNCATE` statement trigger both raise `insufficient_privilege`. This was added after direct measurement against PostgreSQL 17.2: with a single database user, the application role is the table *owner* and often a *superuser*, and a superuser bypasses privilege checks entirely — `information_schema` showed `UPDATE`/`DELETE` revoked while both statements still succeeded. Triggers are enforced for every role. A superuser can still drop them, but a superuser can also drop the table, so that is the limit of any in-database mechanism. The remaining hardening — a non-superuser application role separate from the migration owner, plus export to an independently protected store — is M6.2 (`OPEN-15`).
 - Indexes per partition: `(occurred_at DESC)`, `(actor_id, occurred_at DESC)`, `(target_type, target_id, occurred_at DESC)`, `(correlation_id)`, `(action_type, occurred_at DESC)`, `(outcome) WHERE outcome = 'DENIED'`.
 - Written in the **same transaction** as the state change it records ([§12](#12-transaction-boundaries)).
+- **Reading it (M4.6, `OPEN-109`).** The row has one scope dimension, `environment`; `(target_type, target_id)` is polymorphic with no foreign key, so a grant on `cloud_account`, `server` or `application` cannot be evaluated against it and reaches **no** audit row. A row with `environment IS NULL` is visible only to a grant that constrains nothing. Reads page on `(occurred_at, id)` descending within a window of at most 90 days, so the partitions scanned are bounded by the window (checked by `EXPLAIN` in M4.6).
+
+### 8.1 `audit_exports` — *added entity (M4.6)*
+
+Where a bounded export of the audit trail waits to be downloaded once (`OPEN-112`). **It is not part of the audit record and is deliberately mutable:** it holds a file, not an event; the events it was built from are untouched. The audit trail's own rows for an export are `AUDIT_EXPORT_REQUESTED`, `AUDIT_EXPORTED`, `AUDIT_EXPORT_FAILED` and `AUDIT_EXPORT_EXPIRED`.
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | `uuid` | PK | |
+| `requested_by` | `uuid` | NOT NULL, FK → `users(id)` ON DELETE RESTRICT | The only identity that may read its status or download it |
+| `idempotency_key` | `text` | NOT NULL, length 8 – 64 | `UNIQUE (requested_by, idempotency_key)` |
+| `format` | `text` | NOT NULL, CHECK in (`jsonl`) | One format; a CHECK so a second one is a migration |
+| `from_at` / `to_at` | `timestamptz` | NOT NULL, CHECK `from_at < to_at AND to_at - from_at <= interval '31 days'` | The window, on `occurred_at` |
+| `status` | `text` | NOT NULL, CHECK in (`QUEUED`,`RUNNING`,`READY`,`FAILED`,`RETRIEVED`,`EXPIRED`) | |
+| `failure_code` | `text` | NULL, CHECK in (`export_too_large`,`requester_not_authorised`,`internal_error`) | Non-null exactly when `status = 'FAILED'` |
+| `row_count` / `size_bytes` | `integer` / `bigint` | NULL | Set when built; `size_bytes <= 67108864`, `row_count <= 100000` by CHECK |
+| `sha256` | `text` | NULL | Of the stored content, set when built |
+| `content` | `bytea` | NULL | The `jsonl` file. **Present exactly when `status = 'READY'`** (CHECK): spending, expiring or failing an export deletes it |
+| `created_at` | `timestamptz` | NOT NULL DEFAULT `now()` | |
+| `completed_at` | `timestamptz` | NULL | When built or failed |
+| `expires_at` | `timestamptz` | NOT NULL | `created_at` + 24 h of being unretrieved |
+| `retrieved_at` | `timestamptz` | NULL | Non-null exactly when `status = 'RETRIEVED'` |
+
+- **One active export per requester** is a storage guarantee: `UNIQUE (requested_by) WHERE status IN ('QUEUED','RUNNING')`.
+- **Single retrieval** is one guarded statement — `UPDATE … SET status = 'RETRIEVED', retrieved_at = now(), content = NULL WHERE id = :id AND requested_by = :caller AND status = 'READY' AND expires_at > now() RETURNING content` — so two downloads racing have one winner; the file can leave the table once.
+- Why a table: PostgreSQL is the only durable store the API and the worker share. Redis would hold up to 64 MiB in memory per export; a container volume is neither shared nor persistent; an object store is `OPEN-15`, undecided. The caps (100 000 rows, 64 MiB) are design budgets, not measurements. When `OPEN-15` chooses a store this table keeps the metadata and loses `content`.
+- Migration `0013`. Its downgrade **refuses** while any export is `READY` rather than discarding data nobody has downloaded.
 
 ---
 
@@ -655,6 +683,7 @@ Rules: every query against a soft-deletable table filters `deleted_at IS NULL` u
 | `operations` | Indefinite for v1 | — | Revisit by volume; export before any future trimming |
 | `deployments` | Indefinite for v1 | — | PRD §4.10 requires a complete audit record per deployment |
 | `notification_deliveries` | 90 days | Scheduled delete | |
+| `audit_exports` (the file) | 24 h unretrieved; deleted on download | The reaper nulls `content` and sets `EXPIRED` (M4.6) | The metadata row is kept, like `operations` |
 | `services.last_observed_*` | Current value only | Overwritten | History lives in Prometheus, not here (PRD §6) |
 | Prometheus metrics | 30 days (placeholder) | Prometheus retention | OPEN-08 |
 | Loki logs | 14 days (placeholder) | Loki retention | OPEN-08 |
@@ -794,6 +823,8 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 **Created in M1.4** (migration `0003`, applied to the development database on 2026-10-14 with its existing rows preserved): `system_settings` ([§3.6](#36-system_settings--added-entity-m14)), with its `updated_at` trigger and its seeded `read_only_mode = false` row. The same revision added the `admin:users` and `admin:roles` permissions the contracts name per endpoint, which the M1.2 seed had collapsed into `admin:manage`.
 
 **Created in M3.3** (migration `0008`): `alert_events` (partitioned monthly) and `alert_open_keys`. **Created in M3.4** (migration `0009`): `notification_channels` and `notification_deliveries`, with their `updated_at` triggers ([§9.2](#92-notification_channels--added-entity-phase-3), [§9.3](#93-notification_deliveries--added-entity-phase-3)); the schema is at revision `0009`.
+
+**Planned for M4.6** (migration `0013`, **not yet written**): `audit_exports` ([§8.1](#81-audit_exports--added-entity-m46)).
 
 **Not yet created** — each arrives with the milestone that writes to it: `deployment_targets`, `deployments` (M5). `operations` (M4.2, migration `0010`) and `approvals` (M4.5, migration `0012`) now exist.
 
