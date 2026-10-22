@@ -410,6 +410,66 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/audit-events/export': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Request a bounded audit export
+     * @description §24.3. ``202`` with an export id; the file is built on the ``maintenance`` queue.
+     */
+    post: operations['request_export_api_v1_audit_events_export_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/audit-events/exports/{export_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Audit export status
+     * @description §24.4. The requester's own export; anyone else's is ``404``.
+     */
+    get: operations['export_status_api_v1_audit_events_exports__export_id__get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/audit-events/exports/{export_id}/download': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Download the export, once
+     * @description §24.5. The file leaves exactly once; a second call, or anyone else's, is never a file.
+     */
+    get: operations['download_export_api_v1_audit_events_exports__export_id__download_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/audit-events/{event_id}': {
     parameters: {
       query?: never;
@@ -2395,6 +2455,87 @@ export interface components {
        * @enum {string}
        */
       status: 'PENDING' | 'SENT' | 'FAILED' | 'ABANDONED';
+    };
+    /** ExportAccepted */
+    ExportAccepted: {
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /**
+       * Export Id
+       * Format: uuid
+       */
+      export_id: string;
+      /** Idempotent Replay */
+      idempotent_replay: boolean;
+      /** Status */
+      status: string;
+    };
+    /**
+     * ExportRequest
+     * @description §24.3. A window and a format; there is nothing else to ask for.
+     */
+    ExportRequest: {
+      /**
+       * Format
+       * @default jsonl
+       * @constant
+       */
+      format: 'jsonl';
+      /**
+       * From
+       * Format: date-time
+       */
+      from: string;
+      /**
+       * To
+       * Format: date-time
+       */
+      to: string;
+    };
+    /** ExportStatus */
+    ExportStatus: {
+      /** Completed At */
+      completed_at: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /**
+       * Export Id
+       * Format: uuid
+       */
+      export_id: string;
+      /** Failure Code */
+      failure_code: string | null;
+      /**
+       * From
+       * Format: date-time
+       */
+      from: string;
+      /** Retrieved At */
+      retrieved_at: string | null;
+      /** Row Count */
+      row_count: number | null;
+      /** Sha256 */
+      sha256: string | null;
+      /** Size Bytes */
+      size_bytes: number | null;
+      /** Status */
+      status: string;
+      /**
+       * To
+       * Format: date-time
+       */
+      to: string;
     };
     /**
      * FailedServicesSection
@@ -5453,6 +5594,113 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['AuditEventList'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  request_export_api_v1_audit_events_export_post: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Client-generated key, unique per logical intent (§7). */
+        'Idempotency-Key': string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ExportRequest'];
+      };
+    };
+    responses: {
+      /** @description An idempotent replay: the original export, nothing re-run. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ExportAccepted'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  export_status_api_v1_audit_events_exports__export_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Audit export identifier */
+        export_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ExportStatus'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  download_export_api_v1_audit_events_exports__export_id__download_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Audit export identifier */
+        export_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The jsonl file. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/x-ndjson': unknown;
         };
       };
       /** @description Validation Error */

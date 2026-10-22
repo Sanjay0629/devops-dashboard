@@ -213,6 +213,10 @@ def test_history_and_audit_routes_declare_the_permissions_the_contract_names(
         ("GET", "/api/v1/servers/{server_id}/operations"): ("operation", "read"),
         ("GET", "/api/v1/audit-events"): ("audit", "read"),
         ("GET", "/api/v1/audit-events/{event_id}"): ("audit", "read"),
+        # 24.3 – 24.5 also need `admin:integrations`, which the service asks for and audits.
+        ("POST", "/api/v1/audit-events/export"): ("audit", "read"),
+        ("GET", "/api/v1/audit-events/exports/{export_id}"): ("audit", "read"),
+        ("GET", "/api/v1/audit-events/exports/{export_id}/download"): ("audit", "read"),
     }
     declared = {(info.method, info.path): _declared_permission(info) for info in routes_of(app)}
     for key, permission in expected.items():
@@ -220,14 +224,16 @@ def test_history_and_audit_routes_declare_the_permissions_the_contract_names(
 
 
 def test_no_route_under_audit_events_can_write_change_or_delete_an_event(app: FastAPI) -> None:
-    """AD-11, asserted against the live routing table (``OPEN-113``): reading only.
+    """AD-11, asserted against the live routing table (``OPEN-113``): reading, and one export.
 
-    The export request (24.3) is the one ``POST`` the contract allows under this path; it creates
-    an export row, not an event, and arrives with the export. Until then there is none.
+    The export request (24.3) is the one non-``GET`` the contract allows under this path; it creates
+    an export row, not an event. Anything else here -- a ``PATCH``, a ``DELETE``, a second ``POST``
+    -- is a way to write or change the trail, and fails this test.
     """
-    methods = {(info.method, info.path) for info in routes_of(app) if "/audit-events" in info.path}
-    assert methods, "the walk found no audit routes"
-    assert {method for method, _ in methods} == {"GET"}, sorted(methods)
+    routes = {(info.method, info.path) for info in routes_of(app) if "/audit-events" in info.path}
+    assert routes, "the walk found no audit routes"
+    not_reads = {route for route in routes if route[0] != "GET"}
+    assert not_reads == {("POST", "/api/v1/audit-events/export")}, sorted(not_reads)
 
 
 def test_openapi_and_docs_are_local_only(monkeypatch: pytest.MonkeyPatch) -> None:

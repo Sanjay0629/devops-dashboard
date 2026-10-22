@@ -27,6 +27,7 @@ from app.alerts.router import router as alerts_router
 from app.alerts.webhook import router as alert_webhook_router
 from app.approvals.policy_admin import router as approval_policies_router
 from app.approvals.router import router as approvals_router
+from app.audit.export_router import router as audit_export_router
 from app.audit.router import router as audit_router
 from app.auth.router import router as auth_router
 from app.core.config import Settings, get_settings
@@ -132,6 +133,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(operations_history_router, prefix=settings.api_base_path)
     # §24.1 and §24.2 (M4.6): reads of the trail, themselves audited.
     app.include_router(audit_router, prefix=settings.api_base_path)
+    app.include_router(audit_export_router, prefix=settings.api_base_path)
     app.include_router(approvals_router, prefix=settings.api_base_path)
     app.include_router(approval_policies_router, prefix=settings.api_base_path)
     # §20.5 (M3.3). Mounted even with no secret configured: it answers 503
