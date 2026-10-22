@@ -186,6 +186,49 @@ function HealthChanges({
   );
 }
 
+function RecentOperations({
+  section,
+}: {
+  section: DashboardSummary['recent_operations'];
+}): React.JSX.Element {
+  const items = section.items;
+  if (items == null) return <DataStateBanner section={section} />;
+  if (items.length === 0) {
+    // A real list from a real table, so "none" is true: none that this access scope reaches.
+    return (
+      <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
+        No operations within your access scope.
+      </p>
+    );
+  }
+  return (
+    <>
+      <ul className="space-y-1 text-sm">
+        {items.map((operation) => (
+          <li key={operation.operation_id}>
+            <Link to={`/operations/${operation.operation_id}`} className="underline">
+              {operation.action_type} {operation.service_name} on {operation.server_display_name}
+            </Link>{' '}
+            <StatusBadge value={operation.execution_status} />{' '}
+            <time
+              dateTime={operation.created_at}
+              className="text-xs"
+              style={{ color: 'var(--c-text-muted)' }}
+            >
+              {new Date(operation.created_at).toLocaleString()}
+            </time>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1 text-xs">
+        <Link to="/operations" className="underline">
+          All operations
+        </Link>
+      </p>
+    </>
+  );
+}
+
 export function Dashboard(): React.JSX.Element {
   const [environment, setEnvironment] = useState('');
   const [provider, setProvider] = useState('');
@@ -472,21 +515,20 @@ export function Dashboard(): React.JSX.Element {
             Recent activity
           </h2>
           <div className="mb-8 grid gap-3 sm:grid-cols-3">
-            {(
-              [
-                ['Deployments', summary.value.recent_deployments],
-                ['Operations', summary.value.recent_operations],
-              ] as const
-            ).map(([label, section]) => (
-              <div key={label}>
-                <h3 className="mb-1 text-sm" style={{ color: 'var(--c-text-muted)' }}>
-                  {label}
-                </h3>
-                {/* `items` is null, never []. An empty list here would claim
-                    nothing has happened; there is no table to ask. */}
-                <DataStateBanner section={section} />
-              </div>
-            ))}
+            <div>
+              <h3 className="mb-1 text-sm" style={{ color: 'var(--c-text-muted)' }}>
+                Deployments
+              </h3>
+              {/* `items` is null, never []. An empty list here would claim nothing has
+                  happened; there is no table to ask. */}
+              <DataStateBanner section={summary.value.recent_deployments} />
+            </div>
+            <div>
+              <h3 className="mb-1 text-sm" style={{ color: 'var(--c-text-muted)' }}>
+                Operations
+              </h3>
+              <RecentOperations section={summary.value.recent_operations} />
+            </div>
             <div>
               <h3 className="mb-1 text-sm" style={{ color: 'var(--c-text-muted)' }}>
                 Health changes
