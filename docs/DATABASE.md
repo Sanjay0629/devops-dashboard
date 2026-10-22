@@ -556,7 +556,7 @@ Append-only (AD-11, [SECURITY.md §18](SECURITY.md#18-audit-logging-and-audit-pr
 - **Triggers, because grants alone were measured to be insufficient.** A `BEFORE UPDATE OR DELETE` row trigger and a `BEFORE TRUNCATE` statement trigger both raise `insufficient_privilege`. This was added after direct measurement against PostgreSQL 17.2: with a single database user, the application role is the table *owner* and often a *superuser*, and a superuser bypasses privilege checks entirely — `information_schema` showed `UPDATE`/`DELETE` revoked while both statements still succeeded. Triggers are enforced for every role. A superuser can still drop them, but a superuser can also drop the table, so that is the limit of any in-database mechanism. The remaining hardening — a non-superuser application role separate from the migration owner, plus export to an independently protected store — is M6.2 (`OPEN-15`).
 - Indexes per partition: `(occurred_at DESC)`, `(actor_id, occurred_at DESC)`, `(target_type, target_id, occurred_at DESC)`, `(correlation_id)`, `(action_type, occurred_at DESC)`, `(outcome) WHERE outcome = 'DENIED'`.
 - Written in the **same transaction** as the state change it records ([§12](#12-transaction-boundaries)).
-- **Reading it (M4.6, `OPEN-109`).** The row has one scope dimension, `environment`; `(target_type, target_id)` is polymorphic with no foreign key, so a grant on `cloud_account`, `server` or `application` cannot be evaluated against it and reaches **no** audit row. A row with `environment IS NULL` is visible only to a grant that constrains nothing. Reads page on `(occurred_at, id)` descending within a window of at most 90 days, so the partitions scanned are bounded by the window (checked by `EXPLAIN` in M4.6).
+- **Reading it (M4.6, `OPEN-109`).** The row has one scope dimension, `environment`; `(target_type, target_id)` is polymorphic with no foreign key, so a grant on `cloud_account`, `server` or `application` cannot be evaluated against it and reaches **no** audit row. A row with `environment IS NULL` is visible only to a grant that covers every environment (absent, `"*"` or all four named) and names no specific account, server or application. Reads page on `(occurred_at, id)` descending within a window of at most 90 days, so the partitions scanned are bounded by the window (checked by `EXPLAIN` in M4.6).
 
 ### 8.1 `audit_exports` — *added entity (M4.6)*
 
@@ -824,7 +824,7 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 
 **Created in M3.3** (migration `0008`): `alert_events` (partitioned monthly) and `alert_open_keys`. **Created in M3.4** (migration `0009`): `notification_channels` and `notification_deliveries`, with their `updated_at` triggers ([§9.2](#92-notification_channels--added-entity-phase-3), [§9.3](#93-notification_deliveries--added-entity-phase-3)); the schema is at revision `0009`.
 
-**Planned for M4.6** (migration `0013`, **not yet written**): `audit_exports` ([§8.1](#81-audit_exports--added-entity-m46)).
+**Created in M4.6** (migration `0013`): `audit_exports` ([§8.1](#81-audit_exports--added-entity-m46)); the schema is at revision `0013`.
 
 **Not yet created** — each arrives with the milestone that writes to it: `deployment_targets`, `deployments` (M5). `operations` (M4.2, migration `0010`) and `approvals` (M4.5, migration `0012`) now exist.
 

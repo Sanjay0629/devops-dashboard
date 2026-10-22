@@ -107,6 +107,8 @@ class TestModelMetadata:
             "Operation",
             # M4.5: one row per approval request (OPEN-94).
             "Approval",
+            # M4.6: where a bounded audit export waits to be downloaded once (OPEN-112).
+            "AuditExport",
             # M1.4: the durable read-only switch (docs/SECURITY.md §27).
             "SystemSetting",
         }

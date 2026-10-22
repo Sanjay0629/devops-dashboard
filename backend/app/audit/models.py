@@ -24,11 +24,19 @@ import uuid
 from datetime import datetime
 from typing import Any, Final
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, text
-from sqlalchemy.dialects.postgresql import INET, JSONB, TIMESTAMP
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import BYTEA, INET, JSONB, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base
+from app.db.base import Base, UUIDPrimaryKeyMixin
 from app.db.types import enum_check, uuid7
 
 #: PRD §4.12 says "actor **or service identity**", which a single nullable
@@ -119,4 +127,115 @@ class AuditEvent(Base):
             postgresql_where=text("outcome = 'DENIED'"),
         ),
         {"postgresql_partition_by": "RANGE (occurred_at)"},
+    )
+
+
+#: ``audit_exports.status`` (docs/DATABASE.md §8.1, ``OPEN-112``).
+EXPORT_STATUSES: Final[tuple[str, ...]] = (
+    "QUEUED",
+    "RUNNING",
+    "READY",
+    "FAILED",
+    "RETRIEVED",
+    "EXPIRED",
+)
+#: Closed, so a failure says what happened without carrying provider or database text.
+EXPORT_FAILURE_CODES: Final[tuple[str, ...]] = (
+    "export_too_large",
+    "requester_not_authorised",
+    "internal_error",
+)
+#: Design budgets (``OPEN-112``), not measurements. The CHECKs hold them whatever the task does.
+EXPORT_MAX_ROWS: Final = 100_000
+EXPORT_MAX_BYTES: Final = 64 * 1024 * 1024
+EXPORT_MAX_WINDOW_DAYS: Final = 31
+
+
+class AuditExport(Base, UUIDPrimaryKeyMixin):
+    """Where a bounded export of the audit trail waits to be downloaded once (M4.6).
+
+    **Not part of the audit record, and mutable by design:** it holds a file, not an event. Three
+    schema facts carry the security meaning and hold whatever the application does:
+
+    * ``ck_audit_exports_content_ready`` -- the file exists exactly while the export is ``READY``,
+      so spending, expiring or failing an export cannot leave the bytes behind;
+    * ``uq_audit_exports_one_active_per_requester`` -- one running request per requester;
+    * ``ck_audit_exports_window`` -- at most 31 days, whichever code wrote the row.
+
+    Single retrieval is a guarded ``UPDATE ... RETURNING`` (``app/audit/exports.py``); this table
+    cannot make two downloads impossible on its own, but ``content_ready`` makes the second one
+    find nothing.
+    """
+
+    __tablename__ = "audit_exports"
+
+    requested_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    format: Mapped[str] = mapped_column(String(8), nullable=False)
+    from_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    to_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    failure_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    row_count: Mapped[int | None] = mapped_column(nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: The ``jsonl`` file. Present exactly while ``status = 'READY'``.
+    content: Mapped[bytes | None] = mapped_column(BYTEA, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    #: ``created_at`` + 24 hours; the application sets it (a default cannot read ``created_at``).
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    retrieved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (
+        enum_check("format", ("jsonl",), "format"),
+        enum_check("status", EXPORT_STATUSES, "status"),
+        CheckConstraint(
+            "failure_code IS NULL OR failure_code IN ("
+            + ", ".join(f"'{code}'" for code in EXPORT_FAILURE_CODES)
+            + ")",
+            name="failure_code",
+        ),
+        CheckConstraint("(status = 'FAILED') = (failure_code IS NOT NULL)", name="failed_has_code"),
+        CheckConstraint(
+            f"from_at < to_at AND to_at - from_at <= interval '{EXPORT_MAX_WINDOW_DAYS} days'",
+            name="window",
+        ),
+        CheckConstraint("char_length(idempotency_key) BETWEEN 8 AND 64", name="idempotency_key"),
+        CheckConstraint(
+            f"row_count IS NULL OR row_count BETWEEN 0 AND {EXPORT_MAX_ROWS}", name="row_count"
+        ),
+        CheckConstraint(
+            f"size_bytes IS NULL OR size_bytes BETWEEN 0 AND {EXPORT_MAX_BYTES}",
+            name="size_bytes",
+        ),
+        CheckConstraint("(status = 'READY') = (content IS NOT NULL)", name="content_ready"),
+        CheckConstraint(
+            "status <> 'READY' OR (sha256 IS NOT NULL AND row_count IS NOT NULL "
+            "AND size_bytes IS NOT NULL)",
+            name="ready_is_described",
+        ),
+        CheckConstraint(
+            "(status = 'RETRIEVED') = (retrieved_at IS NOT NULL)", name="retrieved_consistent"
+        ),
+        CheckConstraint(
+            "status NOT IN ('READY', 'FAILED', 'RETRIEVED') OR completed_at IS NOT NULL",
+            name="finished_completed",
+        ),
+        UniqueConstraint("requested_by", "idempotency_key", name="uq_audit_exports_idempotency"),
+        Index(
+            "uq_audit_exports_one_active_per_requester",
+            "requested_by",
+            unique=True,
+            postgresql_where=text("status IN ('QUEUED', 'RUNNING')"),
+        ),
+        Index(
+            "ix_audit_exports_expiry",
+            "expires_at",
+            postgresql_where=text("status = 'READY'"),
+        ),
     )

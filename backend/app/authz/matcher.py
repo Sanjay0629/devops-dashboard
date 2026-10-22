@@ -73,6 +73,11 @@ SCOPE_DIMENSIONS: Final[tuple[str, ...]] = (
 
 WILDCARD: Final = "*"
 PRODUCTION: Final = "production"
+#: Every value an environment can take. A guard test pins it to ``approvals.models.ENVIRONMENTS``
+#: (this module imports nothing from the application, so it keeps its own copy).
+ALL_ENVIRONMENTS: Final[frozenset[str]] = frozenset(
+    {"development", "staging", "production", "other"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,3 +235,64 @@ def _in_scope(scope: dict[str, frozenset[str]], target: Target) -> Decision:
             continue
         return Decision(allowed=False, reason=f"{dimension}_out_of_scope")
     return _ALLOWED
+
+
+def covers_every_environment(scope: dict[str, frozenset[str]]) -> bool:
+    """``True`` when the scope puts no limit on the environment.
+
+    No ``environment`` dimension, ``["*"]``, or every environment named. The last is the shape the
+    bootstrap CLI grants (rule 4 makes production reachable only by naming it, so the full-scope
+    administrator names all four rather than ``"*"``).
+    """
+    environments = scope.get("environment", frozenset())
+    return not environments or WILDCARD in environments or environments >= ALL_ENVIRONMENTS
+
+
+def _in_scope_without_environment(scope: dict[str, frozenset[str]]) -> Decision:
+    """Conjunction over the dimensions, for a target that has **no environment at all**."""
+    if not covers_every_environment(scope):
+        return Decision(allowed=False, reason="environment_not_covered")
+    for dimension, allowed in scope.items():
+        if dimension == "environment" or WILDCARD in allowed:
+            continue
+        return Decision(allowed=False, reason=f"target_has_no_{dimension}")
+    return _ALLOWED
+
+
+def permits_environmentless(grants: Sequence[Grant], resource_type: str, action: str) -> Decision:
+    """Decide whether these grants permit reading a thing that carries **no environment**.
+
+    Audit events with no environment -- a login, a role grant, a user change, a system event --
+    are the case (``OPEN-109``). :func:`permits` would treat ``environment=None`` as a dimension
+    the target lacks and refuse any grant that names environments, which would hide those events
+    from the full-scope administrator, whose grant names all four. Here an environment-less target
+    is reached by a grant that **covers every environment** and names no specific account, server
+    or application. A production-only grant does not reach it. Same order as :func:`permits`: a
+    deny wins, an unreadable scope fails closed.
+    """
+    relevant = [
+        grant for grant in grants if grant.resource_type == resource_type and grant.action == action
+    ]
+    if not relevant:
+        return Decision(allowed=False, reason="no_matching_grant")
+    for grant in relevant:
+        if grant.effect == "DENY":
+            scope = normalise_scope(grant.scope)
+            if not scope or _in_scope_without_environment(scope).allowed:
+                return Decision(allowed=False, reason="explicit_deny")
+    reason = "no_matching_grant"
+    for grant in relevant:
+        if grant.effect != "ALLOW":
+            return Decision(allowed=False, reason="unknown_effect")
+        scope = normalise_scope(grant.scope)
+        if scope is None:
+            reason = "malformed_scope"
+            continue
+        if not scope:
+            reason = "empty_scope"
+            continue
+        verdict = _in_scope_without_environment(scope)
+        if verdict.allowed:
+            return _ALLOWED
+        reason = verdict.reason
+    return Decision(allowed=False, reason=reason)

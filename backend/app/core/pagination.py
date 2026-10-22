@@ -40,9 +40,13 @@ import base64
 import hashlib
 import hmac
 import json
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
+
+from sqlalchemy import ColumnElement, and_, or_, tuple_
+from sqlalchemy.orm import QueryableAttribute
 
 from app.core.config import get_settings
 from app.core.errors import FieldValidationError
@@ -149,3 +153,63 @@ def decode_cursor(value: str, *, sort: str, order: str) -> Cursor:
     if parsed.sort != sort or parsed.order != order:
         raise InvalidCursorError
     return parsed
+
+
+#: A cursor key for a row whose sort column is ``NULL``. No timestamp renders as this, so it cannot
+#: be mistaken for a value.
+NULL_KEY: Final[str] = "null"
+
+
+def cursor_key(value: datetime | None) -> str | datetime:
+    """The cursor key for a sort value; ``None`` is :data:`NULL_KEY`."""
+    return NULL_KEY if value is None else value
+
+
+def keyset_order(
+    column: QueryableAttribute[Any],
+    id_column: QueryableAttribute[Any],
+    *,
+    order: str,
+    nullable: bool = False,
+) -> list[ColumnElement[Any]]:
+    """``ORDER BY`` for a keyset page: the sort column, then the id as tiebreaker.
+
+    A nullable column puts its ``NULL`` rows **last in both directions**, so an unfinished
+    operation is never the first thing an ascending page shows and a cursor has one rule to follow.
+    """
+    ascending = order == "asc"
+    primary = column.asc() if ascending else column.desc()
+    if nullable:
+        primary = primary.nulls_last()
+    return [primary, id_column.asc() if ascending else id_column.desc()]
+
+
+def keyset_after(
+    column: QueryableAttribute[Any],
+    id_column: QueryableAttribute[Any],
+    cursor: Cursor,
+    *,
+    order: str,
+    nullable: bool = False,
+) -> ColumnElement[bool]:
+    """The rows strictly after ``cursor`` in :func:`keyset_order`.
+
+    The pair ``(column, id)`` is compared as a row value, so rows sharing a sort value are neither
+    repeated nor skipped at a page boundary. With ``nullable``, a non-``NULL`` position is followed
+    by every later non-``NULL`` row **and then all the ``NULL`` rows**; a ``NULL`` position is
+    followed only by ``NULL`` rows with a later id.
+    """
+    ascending = order == "asc"
+    try:
+        last_id = uuid.UUID(cursor.id)
+        last_value = (
+            None if nullable and cursor.key == NULL_KEY else datetime.fromisoformat(cursor.key)
+        )
+    except ValueError as error:
+        # Signed by this server, so only a bug or a cursor minted for another column gets here.
+        raise InvalidCursorError from error
+    if last_value is None:
+        return and_(column.is_(None), id_column > last_id if ascending else id_column < last_id)
+    pair = tuple_(column, id_column)
+    after = pair > tuple_(last_value, last_id) if ascending else pair < tuple_(last_value, last_id)
+    return or_(after, column.is_(None)) if nullable else after
