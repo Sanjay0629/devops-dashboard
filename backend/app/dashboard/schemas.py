@@ -22,7 +22,7 @@ the rest are counts of a stored column, and one envelope cannot carry one
 ``data_state`` for both. They are a sibling section, :class:`ServerHealthRollup`,
 with the same field names. Recorded in docs/API_CONTRACTS.md §13.1.
 
-For the same reason ``recent_deployments``, ``recent_operations`` and
+For the same reason ``recent_deployments`` (and, until M4.6, ``recent_operations``) and
 ``recent_health_changes`` are **sections carrying a null list**, not the bare
 ``[]`` the example shows. There is no deployments table, no operations table
 and no health-event table; an empty array would say "nothing happened
@@ -41,6 +41,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.inventory.schemas import CursorPage, DataSection
 from app.monitoring.health import HealthState
+from app.operations.schemas import ActorView
 
 #: Which milestone each absent source is waiting for. Named here rather than
 #: written at each call site so the dashboard cannot tell an operator two
@@ -51,7 +52,6 @@ UTILISATION_REASON = (
 #: A caller with no ``alert:read`` is told so, not shown a zero.
 ALERTS_NOT_PERMITTED = "alert_read_not_permitted"
 DEPLOYMENTS_REASON = "Deployments are not implemented yet (M5.1)."
-OPERATIONS_REASON = "Recent operations are not listed here yet (the operations history is M4.6)."
 
 
 class ServerCounts(DataSection):
@@ -147,6 +147,34 @@ class RecentActivitySection(DataSection):
     items: list[dict[str, object]] | None = None
 
 
+class RecentOperation(BaseModel):
+    """One operation on the dashboard (§13.1). The detail, the reason and the result are §17.2's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: uuid.UUID
+    action_type: str
+    server_id: uuid.UUID
+    server_display_name: str
+    service_name: str
+    #: The environment stored on the operation when it was requested.
+    environment: str
+    execution_status: str
+    requested_by: ActorView
+    created_at: datetime
+
+
+class RecentOperationsSection(DataSection):
+    """The caller's most recent operations (M4.6, ``OPEN-116``): a real list, so ``[]`` is true.
+
+    ``[]`` means "nothing happened that you may see" and is distinct from ``not_configured`` with
+    ``null``. The rows are the ones ``operation:read`` reaches -- **not** "and the caller's own",
+    because this section rides a cache keyed by scope and not by person.
+    """
+
+    items: list[RecentOperation] | None = None
+
+
 class HealthChange(BaseModel):
     """One status move made by the sweep (``SERVER_STATUS_CHANGED``)."""
 
@@ -196,7 +224,7 @@ class DashboardSummary(BaseModel):
     failed_services: FailedServicesSection
     active_alerts: ActiveAlertsSection
     recent_deployments: RecentActivitySection
-    recent_operations: RecentActivitySection
+    recent_operations: RecentOperationsSection
     recent_health_changes: RecentHealthChangesSection
     filters_applied: DashboardFilters
     demo_mode: bool

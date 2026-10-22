@@ -42,8 +42,9 @@ from sqlalchemy.sql.elements import UnaryExpression
 from app.alerts import counts as alert_counts
 from app.alerts import queries as alert_queries
 from app.audit.models import AuditEvent
+from app.auth.models import User
 from app.authz.matcher import Grant, normalise_scope
-from app.authz.queries import readable_servers
+from app.authz.queries import readable_operations, readable_servers
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.pagination import Cursor, encode_cursor
@@ -51,7 +52,6 @@ from app.core.redis import get_redis
 from app.dashboard.schemas import (
     ALERTS_NOT_PERMITTED,
     DEPLOYMENTS_REASON,
-    OPERATIONS_REASON,
     UTILISATION_REASON,
     ActiveAlertsSection,
     DashboardFilters,
@@ -61,6 +61,8 @@ from app.dashboard.schemas import (
     HealthChange,
     RecentActivitySection,
     RecentHealthChangesSection,
+    RecentOperation,
+    RecentOperationsSection,
     ServerCounts,
     ServerHealthRollup,
     ServerHealthRow,
@@ -71,6 +73,8 @@ from app.inventory.queries import SERVER_SORTS, server_filter_conditions
 from app.inventory.schemas import CursorPage
 from app.monitoring.health import HealthState
 from app.monitoring.read import Reference, current_reference, evaluate, health_state_expr
+from app.operations.models import Operation
+from app.operations.schemas import ActorView
 from app.services.listing import displayed_state
 
 logger = get_logger(__name__)
@@ -127,12 +131,15 @@ class DashboardFilterSet:
         ]
 
 
+_SCOPE_GRANTS = frozenset({("server", "read"), ("operation", "read")})
+
+
 def _scope_fingerprint(grants: Sequence[Grant]) -> str:
     """A stable digest of the grants that decide which servers are readable.
 
-    Only ``server:read`` grants are digested, because those are exactly what
-    ``readable_servers`` consumes — including the ``DENY`` rows, which change
-    the readable set as much as an allow does.
+    Only ``server:read`` and ``operation:read`` grants are digested, because those are
+    exactly what ``readable_servers`` and ``readable_operations`` consume — including the
+    ``DENY`` rows, which change the readable set as much as an allow does.
 
     Normalised through ``normalise_scope`` and sorted, so two callers whose
     grants differ only in ordering share an entry, while a difference that
@@ -142,6 +149,7 @@ def _scope_fingerprint(grants: Sequence[Grant]) -> str:
     """
     relevant = sorted(
         [
+            grant.resource_type,
             grant.effect,
             sorted(
                 [dimension, sorted(values)]
@@ -149,7 +157,9 @@ def _scope_fingerprint(grants: Sequence[Grant]) -> str:
             ),
         ]
         for grant in grants
-        if grant.resource_type == "server" and grant.action == "read"
+        # ``operation:read`` is digested too (M4.6): ``recent_operations`` is scoped by it, and
+        # two callers who read the same servers but different operations must not share an entry.
+        if (grant.resource_type, grant.action) in _SCOPE_GRANTS
     )
     payload = json.dumps(relevant, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode()).hexdigest()[:32]
@@ -340,6 +350,56 @@ async def _recent_health_changes(
     )
 
 
+#: How many operations the dashboard lists.
+_RECENT_OPERATIONS_LIMIT = 10
+
+
+async def _recent_operations(
+    db: AsyncSession, grants: Sequence[Grant], filters: DashboardFilterSet, collected_at: datetime
+) -> RecentOperationsSection:
+    """The latest operations ``operation:read`` reaches (``OPEN-116``), newest first.
+
+    Scope is the stored environment (``readable_operations``) and the dashboard's filters apply to
+    the target server, as they do for every other section. Not "and the caller's own": the
+    dashboard cache is keyed by scope, and a row visible to one person only would leak through it.
+    """
+    rows: Sequence[Any] = (
+        await db.execute(
+            select(
+                Operation,
+                Server.display_name,
+                Service.service_name,
+                User.display_name,
+            )
+            .join(Server, Server.id == Operation.target_server_id)
+            .join(Service, Service.id == Operation.target_service_id, isouter=True)
+            .join(User, User.id == Operation.requested_by)
+            .where(readable_operations(grants, "operation", "read"), *filters.conditions())
+            .order_by(Operation.created_at.desc(), Operation.id.desc())
+            .limit(_RECENT_OPERATIONS_LIMIT)
+        )
+    ).all()
+    return RecentOperationsSection(
+        items=[
+            RecentOperation(
+                operation_id=operation.id,
+                action_type=operation.action_type,
+                server_id=operation.target_server_id,
+                server_display_name=server_name,
+                service_name=unit or "",
+                environment=operation.environment,
+                execution_status=operation.execution_status,
+                requested_by=ActorView(id=operation.requested_by, display_name=requester),
+                created_at=operation.created_at,
+            )
+            for operation, server_name, unit, requester in rows
+        ],
+        data_state="ok",
+        collected_at=collected_at,
+        source="postgresql",
+    )
+
+
 async def _alerts_section(
     db: AsyncSession, grants: Sequence[Grant], filters: DashboardFilterSet
 ) -> ActiveAlertsSection:
@@ -407,9 +467,7 @@ async def summary(
         recent_deployments=RecentActivitySection(
             data_state="not_configured", unavailable_reason=DEPLOYMENTS_REASON
         ),
-        recent_operations=RecentActivitySection(
-            data_state="not_configured", unavailable_reason=OPERATIONS_REASON
-        ),
+        recent_operations=await _recent_operations(db, grants, filters, collected_at),
         recent_health_changes=changes,
         filters_applied=filters.echoed(),
         demo_mode=settings.demo_mode,
