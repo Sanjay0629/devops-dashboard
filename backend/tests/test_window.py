@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.core.errors import FieldValidationError
-from app.core.window import resolve_window
+from app.core.window import CLOCK_SLACK, resolve_window
 
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
 AUDIT = {"explicit_beyond": timedelta(days=7)}
@@ -25,8 +25,10 @@ def _code(error: pytest.ExceptionInfo[FieldValidationError]) -> str:
 
 def test_nothing_given_is_the_last_seven_days_ending_now() -> None:
     window = resolve_window(None, None, now=NOW)
-    assert window.end == NOW
     assert window.start == NOW - timedelta(days=7)
+    # An omitted `to` reaches a little past now, so a database clock slightly ahead of this
+    # process cannot hide the newest events (CLOCK_SLACK).
+    assert window.end == NOW + CLOCK_SLACK
 
 
 def test_only_to_given_looks_seven_days_back_from_it() -> None:
@@ -37,7 +39,7 @@ def test_only_to_given_looks_seven_days_back_from_it() -> None:
 
 def test_only_from_given_runs_to_now() -> None:
     start = NOW - timedelta(days=2)
-    assert resolve_window(start, None, now=NOW).end == NOW
+    assert resolve_window(start, None, now=NOW).end == NOW + CLOCK_SLACK
 
 
 def test_ninety_days_is_allowed_and_ninety_and_a_second_is_refused_not_clamped() -> None:
@@ -51,6 +53,16 @@ def test_from_after_to_is_refused() -> None:
     with pytest.raises(FieldValidationError) as error:
         resolve_window(NOW, NOW - timedelta(hours=1), now=NOW)
     assert _code(error) == "from_after_to"
+
+
+def test_a_stated_to_is_taken_exactly_with_no_slack() -> None:
+    end = NOW - timedelta(hours=1)
+    assert resolve_window(None, end, now=NOW).end == end
+
+
+def test_the_slack_does_not_count_towards_the_ranges_limits() -> None:
+    # Exactly seven days back from an omitted `to` is still the audit default, needing nothing more.
+    assert resolve_window(NOW - timedelta(days=7), None, now=NOW, **AUDIT).end == NOW + CLOCK_SLACK
 
 
 def test_an_empty_window_is_allowed() -> None:

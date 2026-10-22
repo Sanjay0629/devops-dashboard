@@ -420,7 +420,14 @@ async def ctx(
         if outcome is not None:
             await outcome
     with rig.engine.begin() as connection:
+        # Rows other suites count must not outlive this one: exports, channels, associations.
         connection.execute(text("DELETE FROM audit_exports"))
+        connection.execute(text("DELETE FROM notification_deliveries"))
+        connection.execute(text("DELETE FROM notification_channels"))
+        connection.execute(
+            text("DELETE FROM application_servers WHERE server_id = ANY(:ids)"),
+            {"ids": [uuid.UUID(rig.staging), uuid.UUID(rig.production)]},
+        )
     revoke_all(rig.engine, second.id)
     await second.client.aclose()
 
