@@ -390,6 +390,106 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/audit-events': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Query the audit trail
+     * @description §24.1. Scope-filtered in SQL; reading the trail is itself audited (``AUDIT_QUERIED``).
+     */
+    get: operations['list_audit_events_api_v1_audit_events_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/audit-events/export': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Request a bounded audit export
+     * @description §24.3. ``202`` with an export id; the file is built on the ``maintenance`` queue.
+     */
+    post: operations['request_export_api_v1_audit_events_export_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/audit-events/exports/{export_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Audit export status
+     * @description §24.4. The requester's own export; anyone else's is ``404``.
+     */
+    get: operations['export_status_api_v1_audit_events_exports__export_id__get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/audit-events/exports/{export_id}/download': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Download the export, once
+     * @description §24.5. The file leaves exactly once; a second call, or anyone else's, is never a file.
+     */
+    get: operations['download_export_api_v1_audit_events_exports__export_id__download_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/audit-events/{event_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * One audit event
+     * @description §24.2. Unknown, or outside the caller's scope ⇒ ``404``; a read is audited.
+     */
+    get: operations['read_audit_event_api_v1_audit_events__event_id__get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/auth/callback': {
     parameters: {
       query?: never;
@@ -756,6 +856,26 @@ export interface paths {
     patch: operations['update_channel_api_v1_notification_channels__channel_id__patch'];
     trace?: never;
   };
+  '/api/v1/operations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Operation history
+     * @description §23.1. Your own requests, plus those you may read; filters never widen that.
+     */
+    get: operations['list_operations_api_v1_operations_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/operations/{operation_id}': {
     parameters: {
       query?: never;
@@ -991,6 +1111,26 @@ export interface paths {
      * @description §15.2. Gaps are ``null`` points at their own timestamp.
      */
     get: operations['range_metrics_api_v1_servers__server_id__metrics_range_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/servers/{server_id}/operations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Per-server history
+     * @description §23.2. The server must be one the caller may read (``server:read``), else ``404``.
+     */
+    get: operations['list_server_operations_api_v1_servers__server_id__operations_get'];
     put?: never;
     post?: never;
     delete?: never;
@@ -1837,6 +1977,56 @@ export interface components {
       /** Status */
       status: string;
     };
+    /** AuditEventList */
+    AuditEventList: {
+      /** Items */
+      items: components['schemas']['AuditEventView'][];
+      page: components['schemas']['CursorPage'];
+    };
+    /** AuditEventView */
+    AuditEventView: {
+      /** Action Type */
+      action_type: string;
+      /** Actor Id */
+      actor_id: string | null;
+      /** Actor Label */
+      actor_label: string;
+      /** Actor Type */
+      actor_type: string;
+      /** Approval Id */
+      approval_id: string | null;
+      /**
+       * Correlation Id
+       * Format: uuid
+       */
+      correlation_id: string;
+      /** Environment */
+      environment: string | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+      /** Outcome */
+      outcome: string;
+      /** Sanitized Metadata */
+      sanitized_metadata: {
+        [key: string]: unknown;
+      };
+      /** Source Ip */
+      source_ip: string | null;
+      /** Target Id */
+      target_id: string | null;
+      /** Target Type */
+      target_type: string | null;
+      /** User Agent */
+      user_agent: string | null;
+    };
     /** CapabilitiesOut */
     CapabilitiesOut: {
       actions: components['schemas']['ActionSupport'];
@@ -2153,7 +2343,7 @@ export interface components {
       filters_applied: components['schemas']['DashboardFilters'];
       recent_deployments: components['schemas']['RecentActivitySection'];
       recent_health_changes: components['schemas']['RecentHealthChangesSection'];
-      recent_operations: components['schemas']['RecentActivitySection'];
+      recent_operations: components['schemas']['RecentOperationsSection'];
       server_health: components['schemas']['ServerHealthRollup'];
       servers: components['schemas']['ServerCounts'];
       utilisation: components['schemas']['UtilisationSection'];
@@ -2265,6 +2455,87 @@ export interface components {
        * @enum {string}
        */
       status: 'PENDING' | 'SENT' | 'FAILED' | 'ABANDONED';
+    };
+    /** ExportAccepted */
+    ExportAccepted: {
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /**
+       * Export Id
+       * Format: uuid
+       */
+      export_id: string;
+      /** Idempotent Replay */
+      idempotent_replay: boolean;
+      /** Status */
+      status: string;
+    };
+    /**
+     * ExportRequest
+     * @description §24.3. A window and a format; there is nothing else to ask for.
+     */
+    ExportRequest: {
+      /**
+       * Format
+       * @default jsonl
+       * @constant
+       */
+      format: 'jsonl';
+      /**
+       * From
+       * Format: date-time
+       */
+      from: string;
+      /**
+       * To
+       * Format: date-time
+       */
+      to: string;
+    };
+    /** ExportStatus */
+    ExportStatus: {
+      /** Completed At */
+      completed_at: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /**
+       * Export Id
+       * Format: uuid
+       */
+      export_id: string;
+      /** Failure Code */
+      failure_code: string | null;
+      /**
+       * From
+       * Format: date-time
+       */
+      from: string;
+      /** Retrieved At */
+      retrieved_at: string | null;
+      /** Row Count */
+      row_count: number | null;
+      /** Sha256 */
+      sha256: string | null;
+      /** Size Bytes */
+      size_bytes: number | null;
+      /** Status */
+      status: string;
+      /**
+       * To
+       * Format: date-time
+       */
+      to: string;
     };
     /**
      * FailedServicesSection
@@ -2398,6 +2669,25 @@ export interface components {
       /** Unavailable Reason */
       unavailable_reason?: string | null;
     };
+    /**
+     * HistoryApproval
+     * @description The approval reference on a history row (§23): who decided, and when.
+     */
+    HistoryApproval: {
+      /**
+       * Approval Id
+       * Format: uuid
+       */
+      approval_id: string;
+      approved_by?: components['schemas']['ActorView'] | null;
+      /** Decided At */
+      decided_at?: string | null;
+      /**
+       * Decision
+       * @enum {string}
+       */
+      decision: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+    };
     /** HistoryEntry */
     HistoryEntry: {
       /** Actor */
@@ -2416,6 +2706,78 @@ export interface components {
       note?: string | null;
       /** Subject */
       subject?: string | null;
+    };
+    /**
+     * HistoryItem
+     * @description One row of §23's list.
+     *
+     *     Carries the result and the execution id (PRD §4.12) -- ``external_execution_id`` and the two
+     *     observed states are closed values or an opaque provider id. ``requested_reason``,
+     *     ``sanitized_result`` and ``parent_operation_id`` are §17.2's, not the list's.
+     */
+    HistoryItem: {
+      /** Action Type */
+      action_type: string;
+      approval?: components['schemas']['HistoryApproval'] | null;
+      /**
+       * Approval Status
+       * @enum {string}
+       */
+      approval_status: 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+      /** Completed At */
+      completed_at: string | null;
+      /**
+       * Correlation Id
+       * Format: uuid
+       */
+      correlation_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Deadline At
+       * Format: date-time
+       */
+      deadline_at: string;
+      /**
+       * Execution Status
+       * @enum {string}
+       */
+      execution_status:
+        | 'PENDING'
+        | 'AWAITING_APPROVAL'
+        | 'APPROVED'
+        | 'RUNNING'
+        | 'SUCCEEDED'
+        | 'FAILED'
+        | 'TIMED_OUT'
+        | 'CANCELLED'
+        | 'REJECTED';
+      /** External Execution Id */
+      external_execution_id: string | null;
+      /** Failure Reason */
+      failure_reason: string | null;
+      /** Observed State After */
+      observed_state_after: string | null;
+      /** Observed State Before */
+      observed_state_before: string | null;
+      /**
+       * Operation Id
+       * Format: uuid
+       */
+      operation_id: string;
+      requested_by: components['schemas']['ActorView'];
+      /** Started At */
+      started_at: string | null;
+      target: components['schemas']['TargetView'];
+    };
+    /** HistoryList */
+    HistoryList: {
+      /** Items */
+      items: components['schemas']['HistoryItem'][];
+      page: components['schemas']['CursorPage'];
     };
     /**
      * IntegrationStatus
@@ -3249,6 +3611,63 @@ export interface components {
       data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
       /** Items */
       items?: components['schemas']['HealthChange'][] | null;
+      /** Source */
+      source?: string | null;
+      /** Stale After Seconds */
+      stale_after_seconds?: number | null;
+      /** Unavailable Reason */
+      unavailable_reason?: string | null;
+    };
+    /**
+     * RecentOperation
+     * @description One operation on the dashboard (§13.1). The detail, the reason and the result are §17.2's.
+     */
+    RecentOperation: {
+      /** Action Type */
+      action_type: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Environment */
+      environment: string;
+      /** Execution Status */
+      execution_status: string;
+      /**
+       * Operation Id
+       * Format: uuid
+       */
+      operation_id: string;
+      requested_by: components['schemas']['ActorView'];
+      /** Server Display Name */
+      server_display_name: string;
+      /**
+       * Server Id
+       * Format: uuid
+       */
+      server_id: string;
+      /** Service Name */
+      service_name: string;
+    };
+    /**
+     * RecentOperationsSection
+     * @description The caller's most recent operations (M4.6, ``OPEN-116``): a real list, so ``[]`` is true.
+     *
+     *     ``[]`` means "nothing happened that you may see" and is distinct from ``not_configured`` with
+     *     ``null``. The rows are the ones ``operation:read`` reaches -- **not** "and the caller's own",
+     *     because this section rides a cache keyed by scope and not by person.
+     */
+    RecentOperationsSection: {
+      /** Collected At */
+      collected_at?: string | null;
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
+      /** Items */
+      items?: components['schemas']['RecentOperation'][] | null;
       /** Source */
       source?: string | null;
       /** Stale After Seconds */
@@ -5145,6 +5564,188 @@ export interface operations {
       };
     };
   };
+  list_audit_events_api_v1_audit_events_get: {
+    parameters: {
+      query?: {
+        actor_id?: string | null;
+        actor_type?: ('USER' | 'SYSTEM' | 'INTEGRATION') | null;
+        action_type?: string | null;
+        target_type?: string | null;
+        target_id?: string | null;
+        environment?: ('development' | 'staging' | 'production' | 'other') | null;
+        outcome?: ('SUCCESS' | 'FAILURE' | 'DENIED') | null;
+        correlation_id?: string | null;
+        from?: string | null;
+        to?: string | null;
+        order?: 'asc' | 'desc';
+        limit?: number;
+        cursor?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AuditEventList'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  request_export_api_v1_audit_events_export_post: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Client-generated key, unique per logical intent (§7). */
+        'Idempotency-Key': string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ExportRequest'];
+      };
+    };
+    responses: {
+      /** @description An idempotent replay: the original export, nothing re-run. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ExportAccepted'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  export_status_api_v1_audit_events_exports__export_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Audit export identifier */
+        export_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ExportStatus'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  download_export_api_v1_audit_events_exports__export_id__download_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Audit export identifier */
+        export_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The jsonl file. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/x-ndjson': unknown;
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  read_audit_event_api_v1_audit_events__event_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Audit event identifier */
+        event_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AuditEventView'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   callback_api_v1_auth_callback_get: {
     parameters: {
       query?: {
@@ -5733,6 +6334,60 @@ export interface operations {
       };
     };
   };
+  list_operations_api_v1_operations_get: {
+    parameters: {
+      query?: {
+        execution_status?:
+          | (
+              | 'PENDING'
+              | 'AWAITING_APPROVAL'
+              | 'APPROVED'
+              | 'RUNNING'
+              | 'SUCCEEDED'
+              | 'FAILED'
+              | 'TIMED_OUT'
+              | 'CANCELLED'
+              | 'REJECTED'
+            )[]
+          | null;
+        action_type?: ('start' | 'stop' | 'restart' | 'status' | 'logs_tail')[] | null;
+        environment?: ('development' | 'staging' | 'production' | 'other')[] | null;
+        server_id?: string | null;
+        service_id?: string | null;
+        requested_by?: string | null;
+        from?: string | null;
+        to?: string | null;
+        sort?: 'created_at' | 'completed_at';
+        order?: 'asc' | 'desc';
+        limit?: number;
+        cursor?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HistoryList'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
   read_operation_api_v1_operations__operation_id__get: {
     parameters: {
       query?: never;
@@ -6204,6 +6859,62 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['RangeMetrics'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_server_operations_api_v1_servers__server_id__operations_get: {
+    parameters: {
+      query?: {
+        execution_status?:
+          | (
+              | 'PENDING'
+              | 'AWAITING_APPROVAL'
+              | 'APPROVED'
+              | 'RUNNING'
+              | 'SUCCEEDED'
+              | 'FAILED'
+              | 'TIMED_OUT'
+              | 'CANCELLED'
+              | 'REJECTED'
+            )[]
+          | null;
+        action_type?: ('start' | 'stop' | 'restart' | 'status' | 'logs_tail')[] | null;
+        environment?: ('development' | 'staging' | 'production' | 'other')[] | null;
+        service_id?: string | null;
+        requested_by?: string | null;
+        from?: string | null;
+        to?: string | null;
+        sort?: 'created_at' | 'completed_at';
+        order?: 'asc' | 'desc';
+        limit?: number;
+        cursor?: string | null;
+      };
+      header?: never;
+      path: {
+        /** @description Server identifier */
+        server_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HistoryList'];
         };
       };
       /** @description Validation Error */

@@ -557,14 +557,41 @@ async def test_a_stored_environment_not_the_servers_current_label_decides_scope(
         revoke_all(rig.engine, approver.id)
         grant(rig.engine, approver.id, "APPROVER", STAGING_SCOPE)
         response = await decide(approver, body["operation_id"])
-        # The row says production, so a staging approver has no standing over it. (They can still
-        # *see* it -- M4.2's visibility check reads the server's current label, PROGRESS issue --
-        # but seeing is not deciding: the scope check uses the stored environment.)
-        assert response.status_code == 403, response.text
-        [event] = rig.audit("SERVICE_OPERATION_DENIED", target_id=body["operation_id"])
-        assert event["sanitized_metadata"]["reason"] == "out_of_scope"
+        # The row says production, so a staging approver has no standing over it -- to decide it
+        # or, since M4.6 fixed PROGRESS issue 164, to see it.
+        # 404, never 403 (§2): out of scope for the stored environment means not visible at all.
+        assert response.status_code == 404, response.text
+        assert rig.audit("SERVICE_OPERATION_DENIED", target_id=body["operation_id"]) == []
         listed = await call(approver.client, "GET", "/api/v1/approvals")
         assert body["operation_id"] not in {i["operation_id"] for i in listed.json()["items"]}
+    finally:
+        with rig.engine.begin() as connection:
+            connection.execute(
+                text("UPDATE servers SET environment = 'production' WHERE id = :i"),
+                {"i": rig.production},
+            )
+
+
+async def test_visibility_follows_the_stored_environment_not_the_servers_current_label(
+    rig: Rig,
+    approver: Actor,
+) -> None:
+    """Issue 164, fixed in M4.6 (``OPEN-107``): §17.2 reads the stored environment."""
+    body = await waiting(rig)
+    operation = f"/api/v1/operations/{body['operation_id']}"
+    with rig.engine.begin() as connection:  # re-labelled staging after the request was made
+        connection.execute(
+            text("UPDATE servers SET environment = 'staging' WHERE id = :i"), {"i": rig.production}
+        )
+    try:
+        revoke_all(rig.engine, approver.id)
+        grant(rig.engine, approver.id, "APPROVER", STAGING_SCOPE)
+        refused = await call(approver.client, "GET", operation)
+        assert refused.status_code == 404, refused.text  # the row says production
+        revoke_all(rig.engine, approver.id)
+        grant(rig.engine, approver.id, "APPROVER")  # production named
+        allowed = await call(approver.client, "GET", operation)
+        assert allowed.status_code == 200, allowed.text
     finally:
         with rig.engine.begin() as connection:
             connection.execute(

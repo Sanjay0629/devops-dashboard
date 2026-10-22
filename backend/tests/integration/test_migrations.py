@@ -21,6 +21,7 @@ EXPECTED_TABLES = {
     "approval_policies",
     "approvals",
     "audit_events",
+    "audit_exports",
     "cloud_accounts",
     "notification_channels",
     "notification_deliveries",
@@ -286,7 +287,33 @@ def test_downgrading_past_0012_refuses_while_an_operation_is_expired(
             command.downgrade(alembic_config, "0011")
         with rebuilt.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert revision == "0012"  # the refusal rolled back; nothing half-applied
+        # The refusal rolled the whole command back, 0013's step included: nothing half-applied.
+        assert revision == ScriptDirectory.from_config(alembic_config).get_current_head()
+    finally:
+        _drop_everything(rebuilt)
+        command.upgrade(alembic_config, "head")
+
+
+def test_downgrading_past_0013_refuses_while_an_export_is_ready(
+    rebuilt: Engine, alembic_config: Config
+) -> None:
+    """A ``READY`` export is a file somebody asked for and has not downloaded."""
+    from tests.integration.test_alert_schema import a_user
+    from tests.integration.test_audit_exports_schema import export
+
+    with rebuilt.begin() as connection:
+        export(connection, a_user(connection), "READY")
+    try:
+        with pytest.raises(RuntimeError, match="READY"):
+            command.downgrade(alembic_config, "0012")
+        with rebuilt.connect() as connection:
+            revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert revision == "0013"
+        assert "audit_exports" in inspect(rebuilt).get_table_names()
+        with rebuilt.begin() as connection:  # once nothing is waiting, the downgrade is clean
+            connection.execute(text("DELETE FROM audit_exports"))
+        command.downgrade(alembic_config, "0012")
+        assert "audit_exports" not in inspect(rebuilt).get_table_names()
     finally:
         _drop_everything(rebuilt)
         command.upgrade(alembic_config, "head")

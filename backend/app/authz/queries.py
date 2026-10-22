@@ -30,20 +30,66 @@ The translation, rule by rule:
   UUID is dropped, which is equivalent rather than lenient — in the matcher it
   is a string that no target id can equal.
 
-Only ``servers`` is translated here. ``applications`` are deliberately not
-scope-filtered at this milestone; the reason, and the decision it needs, are
-in ``app/inventory/queries.py`` and in PROGRESS.md as ``OPEN-27``.
+Three row kinds are translated, one rule set. ``servers`` is the original.
+``operations`` (M4.6, ``OPEN-107``) reads the **stored** ``operations.environment``
+and the joined server's account and id, so a re-labelled server does not move an
+operation in or out of scope. ``audit_events`` (M4.6, ``OPEN-109``) has an
+``environment`` (nullable) and no other dimension: a grant constraining a
+``cloud_account``, ``server`` or ``application`` reaches no event (A-09), and an
+event with no environment is reached only by a grant that covers every environment
+(``wildcard``, or all four named -- the bootstrap administrator's shape) and names no specific
+account, server or application: ``matcher.permits_environmentless``.
+``applications`` are deliberately not scope-filtered at this milestone; the
+reason, and the decision it needs, are in ``app/inventory/queries.py`` and in
+PROGRESS.md as ``OPEN-27``.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import ColumnElement, and_, false, not_, or_, true
+from sqlalchemy.orm import QueryableAttribute
 
-from app.authz.matcher import PRODUCTION, WILDCARD, Grant, normalise_scope
+from app.audit.models import AuditEvent
+from app.authz.matcher import (
+    PRODUCTION,
+    WILDCARD,
+    Grant,
+    covers_every_environment,
+    normalise_scope,
+)
 from app.inventory.models import Server
+from app.operations.models import Operation
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeColumns:
+    """Where a row kind keeps each scope dimension.
+
+    A dimension with no column is one the row does not have: a grant naming
+    specific values for it reaches no row (A-09), exactly as the matcher says of
+    a ``Target`` whose field is ``None``.
+    """
+
+    environment: QueryableAttribute[Any]
+    #: ``True`` when the column may be ``NULL`` -- an event with no environment.
+    environment_nullable: bool = False
+    cloud_account: QueryableAttribute[Any] | None = None
+    server: QueryableAttribute[Any] | None = None
+
+
+SERVER_COLUMNS = ScopeColumns(
+    environment=Server.environment, cloud_account=Server.cloud_account_id, server=Server.id
+)
+#: The stored environment (not the server's current label); the caller joins ``servers``.
+OPERATION_COLUMNS = ScopeColumns(
+    environment=Operation.environment, cloud_account=Server.cloud_account_id, server=Server.id
+)
+AUDIT_COLUMNS = ScopeColumns(environment=AuditEvent.environment, environment_nullable=True)
 
 
 def _uuids(values: Iterable[str]) -> list[uuid.UUID]:
@@ -62,42 +108,59 @@ def _uuids(values: Iterable[str]) -> list[uuid.UUID]:
     return parsed
 
 
-def _server_scope_predicate(scope: dict[str, frozenset[str]]) -> ColumnElement[bool]:
-    """One grant's scope, as the condition a server row must satisfy."""
+def _scope_predicate(
+    scope: dict[str, frozenset[str]], columns: ScopeColumns
+) -> ColumnElement[bool]:
+    """One grant's scope, as the condition a row must satisfy."""
     conditions: list[ColumnElement[bool]] = []
 
     # Rule 4 first, as in the matcher: production is reachable only by naming
     # it. An absent `environment` dimension is unconstrained (A-09) *except*
     # for this.
     environments = scope.get("environment", frozenset())
+    environment_conditions: list[ColumnElement[bool]] = []
     if PRODUCTION not in environments:
-        conditions.append(Server.environment != PRODUCTION)
+        environment_conditions.append(columns.environment != PRODUCTION)
     if environments and WILDCARD not in environments:
-        conditions.append(Server.environment.in_(sorted(environments)))
+        environment_conditions.append(columns.environment.in_(sorted(environments)))
+    if columns.environment_nullable:
+        # A row with no environment is a different question (``permits_environmentless``): it is
+        # reached by a scope that covers every environment, not by matching a value.
+        with_value = and_(columns.environment.is_not(None), *environment_conditions)
+        without = and_(
+            columns.environment.is_(None), true() if covers_every_environment(scope) else false()
+        )
+        conditions.append(or_(with_value, without))
+    else:
+        conditions.extend(environment_conditions)
 
     accounts = scope.get("cloud_account", frozenset())
     if accounts and WILDCARD not in accounts:
-        conditions.append(Server.cloud_account_id.in_(_uuids(accounts)))
+        if columns.cloud_account is None:
+            return false()
+        conditions.append(columns.cloud_account.in_(_uuids(accounts)))
 
     servers = scope.get("server", frozenset())
     if servers and WILDCARD not in servers:
-        conditions.append(Server.id.in_(_uuids(servers)))
+        if columns.server is None:
+            return false()
+        conditions.append(columns.server.in_(_uuids(servers)))
 
     applications = scope.get("application", frozenset())
     if applications and WILDCARD not in applications:
-        # A-09: a server target has no `application` dimension, so a grant
-        # constraining one to specific ids reaches no server at all. ``["*"]``
-        # constrains nothing and is satisfied — the M1.5 amendment, see
+        # A-09: none of these rows has an `application` dimension, so a grant
+        # constraining one to specific ids reaches nothing. ``["*"]``
+        # constrains nothing and is satisfied -- the M1.5 amendment, see
         # ``matcher.py``.
         return false()
 
     return and_(*conditions) if conditions else true()
 
 
-def readable_servers(
-    grants: Sequence[Grant], resource_type: str, action: str
+def _readable(
+    grants: Sequence[Grant], resource_type: str, action: str, columns: ScopeColumns
 ) -> ColumnElement[bool]:
-    """The ``WHERE`` clause selecting the servers these grants reach."""
+    """The ``WHERE`` clause selecting the rows these grants reach."""
     relevant = [
         grant for grant in grants if grant.resource_type == resource_type and grant.action == action
     ]
@@ -111,7 +174,7 @@ def readable_servers(
         if grant.effect == "DENY":
             # Mirrors the matcher: an unreadable or empty scope on a deny
             # applies to everything rather than to nothing.
-            denies.append(true() if not scope else _server_scope_predicate(scope))
+            denies.append(true() if not scope else _scope_predicate(scope, columns))
             continue
         if grant.effect != "ALLOW":
             # The CHECK constraint forbids a third value, so one here means
@@ -121,7 +184,7 @@ def readable_servers(
             # None (malformed) or {} (empty): grants nothing, and must not
             # revoke a sound grant alongside it.
             continue
-        allows.append(_server_scope_predicate(scope))
+        allows.append(_scope_predicate(scope, columns))
 
     if not allows:
         return false()
@@ -129,3 +192,25 @@ def readable_servers(
     if denies:
         permitted = and_(permitted, not_(or_(*denies)))
     return permitted
+
+
+def readable_servers(
+    grants: Sequence[Grant], resource_type: str, action: str
+) -> ColumnElement[bool]:
+    """The ``WHERE`` clause selecting the servers these grants reach."""
+    return _readable(grants, resource_type, action, SERVER_COLUMNS)
+
+
+def readable_operations(
+    grants: Sequence[Grant], resource_type: str, action: str
+) -> ColumnElement[bool]:
+    """The operations these grants reach: stored environment, joined server's account and id.
+
+    The statement must join ``servers`` on ``operations.target_server_id``.
+    """
+    return _readable(grants, resource_type, action, OPERATION_COLUMNS)
+
+
+def readable_audit_events(grants: Sequence[Grant]) -> ColumnElement[bool]:
+    """The audit events ``audit:read`` reaches (``OPEN-109``): by environment alone."""
+    return _readable(grants, "audit", "read", AUDIT_COLUMNS)

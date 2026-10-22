@@ -67,6 +67,30 @@ def test_an_added_deny_changes_the_cache_key() -> None:
     assert allow_only != with_deny
 
 
+def test_the_operation_read_scope_is_part_of_the_cache_key() -> None:
+    """``recent_operations`` is scoped by ``operation:read`` (M4.6), so two callers who read the
+    same servers but different operations must not share an entry."""
+    filters = DashboardFilterSet().cache_part()
+    servers = read_grant(FULL_SCOPE)
+    wide = Grant("operation", "read", "ALLOW", FULL_SCOPE)
+    narrow = Grant("operation", "read", "ALLOW", STAGING_SCOPE)
+    assert cache_key("summary", [servers, wide], filters) != cache_key(
+        "summary", [servers, narrow], filters
+    )
+    assert cache_key("summary", [servers], filters) != cache_key(
+        "summary", [servers, wide], filters
+    )
+
+
+def test_a_grant_that_is_not_a_scope_input_does_not_split_the_cache() -> None:
+    filters = DashboardFilterSet().cache_part()
+    servers = read_grant(FULL_SCOPE)
+    unrelated = Grant("deployment", "read", "ALLOW", STAGING_SCOPE)
+    assert cache_key("summary", [servers], filters) == cache_key(
+        "summary", [servers, unrelated], filters
+    )
+
+
 def test_equivalent_scopes_share_a_cache_key() -> None:
     """Normalised, so ordering is not a cache miss.
 

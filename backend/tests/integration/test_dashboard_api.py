@@ -341,8 +341,8 @@ async def test_every_section_without_a_source_is_null_and_says_why(
 ) -> None:
     """The acceptance criterion, over the wire, for the sources that are absent.
 
-    ``recent_health_changes`` used to be here and no longer is: it reads
-    ``audit_events`` (M2.5), so ``[]`` is a true "nothing recorded". The health
+    ``recent_health_changes`` (M2.5) and ``recent_operations`` (M4.6) used to be here and no longer
+    are: each reads a real table, so ``[]`` is a true "nothing recorded". The health
     rollup is absent here only because these tests configure no Prometheus; its
     other states are in ``test_health_read.py``.
     """
@@ -361,7 +361,6 @@ async def test_every_section_without_a_source_is_null_and_says_why(
             ),
         ),
         ("recent_deployments", ("items",)),
-        ("recent_operations", ("items",)),
     ):
         section = body[name]
         assert section["data_state"] == "not_configured", name
@@ -639,3 +638,110 @@ async def test_the_health_list_reports_the_provider_of_each_server(
     client, _caller, team = dashboard
     response = await call(client, "GET", HEALTH, params={"owner_team": team, "limit": 100})
     assert {row["provider"] for row in response.json()["items"]} == {"ON_PREM"}
+
+
+# --- recent_operations (M4.6, OPEN-116) ---------------------------------------------------------
+
+
+def _operations_on(migrated: Engine, team: str, environments: dict[str, str]) -> dict[str, str]:
+    """One finished operation per entry on this test's servers: ``{name: stored environment}``.
+
+    The servers are found by ``owner_team`` (unique to the test), one per current environment, so
+    a name can be stored with an environment different from its server's label.
+    """
+    from tests.integration.test_alert_schema import a_user
+    from tests.integration.test_operation_schema import _operation, _service
+
+    created: dict[str, str] = {}
+    with migrated.begin() as connection:
+        servers = {
+            row.environment: row.id
+            for row in connection.execute(
+                text(
+                    "SELECT DISTINCT ON (environment) id, environment FROM servers"
+                    " WHERE owner_team = :t ORDER BY environment, id"
+                ),
+                {"t": team},
+            )
+        }
+        user = a_user(connection)
+        for index, (name, stored) in enumerate(environments.items()):
+            label = name.split(":")[0]  # the server's current environment
+            server = servers[label]
+            operation = _operation(
+                connection, server, _service(connection, server, f"u{index}.service"), user,
+                status="CANCELLED", environment=stored,
+            )  # fmt: skip
+            connection.execute(
+                text(
+                    "UPDATE operations SET created_at = now() - :m * interval '1 minute'"
+                    " WHERE id = :i"
+                ),
+                {"m": index, "i": operation},
+            )
+            created[name] = str(operation)
+    return created
+
+
+async def test_recent_operations_lists_the_newest_first_with_the_stored_environment(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str], migrated: Engine, uncached: None
+) -> None:
+    client, _caller, team = dashboard
+    made = _operations_on(
+        migrated, team, {"staging:a": "staging", "production:b": "production", "staging:c": "other"}
+    )
+    section = (await _summary(client, owner_team=team))["recent_operations"]
+
+    assert section["data_state"] == "ok" and section["source"] == "postgresql"
+    assert section["collected_at"] and section["unavailable_reason"] is None
+    got = [item["operation_id"] for item in section["items"]]
+    assert got == [made["staging:a"], made["production:b"], made["staging:c"]]  # newest first
+    first = section["items"][0]
+    assert set(first) == {
+        "operation_id", "action_type", "server_id", "server_display_name", "service_name",
+        "environment", "execution_status", "requested_by", "created_at",
+    }  # fmt: skip
+    assert first["service_name"] == "u0.service" and first["environment"] == "staging"
+    assert section["items"][2]["environment"] == "other"  # the stored one, not the server's label
+
+
+async def test_recent_operations_is_an_empty_list_not_null_when_nothing_matches(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str], uncached: None
+) -> None:
+    client, _caller, _team = dashboard
+    section = (await _summary(client, owner_team="no-such-team"))["recent_operations"]
+    assert section["data_state"] == "ok" and section["items"] == []  # distinct from not_configured
+
+
+async def test_recent_operations_is_scoped_by_the_stored_environment(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str], migrated: Engine, uncached: None
+) -> None:
+    client, caller, team = dashboard
+    made = _operations_on(
+        migrated,
+        team,
+        {
+            "staging:stays": "staging",
+            "production:was-production": "production",
+            "production:was-staging": "staging",  # server since labelled production
+        },
+    )
+    revoke_all(migrated, caller)
+    grant(migrated, caller, "VIEWER", STAGING_SCOPE)
+    got = {
+        item["operation_id"]
+        for item in (await _summary(client, owner_team=team))["recent_operations"]["items"]
+    }
+    # `operation:read` is scoped by the *stored* environment, as in §23: what was requested as
+    # staging is reachable wherever its server is labelled now, and what was production is not.
+    assert {made["staging:stays"], made["production:was-staging"]} <= got
+    assert made["production:was-production"] not in got
+
+
+async def test_recent_operations_is_capped_at_ten(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str], migrated: Engine, uncached: None
+) -> None:
+    client, _caller, team = dashboard
+    _operations_on(migrated, team, {f"staging:{i}": "staging" for i in range(12)})
+    items = (await _summary(client, owner_team=team))["recent_operations"]["items"]
+    assert len(items) == 10

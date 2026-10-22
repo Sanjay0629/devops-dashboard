@@ -33,7 +33,7 @@ from app.audit import service as audit
 from app.auth.models import User
 from app.authz import service as authz_service
 from app.authz.dependencies import Authorized, ForbiddenError
-from app.authz.matcher import permits
+from app.authz.matcher import Target, permits
 from app.core import ratelimit
 from app.core.errors import AppError, NotConfiguredError, field_error
 from app.core.logging import get_logger
@@ -508,14 +508,28 @@ async def detail_view(db: AsyncSession, operation: Operation) -> OperationDetail
     )
 
 
+def operation_target(operation: Operation, server: Server) -> Target:
+    """The matcher's target for reading or cancelling an operation (``OPEN-107``).
+
+    The operation's **stored** environment with the server's account and id -- never the server's
+    current label (API_CONTRACTS §17.2; PROGRESS issue 164). It is what the history list's SQL
+    (``readable_operations``) reads, so the list and the detail cannot disagree.
+    """
+    return Target(
+        environment=operation.environment,
+        cloud_account=str(server.cloud_account_id),
+        server=str(server.id),
+    )
+
+
 async def visible_operation(
     db: AsyncSession, authorized: Authorized, operation_id: uuid.UUID
 ) -> tuple[Operation, Server | None]:
     """The operation, if this caller may see it -- otherwise ``404``, never ``403`` (§2).
 
-    The requester always sees their own; anyone else needs ``operation:read`` over the stored
-    environment of the target server. The route's own dependency already refused a caller with
-    no ``operation:read`` anywhere.
+    The requester always sees their own; anyone else needs ``operation:read`` over the operation's
+    stored environment and the target server's account and id (``OPEN-107``). The route's own
+    dependency already refused a caller with no ``operation:read`` anywhere.
     """
     operation = await db.get(Operation, operation_id)
     if operation is None:
@@ -523,7 +537,9 @@ async def visible_operation(
     server = await db.get(Server, operation.target_server_id)
     if operation.requested_by == authorized.user.id:
         return operation, server
-    if server is None or not authorized.permits("operation", "read", server_target(server)):
+    if server is None or not authorized.permits(
+        "operation", "read", operation_target(operation, server)
+    ):
         raise NotFoundError
     return operation, server
 
@@ -542,7 +558,8 @@ async def cancel_operation(
     operation, server = await visible_operation(db, authorized, operation_id)
     is_requester = operation.requested_by == authorized.user.id
     if not is_requester and (
-        server is None or not authorized.permits("operation", "approve", server_target(server))
+        server is None
+        or not authorized.permits("operation", "approve", operation_target(operation, server))
     ):
         authz_service.record_denial(
             db,

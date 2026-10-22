@@ -14,6 +14,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from app.inventory.schemas import CursorPage
+
 #: Printable text only: a reason is audited and rendered, and a control character in either is a
 #: log-forging tool.
 Reason = Annotated[
@@ -109,3 +111,43 @@ class OperationDetail(OperationBase):
     parent_operation_id: uuid.UUID | None
     started_at: datetime | None
     completed_at: datetime | None
+
+
+class HistoryApproval(BaseModel):
+    """The approval reference on a history row (§23): who decided, and when."""
+
+    approval_id: uuid.UUID
+    decision: ApprovalDecisionValue
+    approved_by: ActorView | None = None
+    decided_at: datetime | None = None
+
+
+class HistoryItem(BaseModel):
+    """One row of §23's list.
+
+    Carries the result and the execution id (PRD §4.12) -- ``external_execution_id`` and the two
+    observed states are closed values or an opaque provider id. ``requested_reason``,
+    ``sanitized_result`` and ``parent_operation_id`` are §17.2's, not the list's.
+    """
+
+    operation_id: uuid.UUID
+    execution_status: ExecutionStatus
+    approval_status: ApprovalStatus
+    action_type: str
+    target: TargetView
+    requested_by: ActorView
+    approval: HistoryApproval | None = None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    deadline_at: datetime
+    failure_reason: str | None
+    correlation_id: uuid.UUID
+    external_execution_id: str | None
+    observed_state_before: str | None
+    observed_state_after: str | None
+
+
+class HistoryList(BaseModel):
+    items: list[HistoryItem]
+    page: CursorPage

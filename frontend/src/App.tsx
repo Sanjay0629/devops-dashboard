@@ -8,7 +8,9 @@ import { useIsReadOnly, useSession } from '@/auth/useSession';
 import { Login } from '@/pages/Login';
 import { ApprovalPolicies } from '@/pages/approvals/ApprovalPolicies';
 import { ApprovalQueue } from '@/pages/approvals/ApprovalQueue';
+import { AuditLog } from '@/pages/audit/AuditLog';
 import { OperationDetailPage } from '@/pages/operations/OperationDetail';
+import { OperationHistory, ServerOperations } from '@/pages/operations/OperationHistory';
 import { AlertDetail } from '@/pages/alerts/AlertDetail';
 import { AlertList } from '@/pages/alerts/AlertList';
 import { Dashboard } from '@/pages/dashboard/Dashboard';
@@ -56,9 +58,13 @@ function Navigation(): React.JSX.Element {
     ...(canRender(state, PERMISSIONS.logsReadApplication) ? [{ to: '/logs', label: 'Logs' }] : []),
     ...(canRender(state, PERMISSIONS.alertRead) ? [{ to: '/alerts', label: 'Alerts' }] : []),
     { to: '/applications', label: 'Applications' },
+    ...(canRender(state, PERMISSIONS.operationRead)
+      ? [{ to: '/operations', label: 'Operations' }]
+      : []),
     ...(canRender(state, PERMISSIONS.operationApprove)
       ? [{ to: '/approvals', label: 'Approvals' }]
       : []),
+    ...(canRender(state, PERMISSIONS.auditRead) ? [{ to: '/audit', label: 'Audit log' }] : []),
     ...(canRender(state, PERMISSIONS.adminIntegrations)
       ? [{ to: '/notifications/channels', label: 'Notifications' }]
       : []),
@@ -147,14 +153,16 @@ function Shell(): React.JSX.Element {
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M4.5 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
+            Milestone M4.6 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
             service state, host health from Prometheus, log search, alerts (Prometheus rules through
             Alertmanager, with acknowledge and assign) and notifications (channels, delivery status
-            and retry) and service operations (start, stop and restart a registered service: the
+            and retry), service operations (start, stop and restart a registered service: the
             request, an approval where a policy requires one, its state machine and its verified
-            result). An AWS adapter exists but has been exercised only against test providers, so
-            nothing here has yet been shown to act on a real server; deployments are not
-            implemented, and every section that depends on them says so rather than showing a zero.
+            result), and the operations history and audit log (who did what, with the result, an
+            execution id and an approval reference; reading the trail is itself recorded). An AWS
+            adapter exists but has been exercised only against test providers, so nothing here has
+            yet been shown to act on a real server; deployments are not implemented, and every
+            section that depends on them says so rather than showing a zero.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -229,7 +237,10 @@ function Shell(): React.JSX.Element {
         <Route path="/servers/:serverId/services" element={<ServerServices />} />
         <Route path="/servers/:serverId/services/:serviceName" element={<ServiceDetailPage />} />
         <Route path="/services" element={<ServiceList />} />
+        <Route path="/servers/:serverId/operations" element={<ServerOperations />} />
+        <Route path="/operations" element={<OperationHistory />} />
         <Route path="/operations/:operationId" element={<OperationDetailPage />} />
+        <Route path="/audit" element={<AuditLog />} />
         <Route path="/approvals" element={<ApprovalQueue />} />
         <Route path="/admin/approval-policies" element={<ApprovalPolicies />} />
         <Route path="/compare" element={<Compare />} />

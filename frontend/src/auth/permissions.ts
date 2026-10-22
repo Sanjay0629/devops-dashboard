@@ -45,6 +45,10 @@ export const PERMISSIONS = {
   serverWrite: 'server:write',
   /** Register and edit applications and integrations. Administrator only. */
   adminIntegrations: 'admin:integrations',
+  /** Read operation history (§23). Scope is checked by the backend, per operation. */
+  operationRead: 'operation:read',
+  /** Read the audit trail (§24). Approver and Administrator; scope is checked per event. */
+  auditRead: 'audit:read',
   /** See the approver queue and decide requests (§22). Scope is checked per request. */
   operationApprove: 'operation:approve',
   /** Create, edit and delete approval policies (§25.11 – §25.14). Administrator only. */

@@ -213,6 +213,7 @@ export function ServerDetail(): React.JSX.Element {
   const mayWrite = useCanRender(PERMISSIONS.serverWrite);
   const mayReadMetrics = useCanRender(PERMISSIONS.metricsRead);
   const mayReadServices = useCanRender(PERMISSIONS.serviceRead);
+  const mayReadOperations = useCanRender(PERMISSIONS.operationRead);
   const readOnly = useIsReadOnly();
 
   const { value: result, reload: load } = useLatestResponse(() => readServer(serverId), [serverId]);
@@ -271,6 +272,15 @@ export function ServerDetail(): React.JSX.Element {
               style={{ borderColor: 'var(--c-border)' }}
             >
               Services
+            </Link>
+          )}
+          {mayReadOperations && (
+            <Link
+              to={`/servers/${server.id}/operations`}
+              className="rounded border px-3 py-1 text-sm"
+              style={{ borderColor: 'var(--c-border)' }}
+            >
+              Operations
             </Link>
           )}
           {mayWrite && (

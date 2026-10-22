@@ -104,7 +104,7 @@ const SUMMARY = {
     collected_at: null,
     source: null,
     stale_after_seconds: null,
-    unavailable_reason: 'Service operations are not implemented yet (M4.2).',
+    unavailable_reason: 'Not configured in this fixture.',
   },
   recent_health_changes: {
     items: [],
@@ -566,6 +566,66 @@ describe('Dashboard', () => {
   });
 
   // --- the other states ------------------------------------------------------
+
+  it('lists the operations the caller may see, newest first, each linking to its page', async () => {
+    mockApi({
+      summary: {
+        ...SUMMARY,
+        recent_operations: {
+          ...SUMMARY.recent_operations,
+          data_state: 'ok',
+          collected_at: '2026-10-22T09:30:00Z',
+          source: 'postgresql',
+          unavailable_reason: null,
+          items: [
+            {
+              operation_id: 'op-1',
+              action_type: 'restart',
+              server_id: 's1',
+              server_display_name: 'Web 01',
+              service_name: 'nginx.service',
+              environment: 'staging',
+              execution_status: 'SUCCEEDED',
+              requested_by: { id: 'u1', display_name: 'Riley' },
+              created_at: '2026-10-22T09:00:00Z',
+            },
+          ],
+        },
+      },
+    });
+    renderDashboard();
+    const link = await screen.findByRole('link', { name: /restart nginx.service on Web 01/ });
+    expect(link).toHaveAttribute('href', '/operations/op-1');
+    expect(screen.getByRole('link', { name: 'All operations' })).toHaveAttribute(
+      'href',
+      '/operations',
+    );
+  });
+
+  it('says "none in your scope" for an empty operations list, which is a fact', async () => {
+    mockApi({
+      summary: {
+        ...SUMMARY,
+        recent_operations: {
+          ...SUMMARY.recent_operations,
+          data_state: 'ok',
+          collected_at: '2026-10-22T09:30:00Z',
+          source: 'postgresql',
+          unavailable_reason: null,
+          items: [],
+        },
+      },
+    });
+    renderDashboard();
+    expect(await screen.findByText('No operations within your access scope.')).toBeInTheDocument();
+  });
+
+  it('says "not configured" for a null operations list rather than "none"', async () => {
+    mockApi();
+    renderDashboard();
+    await screen.findByText('6');
+    expect(screen.queryByText('No operations within your access scope.')).toBeNull();
+  });
 
   it('distinguishes loading from empty', async () => {
     mockApi({ health: healthList([]) });

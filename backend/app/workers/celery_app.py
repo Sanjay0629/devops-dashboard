@@ -116,6 +116,13 @@ def create_celery_app() -> Celery:
                 "schedule": 30.0,
                 "options": {"queue": "maintenance"},
             },
+            # M4.6 (OPEN-112). Deletes an export nobody downloaded after 24 hours and fails one a
+            # dead worker abandoned, which would otherwise block its requester for good.
+            "sweep-audit-exports": {
+                "task": "dcp.audit.sweep_exports",
+                "schedule": 60.0,
+                "options": {"queue": "maintenance"},
+            },
             # M3.4 (DATABASE.md section 11): delivery bookkeeping is kept 90 days.
             "purge-notification-deliveries": {
                 "task": "dcp.maintenance.purge_notification_deliveries",
@@ -130,6 +137,7 @@ def create_celery_app() -> Celery:
             "app.workers.tasks.notifications",
             "app.workers.tasks.operations",
             "app.workers.tasks.cloud",
+            "app.workers.tasks.audit",
         ),
     )
     return celery_app
