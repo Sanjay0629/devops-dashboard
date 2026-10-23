@@ -86,7 +86,7 @@ IdempotencyKey = Annotated[
 ]
 
 
-def _unmodified_since(header: str | None, updated_at: datetime) -> None:
+def _unmodified_since(header: str | None, updated_at: datetime, noun: str = "server") -> None:
     """Optimistic concurrency for ``PATCH`` (§14.4).
 
     A malformed date is ``422`` rather than ignored: silently dropping the
@@ -112,7 +112,7 @@ def _unmodified_since(header: str | None, updated_at: datetime) -> None:
         boundary = boundary.replace(tzinfo=UTC)
     if updated_at.replace(microsecond=0) > boundary:
         raise service.ConflictError(
-            "The server was modified after the time given in If-Unmodified-Since."
+            f"The {noun} was modified after the time given in If-Unmodified-Since."
         )
 
 

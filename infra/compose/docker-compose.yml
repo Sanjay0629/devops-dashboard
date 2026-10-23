@@ -6,7 +6,7 @@
 #   logs          alloy, sample-logs (a synthetic log producer)      (M3.1)
 #   fixtures      systemd-host: a host that runs systemd (M2.4). OPT-IN, and the
 #                 only service here that needs SYS_ADMIN — see its comment.
-#   mocks         mock-idp (M1.3), mock-jenkins (M5.1, not yet implemented)
+#   mocks         mock-idp (M1.3), notification-sink (M3.4), mock-jenkins (M5.1)
 #
 # Run from the repository root:
 #   docker compose -f infra/compose/docker-compose.yml --profile core up
@@ -58,6 +58,16 @@ x-backend-env: &backend-env
   DCP_LOKI_URL: ${DCP_LOKI_URL:-http://loki:3100}
   DCP_LOKI_TIMEOUT_SECONDS: ${DCP_LOKI_TIMEOUT_SECONDS:-15.0}
   DCP_LOG_RETENTION_DAYS: ${DCP_LOG_RETENTION_DAYS:-14}
+  # M5.1 (OPEN-119). Same two-halves trap (issue 54). UNSET by default: the default `up` has no
+  # Jenkins and says so (`not_configured`), and the app refuses to start if a URL is set whose host
+  # is not on DCP_SSRF_HOST_ALLOWLIST, so there is no half-configured default to ship. The token is
+  # a reference; its value, DCPSECRET_JENKINS_TOKEN, is not DCP_-prefixed on purpose
+  # (core/secrets.py) and defaults to nothing.
+  DCP_JENKINS_URL: ${DCP_JENKINS_URL:-}
+  DCP_JENKINS_USER: ${DCP_JENKINS_USER:-}
+  DCP_JENKINS_TOKEN_REFERENCE: ${DCP_JENKINS_TOKEN_REFERENCE:-}
+  DCP_JENKINS_TIMEOUT_SECONDS: ${DCP_JENKINS_TIMEOUT_SECONDS:-10.0}
+  DCPSECRET_JENKINS_TOKEN: ${DCPSECRET_JENKINS_TOKEN:-}
   # M4.3. Unset means the AWS adapter is not configured (OPEN-81).
   DCP_AWS_SSM_DOCUMENT_VERSION: ${DCP_AWS_SSM_DOCUMENT_VERSION:-}
   # M2.3 (OPEN-14). The worker writes this file to a volume Prometheus mounts
@@ -673,6 +683,34 @@ services:
     command: ["python", "/notification-sink/sink.py"]
     volumes:
       - ./notification-sink:/notification-sink:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 128m }
+
+  # M5.1. A DEVELOPMENT AID (CLAUDE.md section 7): a stand-in for the parts of Jenkins' REST API
+  # DCP uses (infra/compose/mock-jenkins/mock_jenkins.py, standard library only). It is not
+  # Jenkins: passing against it proves DCP's behaviour, not a real Jenkins'. Nothing is published
+  # to the host; the smoke test and the worker reach it by service name. Reuses the backend
+  # development image; no new image, no new dependency.
+  mock-jenkins:
+    <<: *hardening
+    profiles: [mocks]
+    build:
+      context: ../../backend
+      target: development
+    command: ["python", "/mock-jenkins/mock_jenkins.py"]
+    # Empty means the mock's own defaults (user `dcp`, token `mock-jenkins-token`).
+    environment:
+      MOCK_JENKINS_USER: ${DCP_JENKINS_USER:-}
+      MOCK_JENKINS_TOKEN: ${DCPSECRET_JENKINS_TOKEN:-}
+    volumes:
+      - ./mock-jenkins:/mock-jenkins:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
       interval: 10s

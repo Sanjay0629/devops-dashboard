@@ -104,6 +104,7 @@ def all_models() -> list[type[Any]]:
     import app.audit.models
     import app.auth.models
     import app.authz.models
+    import app.deployments.models
     import app.inventory.models
     import app.notifications.models
     import app.operations.models  # noqa: F401

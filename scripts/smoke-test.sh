@@ -62,8 +62,15 @@ export DCP_HEALTH_THRESHOLDS='{"default":{"warning_after_seconds":30,"stale_afte
 # private address, so the SSRF policy is configured to allow exactly that host and the Docker
 # bridge ranges; the retry delays are short so "four attempts, then abandoned" is asserted in a
 # minute; and the worker is made to see all of it (the same passthrough proof as above).
-export DCP_SSRF_HOST_ALLOWLIST=notification-sink
-export DCP_SSRF_INSECURE_HOSTS=notification-sink
+# M5.1, step 18i: the Jenkins client, against the `mock-jenkins` mock (a development aid, NOT Jenkins).
+# Jenkins' host must be on the same allowlist (the app refuses to start otherwise), and its token is a
+# reference, `env://JENKINS_TOKEN`, whose value the mock also accepts.
+export DCP_SSRF_HOST_ALLOWLIST=notification-sink,mock-jenkins
+export DCP_SSRF_INSECURE_HOSTS=notification-sink,mock-jenkins
+export DCP_JENKINS_URL=http://mock-jenkins:8080
+export DCP_JENKINS_USER=dcp
+export DCP_JENKINS_TOKEN_REFERENCE=env://JENKINS_TOKEN
+export DCPSECRET_JENKINS_TOKEN=mock-jenkins-token
 export DCP_SSRF_ALLOWED_NETWORKS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 export DCP_NOTIFICATION_RETRY_DELAYS_SECONDS=5,5,5
 export DCP_SMTP_HOST=notification-sink
@@ -1128,6 +1135,11 @@ until [ "$(docker inspect --format '{{.State.Health.Status}}' "$("${OBSERVABILIT
   sleep 3
 done
 smoke_alerts restored || { alert_diagnostics; fail "the Alertmanager row did not recover"; }
+
+log "18i. The Jenkins client over the real network path, against the mock (M5.1)"
+# Inside the backend container, so it uses the backend's own settings and reaches `mock-jenkins` over
+# the project network. See the script's docstring for what it proves that the unit suite cannot.
+"${COMPOSE[@]}" exec -T backend python - < scripts/smoke_jenkins.py   || { "${COMPOSE[@]}" logs --tail=40 backend mock-jenkins; fail "the Jenkins client assertions failed"; }
 
 log "19. A database outage degrades honestly, with no zeros (§11.10)"
 "${COMPOSE[@]}" stop postgres >/dev/null

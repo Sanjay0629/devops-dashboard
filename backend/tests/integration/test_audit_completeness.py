@@ -285,6 +285,64 @@ async def application_archive(c: Ctx) -> None:
     await c.act("DELETE", f"/api/v1/applications/{await _new_application(c)}")
 
 
+def _remove_application_later(c: Ctx, application: str) -> None:
+    """Targets and the application, so a committed row is not left for other suites to count."""
+
+    def remove() -> None:
+        with c.rig.engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM deployment_targets WHERE application_id = :a"),
+                {"a": uuid.UUID(application)},
+            )
+            connection.execute(
+                text("DELETE FROM applications WHERE id = :a"), {"a": uuid.UUID(application)}
+            )
+
+    c.cleanups.append(remove)
+
+
+async def _new_target(c: Ctx) -> str:
+    application = await _new_application(c)
+    _remove_application_later(c, application)
+    created = await c.setup(
+        "POST",
+        "/api/v1/deployment-targets",
+        {
+            "application_id": application,
+            "environment": "staging",
+            "pipeline_reference": "team/completeness",
+            "parameter_template": {"slots": {"GIT_REF": "ref"}},
+            "allowed_ref_patterns": ["^main$"],
+        },
+        headers=key(),
+    )
+    return str(created.json()["id"])
+
+
+async def deployment_target_register(c: Ctx) -> None:
+    application = await _new_application(c)
+    _remove_application_later(c, application)
+    await c.act(
+        "POST",
+        "/api/v1/deployment-targets",
+        {
+            "application_id": application,
+            "environment": "staging",
+            "pipeline_reference": "team/completeness",
+        },
+        headers=key(),
+    )
+
+
+async def deployment_target_edit(c: Ctx) -> None:
+    target = await _new_target(c)
+    await c.act("PATCH", f"/api/v1/deployment-targets/{target}", {"status": "DISABLED"})
+
+
+async def deployment_target_retire(c: Ctx) -> None:
+    await c.act("DELETE", f"/api/v1/deployment-targets/{await _new_target(c)}")
+
+
 async def operation_request(c: Ctx) -> None:
     await c.act(
         "POST",
@@ -370,6 +428,9 @@ DRIVERS: dict[tuple[str, str], Driver] = {
     ("POST", "/api/v1/servers/{server_id}/services"): service_register,
     ("PATCH", "/api/v1/servers/{server_id}/services/{service_name}"): service_edit,
     ("DELETE", "/api/v1/servers/{server_id}/services/{service_name}"): service_deregister,
+    ("POST", "/api/v1/deployment-targets"): deployment_target_register,
+    ("PATCH", "/api/v1/deployment-targets/{target_id}"): deployment_target_edit,
+    ("DELETE", "/api/v1/deployment-targets/{target_id}"): deployment_target_retire,
     ("POST", "/api/v1/applications"): application_register,
     ("PATCH", "/api/v1/applications/{application_id}"): application_edit,
     ("DELETE", "/api/v1/applications/{application_id}"): application_archive,

@@ -10,7 +10,11 @@
 
 import { Link, useParams } from 'react-router-dom';
 
-import { readApplication, type AssociatedServer } from '@/api/inventory';
+import {
+  readApplication,
+  type ApplicationDetail as ApplicationDetailType,
+  type AssociatedServer,
+} from '@/api/inventory';
 import { DataStateBanner } from '@/components/DataStateBanner';
 import { LoadingState } from '@/components/EmptyState';
 import { ErrorState } from '@/components/ErrorState';
@@ -26,6 +30,46 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <dt style={{ color: 'var(--c-text-muted)' }}>{label}</dt>
       <dd className="text-right">{children}</dd>
     </div>
+  );
+}
+
+/**
+ * §18.3's `deployment_targets`: the registered pipelines this caller may see.
+ *
+ * Three different sentences for three different facts: a list, "none you may see" (which is not
+ * "none exist" -- a target outside the caller's scope is not listed), and "could not say".
+ */
+function Targets({
+  section,
+}: {
+  section: ApplicationDetailType['deployment_targets'];
+}): React.JSX.Element {
+  if (section.data_state !== 'ok' || section.items == null) {
+    return <DataStateBanner section={section} />;
+  }
+  if (section.items.length === 0) {
+    return (
+      <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
+        No deployment target is registered for this application, or none that you may see.
+      </p>
+    );
+  }
+  return (
+    <ul className="text-sm">
+      {section.items.map((target) => (
+        <li
+          key={target.id}
+          className="flex flex-wrap items-center justify-between gap-2 border-t py-2"
+          style={{ borderColor: 'var(--c-border)' }}
+        >
+          <span>
+            {target.environment} · <code>{target.pipeline_reference}</code>
+            {target.requires_approval && <> · approval required</>}
+          </span>
+          <StatusBadge value={target.status} />
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -81,10 +125,10 @@ export function ApplicationDetail(): React.JSX.Element {
         </Row>
         <Row label="Registered health checks">{application.health_check_config.checks.length}</Row>
         <Row label="Registered services">{application.registered_service_count}</Row>
-        <Row label="Deployment targets">
-          <DataStateBanner section={application.deployment_targets} />
-        </Row>
       </dl>
+
+      <h2 className="mt-6 mb-2 font-medium">Deployment targets</h2>
+      <Targets section={application.deployment_targets} />
 
       <h2 className="mt-6 mb-2 font-medium">Servers</h2>
       {application.servers.length === 0 ? (

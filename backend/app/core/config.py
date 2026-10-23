@@ -142,6 +142,22 @@ class Settings(BaseSettings):
     #: because an empty answer for a range Loki no longer holds reads as "no logs".
     log_retention_days: int = Field(default=14, ge=1, le=3_650)
 
+    # --- Jenkins (M5.1, OPEN-119) ----------------------------------------------
+    #: Base URL of the one Jenkins DCP orchestrates, e.g. ``https://jenkins.example.com``.
+    #: Optional: unset, every Jenkins call answers ``not_configured``. **Unlike** the Prometheus
+    #: and Loki URLs this one **is** checked against ``ssrf_host_allowlist`` (below, and again on
+    #: every call): Jenkins is a separate system that is sent a credential, and SECURITY.md §19 and
+    #: TECH_STACK.md §6.5 name it as a destination the allowlist exists for.
+    jenkins_url: str | None = None
+    #: The Jenkins user the API token belongs to. Required with ``jenkins_url``.
+    jenkins_user: str | None = Field(default=None, pattern=r"^[A-Za-z0-9._@-]{1,128}$")
+    #: A reference to the API token, ``env://NAME`` (``DCPSECRET_NAME`` in the process
+    #: environment): resolved per request, never cached, never logged. Required with
+    #: ``jenkins_url``; the value is never a setting.
+    jenkins_token_reference: str | None = None
+    #: Read deadline for one Jenkins call. The connect deadline is fixed at 3 s.
+    jenkins_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+
     # --- AWS SSM (M4.3, OPEN-81) ------------------------------------------------
     #: The version of the registered ``DCP-ServiceControl`` document DCP invokes. A version
     #: number, so an edit made in AWS changes nothing until DCP is told. **Unset means the
@@ -294,6 +310,9 @@ class Settings(BaseSettings):
         "smtp_username",
         "smtp_password",
         "aws_ssm_document_version",
+        "jenkins_url",
+        "jenkins_user",
+        "jenkins_token_reference",
         mode="before",
     )
     @classmethod
@@ -382,6 +401,7 @@ class Settings(BaseSettings):
         "loki_url",
         "alertmanager_url",
         "public_base_url",
+        "jenkins_url",
     )
     @classmethod
     def _check_absolute_http_url(cls, value: str | None) -> str | None:
@@ -446,6 +466,25 @@ class Settings(BaseSettings):
                 raise ValueError("smtp_starttls may be off only for a host in ssrf_insecure_hosts")
             if self.smtp_from is None:
                 raise ValueError("smtp_from is required when smtp_host is set")
+        if self.jenkins_url is not None:
+            host = (urlsplit(self.jenkins_url).hostname or "").lower()
+            if host not in {h.lower() for h in self.ssrf_host_allowlist}:
+                raise ValueError("jenkins_url's host must be on ssrf_host_allowlist")
+            if urlsplit(self.jenkins_url).scheme == "http" and host not in {
+                h.lower() for h in self.ssrf_insecure_hosts
+            }:
+                raise ValueError(
+                    "jenkins_url must be https unless its host is in ssrf_insecure_hosts"
+                )
+            if self.jenkins_user is None or self.jenkins_token_reference is None:
+                raise ValueError(
+                    "jenkins_user and jenkins_token_reference are required with jenkins_url"
+                )
+            from app.core.secrets import validate_reference
+
+            validate_reference(self.jenkins_token_reference)
+        elif self.jenkins_user is not None or self.jenkins_token_reference is not None:
+            raise ValueError("jenkins_user and jenkins_token_reference need jenkins_url")
         if (self.smtp_username is None) != (self.smtp_password is None):
             raise ValueError("smtp_username and smtp_password must be set together")
         if self.session_idle_timeout_seconds > self.session_absolute_timeout_seconds:

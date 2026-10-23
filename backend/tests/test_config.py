@@ -255,3 +255,80 @@ def test_the_loki_deadline_and_retention_are_bounded(
     monkeypatch.setenv(name, bad)
     with pytest.raises(ConfigurationError):
         load_settings()
+
+
+# --- Jenkins (M5.1, OPEN-119) --------------------------------------------------------------
+
+JENKINS_OK = {
+    "DCP_JENKINS_URL": "http://mock-jenkins:8080",
+    "DCP_JENKINS_USER": "dcp",
+    "DCP_JENKINS_TOKEN_REFERENCE": "env://JENKINS_TOKEN",
+    "DCP_SSRF_HOST_ALLOWLIST": "mock-jenkins",
+    "DCP_SSRF_INSECURE_HOSTS": "mock-jenkins",
+}
+
+
+def _jenkins(monkeypatch: pytest.MonkeyPatch, **overrides: str | None) -> None:
+    for key, value in {**JENKINS_OK, **overrides}.items():
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+
+
+def test_jenkins_is_unset_by_default(settings: Settings) -> None:
+    assert settings.jenkins_url is None and settings.jenkins_token_reference is None
+
+
+def test_a_complete_jenkins_configuration_loads(monkeypatch: pytest.MonkeyPatch) -> None:
+    _jenkins(monkeypatch)
+    assert load_settings().jenkins_url == "http://mock-jenkins:8080"
+
+
+def test_blank_jenkins_variables_mean_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Compose passes an unset variable as the empty string."""
+    for name in ("URL", "USER", "TOKEN_REFERENCE"):
+        monkeypatch.setenv(f"DCP_JENKINS_{name}", "")
+    assert load_settings().jenkins_url is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {
+            "DCP_SSRF_HOST_ALLOWLIST": "somewhere-else",
+            "DCP_SSRF_INSECURE_HOSTS": "",
+        },  # not allowlisted
+        {"DCP_SSRF_HOST_ALLOWLIST": ""},  # nothing allowlisted admits nothing
+        {"DCP_SSRF_INSECURE_HOSTS": ""},  # http, but the host is not insecure-permitted
+        {"DCP_JENKINS_USER": None},
+        {"DCP_JENKINS_TOKEN_REFERENCE": None},
+        {"DCP_JENKINS_TOKEN_REFERENCE": "a-literal-token"},  # a value, not a reference
+        {"DCP_JENKINS_TOKEN_REFERENCE": "file:///etc/passwd"},
+        {"DCP_JENKINS_URL": "http://user:pw@mock-jenkins:8080"},
+        {"DCP_JENKINS_URL": "mock-jenkins:8080"},
+        {"DCP_JENKINS_URL": "ftp://mock-jenkins"},
+        {"DCP_JENKINS_USER": "has space"},
+    ],
+)
+def test_an_unsafe_jenkins_configuration_does_not_start(
+    monkeypatch: pytest.MonkeyPatch, overrides: dict[str, str | None]
+) -> None:
+    _jenkins(monkeypatch, **overrides)
+    with pytest.raises(ConfigurationError):
+        load_settings()
+
+
+def test_a_jenkins_user_without_a_url_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DCP_JENKINS_USER", "dcp")
+    with pytest.raises(ConfigurationError):
+        load_settings()
+
+
+def test_the_jenkins_error_does_not_echo_the_url_or_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _jenkins(monkeypatch, DCP_JENKINS_TOKEN_REFERENCE="canary-token-value-xyz")
+    with pytest.raises(ConfigurationError) as caught:
+        load_settings()
+    assert "canary-token-value-xyz" not in str(caught.value)

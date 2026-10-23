@@ -438,19 +438,41 @@ class ApplicationSummary(BaseModel):
     updated_at: datetime
 
 
+class ApplicationDeploymentTarget(BaseModel):
+    """One registered pipeline, as an application page shows it: the §21.8 reader shape without the
+    application's own id and name, which the page already has. No parameter template."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: uuid.UUID
+    environment: Environment
+    pipeline_reference: str
+    allowed_ref_patterns: list[str]
+    requires_approval: bool
+    rollback_supported: bool
+    status: Literal["ACTIVE", "DISABLED"]
+    updated_at: datetime
+
+
+class DeploymentTargetsSection(DataSection):
+    """``items`` is ``null`` unless ``data_state`` is ``ok``; ``[]`` then means none you may see."""
+
+    items: list[ApplicationDeploymentTarget] | None = None
+
+
 class ApplicationDetail(ApplicationSummary):
     """§18.3: "servers, services, targets".
 
-    ``deployment_targets`` has no rows and no endpoint until M5.1, so the field
-    is reported as an explicitly not-configured section rather than as an empty
-    list — "none registered" and "this product cannot tell you yet" are
-    different answers (CLAUDE.md §5).
+    ``deployment_targets`` (M5.1) is the caller's **scoped** list of registered pipelines
+    (``ok``, with ``[]`` meaning none they may see), or ``unavailable`` with a reason when they
+    hold no ``deployment:read`` at all. ``not_configured`` is no longer reported here: the
+    registry exists, and "none registered" and "this product cannot tell you" stay distinct.
     """
 
     health_check_config: HealthCheckConfig
     servers: list[AssociatedServer]
     registered_service_count: int
-    deployment_targets: DataSection
+    deployment_targets: DeploymentTargetsSection
 
 
 class ApplicationCreated(ApplicationDetail):

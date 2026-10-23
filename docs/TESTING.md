@@ -51,7 +51,7 @@ Each is a dedicated, named test, not an emergent property of coverage.
 | OIDC provider | Mock IdP container issuing signed tokens from a test key | Configured non-production IdP tenant |
 | AWS | `moto` or response-level mocks, including throttle/auth-error/timeout paths | **Non-production account only**, documented, manual |
 | Azure | Response-level mocks of ARM and Run Command | Non-production subscription only, manual |
-| Jenkins | Mock HTTP server replaying realistic queue→build responses | Non-production Jenkins with a test pipeline |
+| Jenkins | Mock HTTP server replaying realistic queue→build responses. **As built (M5.1, `OPEN-128`, `OPEN-130`):** `infra/compose/mock-jenkins/` (standard library, a WSGI app). Two layers: the client is driven **in process** against that app on an injected `httpx.WSGITransport` (the checked-address path refuses loopback, so a real loopback server cannot be used), covering trigger, queue→build, status, console, outage, slow, crumb, lost queue item, redirect and the circuit breaker; and `scripts/smoke_jenkins.py` drives it **over the real network path** inside the Compose stack, including the allowlist refusing an unlisted host. Passing against either is not evidence about a real Jenkins | Non-production Jenkins with a test pipeline |
 | Prometheus | **Real container** with seeded series (easier and more faithful than mocking PromQL) | — |
 | Loki | **Real container** with pushed test logs | — |
 | Alertmanager | Real container, plus direct webhook posts for edge cases | — |

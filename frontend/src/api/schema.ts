@@ -718,6 +718,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/deployment-targets': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List registered deployment targets
+     * @description What may be deployed, as far as the caller may see it. Retired targets are never listed.
+     */
+    get: operations['list_targets_api_v1_deployment_targets_get'];
+    put?: never;
+    /** Register a deployment target */
+    post: operations['register_target_api_v1_deployment_targets_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/deployment-targets/{target_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One target, full configuration */
+    get: operations['read_target_api_v1_deployment_targets__target_id__get'];
+    put?: never;
+    post?: never;
+    /** Retire a deployment target */
+    delete: operations['retire_target_api_v1_deployment_targets__target_id__delete'];
+    options?: never;
+    head?: never;
+    /** Edit, enable or disable a deployment target */
+    patch: operations['update_target_api_v1_deployment_targets__target_id__patch'];
+    trace?: never;
+  };
   '/api/v1/integrations/status': {
     parameters: {
       query?: never;
@@ -1657,7 +1697,7 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
-      deployment_targets: components['schemas']['DataSection'];
+      deployment_targets: components['schemas']['DeploymentTargetsSection'];
       /** Description */
       description: string | null;
       health_check_config: components['schemas']['HealthCheckConfig'];
@@ -1692,13 +1732,48 @@ export interface components {
       updated_at: string;
     };
     /**
+     * ApplicationDeploymentTarget
+     * @description One registered pipeline, as an application page shows it: the §21.8 reader shape without the
+     *     application's own id and name, which the page already has. No parameter template.
+     */
+    ApplicationDeploymentTarget: {
+      /** Allowed Ref Patterns */
+      allowed_ref_patterns: string[];
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other';
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Pipeline Reference */
+      pipeline_reference: string;
+      /** Requires Approval */
+      requires_approval: boolean;
+      /** Rollback Supported */
+      rollback_supported: boolean;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'ACTIVE' | 'DISABLED';
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /**
      * ApplicationDetail
      * @description §18.3: "servers, services, targets".
      *
-     *     ``deployment_targets`` has no rows and no endpoint until M5.1, so the field
-     *     is reported as an explicitly not-configured section rather than as an empty
-     *     list — "none registered" and "this product cannot tell you yet" are
-     *     different answers (CLAUDE.md §5).
+     *     ``deployment_targets`` (M5.1) is the caller's **scoped** list of registered pipelines
+     *     (``ok``, with ``[]`` meaning none they may see), or ``unavailable`` with a reason when they
+     *     hold no ``deployment:read`` at all. ``not_configured`` is no longer reported here: the
+     *     registry exists, and "none registered" and "this product cannot tell you" stay distinct.
      */
     ApplicationDetail: {
       /**
@@ -1706,7 +1781,7 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
-      deployment_targets: components['schemas']['DataSection'];
+      deployment_targets: components['schemas']['DeploymentTargetsSection'];
       /** Description */
       description: string | null;
       health_check_config: components['schemas']['HealthCheckConfig'];
@@ -2349,29 +2424,6 @@ export interface components {
       utilisation: components['schemas']['UtilisationSection'];
     };
     /**
-     * DataSection
-     * @description The §4 partial-data envelope, for a section with no value to give.
-     *
-     *     ``value`` is absent rather than ``null``-and-meaningless: §4 rule 2 says
-     *     ``unavailable`` and ``stale`` never carry substitute values, and the
-     *     subclasses below spell out what the missing value *would* have been.
-     */
-    DataSection: {
-      /** Collected At */
-      collected_at?: string | null;
-      /**
-       * Data State
-       * @enum {string}
-       */
-      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
-      /** Source */
-      source?: string | null;
-      /** Stale After Seconds */
-      stale_after_seconds?: number | null;
-      /** Unavailable Reason */
-      unavailable_reason?: string | null;
-    };
-    /**
      * DecisionRequest
      * @description §22.3 / §22.4. Optional on approve, **required on reject** (checked in the service).
      */
@@ -2455,6 +2507,27 @@ export interface components {
        * @enum {string}
        */
       status: 'PENDING' | 'SENT' | 'FAILED' | 'ABANDONED';
+    };
+    /**
+     * DeploymentTargetsSection
+     * @description ``items`` is ``null`` unless ``data_state`` is ``ok``; ``[]`` then means none you may see.
+     */
+    DeploymentTargetsSection: {
+      /** Collected At */
+      collected_at?: string | null;
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
+      /** Items */
+      items?: components['schemas']['ApplicationDeploymentTarget'][] | null;
+      /** Source */
+      source?: string | null;
+      /** Stale After Seconds */
+      stale_after_seconds?: number | null;
+      /** Unavailable Reason */
+      unavailable_reason?: string | null;
     };
     /** ExportAccepted */
     ExportAccepted: {
@@ -2808,6 +2881,19 @@ export interface components {
     IntegrationStatusList: {
       /** Integrations */
       integrations: components['schemas']['IntegrationStatus'][];
+    };
+    /**
+     * JenkinsConfiguration
+     * @description A fact about configuration, **not a probe**: §26.1 is the live check.
+     */
+    JenkinsConfiguration: {
+      /** Demo Mode */
+      demo_mode: boolean;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'not_configured' | 'configured';
     };
     /**
      * Latency
@@ -3324,6 +3410,17 @@ export interface components {
       action: 'start' | 'stop' | 'restart';
       /** Reason */
       reason?: string | null;
+    };
+    /** ParameterTemplate */
+    ParameterTemplate: {
+      /** Fixed */
+      fixed?: {
+        [key: string]: string;
+      };
+      /** Slots */
+      slots?: {
+        [key: string]: 'ref' | 'deployment_id' | 'environment' | 'requested_by';
+      };
     };
     /** PermissionEntry */
     PermissionEntry: {
@@ -4493,6 +4590,153 @@ export interface components {
       /** Task Id */
       task_id: string;
     };
+    /** TargetCreate */
+    TargetCreate: {
+      /** Allowed Ref Patterns */
+      allowed_ref_patterns?: string[];
+      /**
+       * Application Id
+       * Format: uuid
+       */
+      application_id: string;
+      /** Approval Policy Id */
+      approval_policy_id?: string | null;
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other';
+      /** Health Check Config */
+      health_check_config?: {
+        [key: string]: unknown;
+      };
+      parameter_template?: components['schemas']['ParameterTemplate'];
+      /** Pipeline Reference */
+      pipeline_reference: string;
+      /** Rollback Pipeline Reference */
+      rollback_pipeline_reference?: string | null;
+      /**
+       * Rollback Supported
+       * @default false
+       */
+      rollback_supported: boolean;
+    };
+    /** TargetCreated */
+    TargetCreated: {
+      /** Allowed Ref Patterns */
+      allowed_ref_patterns: string[];
+      /**
+       * Application Id
+       * Format: uuid
+       */
+      application_id: string;
+      /** Application Name */
+      application_name: string;
+      /** Approval Policy Id */
+      approval_policy_id: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other';
+      /** Health Check Config */
+      health_check_config: {
+        [key: string]: unknown;
+      };
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Idempotent Replay
+       * @default false
+       */
+      idempotent_replay: boolean;
+      parameter_template: components['schemas']['ParameterTemplate'];
+      /** Pipeline Reference */
+      pipeline_reference: string;
+      /** Requires Approval */
+      requires_approval: boolean;
+      /** Rollback Pipeline Reference */
+      rollback_pipeline_reference: string | null;
+      /** Rollback Supported */
+      rollback_supported: boolean;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'ACTIVE' | 'DISABLED';
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** TargetDetail */
+    TargetDetail: {
+      /** Allowed Ref Patterns */
+      allowed_ref_patterns: string[];
+      /**
+       * Application Id
+       * Format: uuid
+       */
+      application_id: string;
+      /** Application Name */
+      application_name: string;
+      /** Approval Policy Id */
+      approval_policy_id: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other';
+      /** Health Check Config */
+      health_check_config: {
+        [key: string]: unknown;
+      };
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      parameter_template: components['schemas']['ParameterTemplate'];
+      /** Pipeline Reference */
+      pipeline_reference: string;
+      /** Requires Approval */
+      requires_approval: boolean;
+      /** Rollback Pipeline Reference */
+      rollback_pipeline_reference: string | null;
+      /** Rollback Supported */
+      rollback_supported: boolean;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'ACTIVE' | 'DISABLED';
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** TargetList */
+    TargetList: {
+      /** Items */
+      items: components['schemas']['TargetSummary'][];
+      jenkins: components['schemas']['JenkinsConfiguration'];
+      page: components['schemas']['CursorPage'];
+    };
     /**
      * TargetRef
      * @description The row an alert is about, **as found by lookup** (``OPEN-45``), never as labelled.
@@ -4525,6 +4769,64 @@ export interface components {
       observed_at: string | null;
       /** State */
       state: string;
+    };
+    /** TargetSummary */
+    TargetSummary: {
+      /** Allowed Ref Patterns */
+      allowed_ref_patterns: string[];
+      /**
+       * Application Id
+       * Format: uuid
+       */
+      application_id: string;
+      /** Application Name */
+      application_name: string;
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other';
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Pipeline Reference */
+      pipeline_reference: string;
+      /** Requires Approval */
+      requires_approval: boolean;
+      /** Rollback Supported */
+      rollback_supported: boolean;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'ACTIVE' | 'DISABLED';
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /**
+     * TargetUpdate
+     * @description Only these fields can change. ``application_id``, ``environment`` and
+     *     ``health_check_config`` are absent, so ``extra="forbid"`` refuses them.
+     */
+    TargetUpdate: {
+      /** Allowed Ref Patterns */
+      allowed_ref_patterns?: string[] | null;
+      /** Approval Policy Id */
+      approval_policy_id?: string | null;
+      parameter_template?: components['schemas']['ParameterTemplate'] | null;
+      /** Pipeline Reference */
+      pipeline_reference?: string | null;
+      /** Rollback Pipeline Reference */
+      rollback_pipeline_reference?: string | null;
+      /** Rollback Supported */
+      rollback_supported?: boolean | null;
+      /** Status */
+      status?: ('ACTIVE' | 'DISABLED') | null;
     };
     /** TargetView */
     TargetView: {
@@ -6093,6 +6395,177 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['DashboardSummary'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_targets_api_v1_deployment_targets_get: {
+    parameters: {
+      query?: {
+        application_id?: string | null;
+        environment?: ('development' | 'staging' | 'production' | 'other')[] | null;
+        status?: ('ACTIVE' | 'DISABLED')[] | null;
+        limit?: number;
+        cursor?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TargetList'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  register_target_api_v1_deployment_targets_post: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Client-generated key, unique per logical intent (§7). */
+        'Idempotency-Key': string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['TargetCreate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TargetCreated'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  read_target_api_v1_deployment_targets__target_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Deployment target identifier */
+        target_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TargetDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  retire_target_api_v1_deployment_targets__target_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Deployment target identifier */
+        target_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_target_api_v1_deployment_targets__target_id__patch: {
+    parameters: {
+      query?: never;
+      header?: {
+        'If-Unmodified-Since'?: string | null;
+      };
+      path: {
+        /** @description Deployment target identifier */
+        target_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['TargetUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['TargetDetail'];
         };
       };
       /** @description Validation Error */

@@ -23,6 +23,7 @@ EXPECTED_TABLES = {
     "audit_events",
     "audit_exports",
     "cloud_accounts",
+    "deployment_targets",
     "notification_channels",
     "notification_deliveries",
     "operations",
@@ -203,6 +204,7 @@ def test_updated_at_triggers_exist_for_every_timestamped_table(
             "services",
             "service_action_policies",
             "approval_policies",
+            "deployment_targets",
         )
     }
     assert expected <= triggers
@@ -308,12 +310,38 @@ def test_downgrading_past_0013_refuses_while_an_export_is_ready(
             command.downgrade(alembic_config, "0012")
         with rebuilt.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert revision == "0013"
+        # The refusal rolled the whole command back, 0014's step included (it ran first).
+        assert revision == "0014"
         assert "audit_exports" in inspect(rebuilt).get_table_names()
+        assert "deployment_targets" in inspect(rebuilt).get_table_names()
         with rebuilt.begin() as connection:  # once nothing is waiting, the downgrade is clean
             connection.execute(text("DELETE FROM audit_exports"))
         command.downgrade(alembic_config, "0012")
         assert "audit_exports" not in inspect(rebuilt).get_table_names()
+    finally:
+        _drop_everything(rebuilt)
+        command.upgrade(alembic_config, "head")
+
+
+def test_downgrading_past_0014_refuses_while_a_target_is_registered(
+    rebuilt: Engine, alembic_config: Config
+) -> None:
+    """A registered, un-retired target is configuration somebody wrote."""
+    from tests.integration.test_deployment_targets_schema import a_target
+
+    with rebuilt.begin() as connection:
+        a_target(connection)
+    try:
+        with pytest.raises(RuntimeError, match="registered and not retired"):
+            command.downgrade(alembic_config, "0013")
+        with rebuilt.connect() as connection:
+            revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert revision == "0014"
+        assert "deployment_targets" in inspect(rebuilt).get_table_names()
+        with rebuilt.begin() as connection:  # once it is retired, the downgrade is clean
+            connection.execute(text("UPDATE deployment_targets SET deleted_at = now()"))
+        command.downgrade(alembic_config, "0013")
+        assert "deployment_targets" not in inspect(rebuilt).get_table_names()
     finally:
         _drop_everything(rebuilt)
         command.upgrade(alembic_config, "head")

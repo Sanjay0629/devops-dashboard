@@ -51,6 +51,8 @@ export const PERMISSIONS = {
   auditRead: 'audit:read',
   /** See the approver queue and decide requests (§22). Scope is checked per request. */
   operationApprove: 'operation:approve',
+  /** Read registered deployment targets (§21.8). Scope is checked by the backend, per target. */
+  deploymentRead: 'deployment:read',
   /** Create, edit and delete approval policies (§25.11 – §25.14). Administrator only. */
   adminPolicies: 'admin:policies',
 } as const;
