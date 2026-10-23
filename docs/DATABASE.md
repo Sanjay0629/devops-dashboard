@@ -375,6 +375,7 @@ Policies are seeded with a conservative default and edited only by Administrator
 - `CHECK (rollback_supported = (rollback_pipeline_reference IS NOT NULL))` † — the pair travels together.
 - `CHECK (jsonb_typeof(parameter_template) = 'object')` † and `CHECK (cardinality(allowed_ref_patterns) <= 10)` †.
 - `parameter_template` has the shape `{"fixed": {name: string}, "slots": {name: source}}` with `source` in `ref | deployment_id | environment | requested_by`; **the shape is enforced at the API, not in SQL** (it is an application concern, as `scope_definition` is).
+- `idempotency_key` (`varchar(64)`, null) and `created_by` (`uuid`, FK `users` RESTRICT, null) †, with a partial unique index on the pair where both are non-null: §21.10's `Idempotency-Key` lives on the row, as on `applications` (`OPEN-126`).
 - `health_check_config` holds only `{}` until M5.5 defines it; the API refuses anything else.
 - **The Jenkins base URL and credential are not columns.** One Jenkins per deployment is configured (`DCP_JENKINS_*`); a target holds only a job path.
 

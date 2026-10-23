@@ -95,9 +95,8 @@ def ref_permitted(patterns: list[str] | tuple[str, ...], ref: object) -> bool:
 
     Fails closed: an invalid ref, or a stored pattern that does not compile, never matches.
     """
-    if not is_valid_ref(ref):
+    if not isinstance(ref, str) or not is_valid_ref(ref):
         return False
-    assert isinstance(ref, str)
     for pattern in patterns:
         compiled = _compiled(pattern)
         if compiled is not None and compiled.fullmatch(ref) is not None:

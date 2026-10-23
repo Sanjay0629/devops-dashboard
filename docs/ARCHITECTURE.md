@@ -507,6 +507,8 @@ Two notes on this diagram. `TIMED_OUT_as_FAILED` is a diagram label, not a statu
 5. **Build logs** are streamed through the backend with the same redaction pass as application logs, gated on deployment-read permission for that environment.
 6. **Rollback** is modelled as a *new* deployment with `kind=rollback` referencing the prior deployment, only where the registered target declares rollback support (PRD §4.10 "when the deployment system provides one"). DCP does not invent a rollback mechanism.
 
+**As built in M5.1 (`OPEN-118` – `OPEN-131`, [`M5.1_PLAN.md`](M5.1_PLAN.md)).** The registry (`deployment_targets`, migration `0014`) and the Jenkins client (`app/deployments/jenkins.py`) exist; **no deployment can be requested** (the `deployments` table and §21.2 are M5.2) and the client has been exercised **only against a mock**. The client is synchronous, goes through the checked-address path on every call (allowlist re-checked, no redirect, no proxy), retries reads twice and **never retries a trigger**, tells *request never left / refused* from *may have acted* (`trigger_outcome_unknown`: reconcile, do not re-trigger), keeps its own circuit breaker, and returns raw console text (redaction is M5.3's). A queue item that answers `404` is `gone`, not an error. Jenkins itself is configuration (`DCP_JENKINS_*`), one instance per deployment; a target holds only a job path.
+
 ---
 
 ## 9. Authentication and authorization flow

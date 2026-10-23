@@ -393,7 +393,7 @@ class JenkinsClient:
                 delay = retryable.retry_after
                 if delay is None:
                     delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)]
-                self._sleep(delay + random.uniform(0, 0.1))  # noqa: S311 -- jitter, not a secret
+                self._sleep(delay + random.uniform(0, 0.1))  # noqa: S311  # nosec B311
                 attempt += 1
 
     def _attempt(
