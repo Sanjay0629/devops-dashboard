@@ -619,7 +619,7 @@ Errors: `403 forbidden` (permission or action not allowlisted — audited `AUTHZ
 |---|---|---|---|---|
 | 18.1 | GET | `/api/v1/applications` | List applications | `server:read` |
 | 18.2 | POST | `/api/v1/applications` | Register an application | `admin:integrations` |
-| 18.3 | GET | `/api/v1/applications/{application_id}` | Detail: servers, services, targets | `server:read` |
+| 18.3 | GET | `/api/v1/applications/{application_id}` | Detail: servers, services, targets (**M5.1: `deployment_targets` is the caller's scoped list in the §21.8 reader shape, `data_state: available`; an empty list means "none you may see", distinct from `not_configured`, which this field no longer reports**) | `server:read` |
 | 18.4 | PATCH | `/api/v1/applications/{application_id}` | Edit metadata | `admin:integrations` |
 | 18.5 | DELETE | `/api/v1/applications/{application_id}` | Archive (soft delete) | `admin:integrations` |
 | 18.6 | GET | `/api/v1/applications/{application_id}/health` | Health per environment | `server:read` |
@@ -769,6 +769,65 @@ Every line passes through redaction. Errors: `403`, `422 query_limit_exceeded`, 
 | 21.6 | POST | `/api/v1/deployments/{deployment_id}/cancel` | Cancel | requester or `deployment:approve` |
 | 21.7 | POST | `/api/v1/deployments/{deployment_id}/rollback` | Roll back, where supported | `deployment:create` on the environment |
 | 21.8 | GET | `/api/v1/deployment-targets` | List registered targets (what may be deployed) | `deployment:read` |
+| 21.9 | GET | `/api/v1/deployment-targets/{target_id}` | One target with its full configuration | `admin:integrations` |
+| 21.10 | POST | `/api/v1/deployment-targets` | Register a target | `admin:integrations` |
+| 21.11 | PATCH | `/api/v1/deployment-targets/{target_id}` | Edit, enable or disable a target | `admin:integrations` |
+| 21.12 | DELETE | `/api/v1/deployment-targets/{target_id}` | Retire a target | `admin:integrations` |
+
+**Implementation status: §21.8 – §21.12 are built in M5.1 (`OPEN-118` – `OPEN-131`, [`M5.1_PLAN.md`](M5.1_PLAN.md)); §21.1 – §21.7 are M5.2 – M5.5.** There is no `deployments` table yet, so nothing can be requested: **`resolve_target(application_id, environment)` exists, with tests, and raises `422 not_registered`; the HTTP route that calls it is §21.2.**
+
+**Deployment targets (M5.1).** A target is a *registered pipeline*. Jenkins itself (base URL, user, token reference) is **deployment configuration** (`DCP_JENKINS_*`, `OPEN-119`), never a field here and never a request value. **No route in this section accepts a URL, a job name, a node label or a build parameter in a body or a query, other than the administrator-written `pipeline_reference` and `parameter_template` of §21.10 / §21.11, which are validated against closed grammars and never concatenated into a URL as written.**
+
+**21.8** Query: `application_id`, `environment` (repeatable), `status` (`ACTIVE` default, or `DISABLED`), `limit` (1 – 200, default 50), `cursor`. An unknown parameter is `422 unknown_field`. Scope is applied **in the SQL**: a target is returned when the caller holds `deployment:read` over the target's `environment` **and** its `application` (the matcher's two dimensions that a target has); one outside reach is absent, not forbidden. Retired targets are never listed. **Reader shape** — deliberately without the parameter template or the approval-policy id:
+
+```json
+{
+  "items": [
+    {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "application_id": "00000000-0000-0000-0000-000000000000",
+      "application_name": "Placeholder App",
+      "environment": "staging",
+      "pipeline_reference": "placeholder/job/path",
+      "allowed_ref_patterns": ["^main$", "^release/.+$"],
+      "requires_approval": false,
+      "rollback_supported": false,
+      "status": "ACTIVE",
+      "updated_at": "2026-01-15T10:00:00Z"
+    }
+  ],
+  "next_cursor": null,
+  "jenkins": { "status": "not_configured", "demo_mode": false }
+}
+```
+
+`requires_approval` is `approval_policy_id IS NOT NULL`. `jenkins.status` is `not_configured | configured`, **a fact about configuration, not a probe** (the probe is §26.1): a page can say "these targets cannot be deployed, Jenkins is not configured" without a live call on a list endpoint.
+
+**21.9** The reader shape plus `approval_policy_id`, `parameter_template` (`{"fixed": {name: string}, "slots": {name: "ref" | "deployment_id" | "environment" | "requested_by"}}`), `health_check_config` (`{}` until M5.5), `rollback_pipeline_reference`, `created_at`. `404` for a missing or retired target.
+
+**21.10** `Idempotency-Key` required (the §18 pattern; a replay returns the stored result with `idempotent_replay: true`, a key reused with a different body is `409 conflict`). `201`. Body (`extra="forbid"`):
+
+```json
+{
+  "application_id": "00000000-0000-0000-0000-000000000000",
+  "environment": "staging",
+  "pipeline_reference": "placeholder/job/path",
+  "parameter_template": { "fixed": { "TARGET": "staging" }, "slots": { "GIT_REF": "ref", "DCP_DEPLOYMENT_ID": "deployment_id" } },
+  "allowed_ref_patterns": ["^main$"],
+  "approval_policy_id": null,
+  "health_check_config": {},
+  "rollback_supported": false,
+  "rollback_pipeline_reference": null
+}
+```
+
+Validation, each a `422` naming the rule and never echoing the value: the application exists and is not retired (`404` otherwise); `pipeline_reference` and `rollback_pipeline_reference` match the job-path grammar (`OPEN-120`); the template has the shape above, parameter names match `[A-Za-z_][A-Za-z0-9_]{0,63}`, at most 20 in all, none twice, `fixed` values are strings of at most 256 characters that redaction would not alter, and there is exactly one `ref` slot when `allowed_ref_patterns` is non-empty and none otherwise (`OPEN-121`); each pattern is at most 200 ASCII characters, at most 10 in all, compiles, and uses no look-around, back-reference, inline flag or quantified group (`OPEN-122`); `approval_policy_id` names a policy with `applies_to = DEPLOYMENT` and the same environment (`422 not_permitted`), and **is required for `production`** (`422 approval_policy_required`) (`OPEN-123`); `health_check_config` is `{}` (`422 not_permitted` otherwise, `OPEN-124`); `rollback_supported` is true exactly when a rollback reference is given. `409 duplicate_resource` when a non-retired target already exists for the pair. Audit `DEPLOYMENT_TARGET_REGISTERED` (target type `deployment_target`; metadata is the application id, the environment and the **names** of the fields set, never the reference or the template).
+
+**21.11** `If-Unmodified-Since` required (`428` without it, `412`/`409` on a stale one as for servers). Body: any of `pipeline_reference`, `parameter_template`, `allowed_ref_patterns`, `approval_policy_id`, `rollback_supported`, `rollback_pipeline_reference`, `status` (`ACTIVE` | `DISABLED`). **`application_id`, `environment` and `health_check_config` are not editable** (`422 unknown_field`). The merged result is validated as a whole by the 21.10 rules. Audit `DEPLOYMENT_TARGET_CHANGED` with the changed field **names** only.
+
+**21.12** `204`. Soft delete: `deleted_at` set and `status → DISABLED`; the pair is free again. History is retained. **The refusal while a non-terminal deployment exists (`409 invalid_state_transition`) arrives with the `deployments` table in M5.2**; M5.1 has none to count. Audit `DEPLOYMENT_TARGET_RETIRED`.
+
+All of 21.10 – 21.12 are blocked in read-only mode (`423`). Nothing in §21.8 – §21.12 triggers a Jenkins call; the only Jenkins traffic an endpoint causes in M5.1 is §26.1's probe.
 
 **21.2** `Idempotency-Key` required.
 
@@ -1061,6 +1120,8 @@ Response: `{ "read_only_mode": true }`. `reason` is **required when enabling** (
 1. **One `Cloud accounts` row, not one row per account.** M4.1 adds the adapter layer but no adapter that can probe an account (only the demonstration adapter exists), so N rows would carry one fact N times, and enumerating them would mean a database session on an endpoint that otherwise needs none. It becomes per-account when there is a per-account answer: §26.5 (`OPEN-64`). Its reason text says whether demonstration mode is on or that no adapter is implemented for a provider yet.
 2. **`degraded` is never emitted.** Nothing persisted today can decide it honestly — a successful probe resets the circuit breaker's consecutive-failure count, so a flap verdict built on that count is always false. The row carries `last_success_at`, `last_error_at` and the previous failure's reason instead, so a caller can see that an `ok` Prometheus failed a minute ago. The value stays in the enum for the integrations that will be able to answer it.
 
+**Jenkins (M5.1, `OPEN-127`).** The Jenkins row is no longer a placeholder: `not_configured` when `DCP_JENKINS_URL` is unset; otherwise a **live probe at request time** (an authenticated `GET /api/json?tree=mode`, through the checked-address path and the Jenkins circuit breaker): `ok`, or `unavailable` with `last_error_message` a closed reason (`provider_unreachable`, `provider_timeout`, `provider_error`, `circuit_open`, `auth_failed`) and never Jenkins's words. `circuit_state` is reported; `demo_mode` is true when the configured Jenkins is the mock.
+
 `circuit_state` is **per-process** (`PROGRESS.md` issue 58): with more than one backend replica it describes whichever replica answered.
 
 **26.3** Body:
@@ -1154,7 +1215,7 @@ Performance figures are PRD §10 design budgets, explicitly **not** measured res
 |---|---|---|
 | ~~OPEN-02~~ | Are applications per-environment? Changes 18.x response shapes | **RESOLVED 2026-10-14: environment-agnostic** (AD-12 confirmed). The §18 shapes below stand as written |
 | OPEN-09 | Windows service control endpoints | Not provided; `UNSUPPORTED` reported |
-| OPEN-18 | Multiple deployment targets per application+environment | One per pair |
+| ~~OPEN-18~~ | Multiple deployment targets per application+environment | **RESOLVED for M5.1: one per pair** (ARCHITECTURE §19) |
 | OPEN-19 | Live progress via WebSocket/SSE instead of polling | Polling with `poll_after_seconds` |
 | ~~OPEN-20~~ | Should `GET /logs/query` exist as a shareable-link variant? | **RESOLVED 2026-10-17 (before M3.1): no — `POST` only**, to keep filters out of access logs and history. A shareable link, if ever wanted, would carry a server-stored saved-query id, never the filter |
 | OPEN-21 | Bulk service operations | Out of scope for v1 |

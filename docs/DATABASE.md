@@ -367,7 +367,16 @@ Policies are seeded with a conservative default and edited only by Administrator
 | `deleted_at` | `timestamptz` | NULL | |
 | `created_at` / `updated_at` | `timestamptz` | NOT NULL | |
 
-`UNIQUE (application_id, environment) WHERE deleted_at IS NULL` — one registered target per application per environment for v1.
+`UNIQUE (application_id, environment) WHERE deleted_at IS NULL` — one registered target per application per environment for v1 (`OPEN-18`, closed).
+
+**Additions in M5.1 (migration `0014`; † = beyond the table above, each from `OPEN-120` – `OPEN-124`, `OPEN-129`):**
+
+- `pipeline_reference` and `rollback_pipeline_reference` carry a `CHECK` that they match the job-path grammar `segment(/segment){0,4}` with `segment = [A-Za-z0-9][A-Za-z0-9._-]{0,63}` †. Application code validates the same pattern; the constraint is what a direct `UPDATE` meets.
+- `CHECK (rollback_supported = (rollback_pipeline_reference IS NOT NULL))` † — the pair travels together.
+- `CHECK (jsonb_typeof(parameter_template) = 'object')` † and `CHECK (cardinality(allowed_ref_patterns) <= 10)` †.
+- `parameter_template` has the shape `{"fixed": {name: string}, "slots": {name: source}}` with `source` in `ref | deployment_id | environment | requested_by`; **the shape is enforced at the API, not in SQL** (it is an application concern, as `scope_definition` is).
+- `health_check_config` holds only `{}` until M5.5 defines it; the API refuses anything else.
+- **The Jenkins base URL and credential are not columns.** One Jenkins per deployment is configured (`DCP_JENKINS_*`); a target holds only a job path.
 
 ### 5.2 `deployments`
 
@@ -803,7 +812,7 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 | ~~OPEN-13~~ | Notification channel config in DB or environment | **RESOLVED 2026-10-17: DB (tables above), M3.4**; the secret is a reference into the secret store, never a column value |
 | OPEN-15 | Is audit export to an independent store required for v1? | Phase 6, before production rollout |
 | OPEN-17 | Do service state transitions need a history table, or is Prometheus sufficient? | Prometheus only; PRD §4.5 says "where collection is supported" |
-| OPEN-18 | Multiple `deployment_targets` per application+environment (e.g. canary vs full) | One per pair for v1 |
+| ~~OPEN-18~~ | Multiple `deployment_targets` per application+environment (e.g. canary vs full) | **RESOLVED for M5.1: one per pair** (ARCHITECTURE §19) |
 | OPEN-26 | **New in M1.4.** How is a user *pre-created* ([API_CONTRACTS.md §25.2](API_CONTRACTS.md#25-user-and-role-administration)) when `identity_provider_subject` is `NOT NULL`? Keying the row on email instead would need a nullable subject **and** an adoption-at-first-login rule, which is the identity merge assumption `A-05` deliberately refuses. | The administrator supplies the subject from the IdP; the issuer defaults to the configured one. Implemented that way in M1.4 |
 
 ---
@@ -826,6 +835,8 @@ Every addition traces to a PRD requirement that the listed columns cannot satisf
 
 **Created in M4.6** (migration `0013`): `audit_exports` ([§8.1](#81-audit_exports--added-entity-m46)); the schema is at revision `0013`.
 
-**Not yet created** — each arrives with the milestone that writes to it: `deployment_targets`, `deployments` (M5). `operations` (M4.2, migration `0010`) and `approvals` (M4.5, migration `0012`) now exist.
+**Created in M5.1** (migration `0014`): `deployment_targets` ([§5.1](#51-deployment_targets--added-entity)); the schema is at revision `0014`.
+
+**Not yet created** — arrives with the milestone that writes to it: `deployments` (M5.2). `operations` (M4.2, migration `0010`) and `approvals` (M4.5, migration `0012`) now exist.
 
 `OPEN-02` is **resolved** (2026-10-14): applications are environment-agnostic, confirming `AD-12`. `applications` was created without an `environment` column and stays that way, so the decision cost nothing to settle.
