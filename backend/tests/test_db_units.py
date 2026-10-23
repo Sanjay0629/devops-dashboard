@@ -109,6 +109,8 @@ class TestModelMetadata:
             "Approval",
             # M4.6: where a bounded audit export waits to be downloaded once (OPEN-112).
             "AuditExport",
+            # M5.1: the registered pipelines a deployment may name (OPEN-18, OPEN-118).
+            "DeploymentTarget",
             # M1.4: the durable read-only switch (docs/SECURITY.md §27).
             "SystemSetting",
         }
