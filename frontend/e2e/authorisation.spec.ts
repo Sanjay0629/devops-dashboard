@@ -67,9 +67,14 @@ test.describe('as a Viewer', () => {
     await expect(page.getByRole('table')).toBeVisible();
     await expect(page.getByRole('link', { name: 'Register server' })).toHaveCount(0);
 
-    const { id: serverId } = await aSeededServer(page.request);
+    const { id: serverId, display_name: serverName } = await aSeededServer(page.request);
     await page.goto(`/servers/${serverId}`);
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    // The server's own heading, by name. `getByRole('heading', { level: 1 })` alone is ambiguous:
+    // the shell renders an <h1> too, so it matched one element while the page was still loading
+    // (passing, having waited for nothing) and two once it had loaded (a strict-mode failure).
+    // Waiting for *this* heading is what makes the "no write control" assertions below mean
+    // something: they are only true of a page that has finished rendering.
+    await expect(page.getByRole('heading', { level: 1, name: serverName })).toBeVisible();
     // Retire, Edit and the association controls are all `server:write`.
     await expect(page.getByRole('button', { name: 'Retire' })).toHaveCount(0);
     await expect(page.getByRole('link', { name: 'Edit' })).toHaveCount(0);
