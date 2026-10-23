@@ -250,3 +250,93 @@ async def test_a_filter_cannot_widen_scope(
     asked = await call(client, "GET", SERVERS, params={"q": marker, "environment": "production"})
     assert asked.status_code == 200, asked.text
     assert asked.json()["items"] == []
+
+
+APP_B = "77777777-7777-7777-7777-777777777777"
+
+
+@pytest.mark.parametrize("scope", SCOPES, ids=[str(scope) for scope in SCOPES])
+@pytest.mark.parametrize("effect", ["ALLOW", "DENY"])
+def test_the_sql_filter_for_deployment_targets_selects_exactly_what_the_matcher_allows(
+    migrated: Engine, database_url: str, scope: dict[str, Any], effect: str
+) -> None:
+    """The same rule-7 cross-check for a row kind with an environment *and* an application.
+
+    A target has no account and no server, so a grant naming one reaches none (A-09); it does
+    have an application, so one naming an application reaches that application's targets only.
+    """
+    from app.authz.queries import readable_deployment_targets
+    from app.deployments.models import DeploymentTarget
+
+    pairs = [
+        ("staging", APP_A),
+        ("production", APP_A),
+        ("development", APP_B),
+        ("staging", APP_B),
+        ("other", APP_A),
+    ]
+    grants = (
+        [Grant("deployment", "read", effect, scope)]
+        if effect == "ALLOW"
+        else [
+            Grant("deployment", "read", "ALLOW", {"environment": ["*"]}),
+            Grant("deployment", "read", "DENY", scope),
+        ]
+    )
+    rows = [
+        DeploymentTarget(
+            id=uuid.uuid4(),
+            application_id=uuid.UUID(application),
+            environment=environment,
+            pipeline_reference="team/xcheck",
+            parameter_template={},
+            allowed_ref_patterns=[],
+            health_check_config={},
+            rollback_supported=False,
+            status="ACTIVE",
+        )
+        for environment, application in pairs
+    ]
+    expected = {
+        row.id
+        for row in rows
+        if permits(
+            grants,
+            "deployment",
+            "read",
+            Target(environment=row.environment, application=str(row.application_id)),
+        ).allowed
+    }
+
+    engine = create_engine(database_url, future=True, connect_args={"connect_timeout": 10})
+    try:
+        with Session(engine, future=True) as session:
+            for application in (APP_A, APP_B):
+                session.execute(
+                    text(
+                        "INSERT INTO applications (id, name, slug) VALUES (:i, :n, :s)"
+                        " ON CONFLICT (id) DO NOTHING"
+                    ),
+                    {
+                        "i": uuid.UUID(application),
+                        "n": f"xcheck {application}",
+                        "s": f"x{application[:8]}",
+                    },
+                )
+            session.add_all(rows)
+            session.flush()
+            selected = set(
+                session.execute(
+                    select(DeploymentTarget.id).where(
+                        DeploymentTarget.id.in_([row.id for row in rows]),
+                        readable_deployment_targets(grants, "deployment", "read"),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            session.rollback()  # a comparison, not a fixture
+    finally:
+        engine.dispose()
+
+    assert selected == expected, f"scope={scope} effect={effect}"

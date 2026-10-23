@@ -264,3 +264,29 @@ def test_a_malformed_stored_template_is_refused_at_render_time() -> None:
             environment="staging",
             requested_by=uuid.uuid4(),
         )
+
+
+def test_every_canary_line_in_the_corpus_is_refused_as_a_fixed_value() -> None:
+    """The project's canary corpus (the lines redaction exists for) cannot be stored in a template.
+
+    The template is returned to administrators and sits in the database, so a secret has no
+    business there; this plants every canary shape the project knows and expects each refused.
+    """
+    import json
+    from pathlib import Path
+
+    corpus = json.loads(
+        (Path(__file__).parents[3] / "infra/compose/sample-logs/canaries.json").read_text("utf-8")
+    )
+    refused = 0
+    for canary in corpus:
+        canary_lines = canary.get("lines") or [canary["line"]]
+        if len(canary_lines) > 1:
+            # A multi-line PEM key is redacted only as a block, line by line it is not
+            # (PROGRESS issue 92, a known and pinned limitation).
+            continue
+        planted = canary_lines[0].replace("<<SECRET>>", canary["secret"])
+        with pytest.raises(ValidationError):
+            ParameterTemplate.model_validate({"fixed": {"NOTE": planted}})
+        refused += 1
+    assert refused >= 7, "the corpus should supply several single-line canaries"

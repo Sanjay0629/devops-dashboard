@@ -38,6 +38,7 @@ from app.core.middleware import CorrelationIdMiddleware, SecurityHeadersMiddlewa
 from app.core.redis import dispose_redis
 from app.dashboard.router import router as dashboard_router
 from app.db.session import dispose_engine
+from app.deployments.router import router as deployments_router
 from app.health.router import router as health_router
 from app.inventory.router_applications import router as applications_router
 from app.inventory.router_servers import router as servers_router
@@ -135,6 +136,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(audit_router, prefix=settings.api_base_path)
     app.include_router(audit_export_router, prefix=settings.api_base_path)
     app.include_router(approvals_router, prefix=settings.api_base_path)
+    app.include_router(deployments_router, prefix=settings.api_base_path)
     app.include_router(approval_policies_router, prefix=settings.api_base_path)
     # §20.5 (M3.3). Mounted even with no secret configured: it answers 503
     # not_configured rather than disappearing.

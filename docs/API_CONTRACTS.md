@@ -778,7 +778,7 @@ Every line passes through redaction. Errors: `403`, `422 query_limit_exceeded`, 
 
 **Deployment targets (M5.1).** A target is a *registered pipeline*. Jenkins itself (base URL, user, token reference) is **deployment configuration** (`DCP_JENKINS_*`, `OPEN-119`), never a field here and never a request value. **No route in this section accepts a URL, a job name, a node label or a build parameter in a body or a query, other than the administrator-written `pipeline_reference` and `parameter_template` of §21.10 / §21.11, which are validated against closed grammars and never concatenated into a URL as written.**
 
-**21.8** Query: `application_id`, `environment` (repeatable), `status` (`ACTIVE` default, or `DISABLED`), `limit` (1 – 200, default 50), `cursor`. An unknown parameter is `422 unknown_field`. Scope is applied **in the SQL**: a target is returned when the caller holds `deployment:read` over the target's `environment` **and** its `application` (the matcher's two dimensions that a target has); one outside reach is absent, not forbidden. Retired targets are never listed. **Reader shape** — deliberately without the parameter template or the approval-policy id:
+**21.8** Query: `application_id`, `environment` (repeatable), `status` (repeatable; `ACTIVE` default, or `DISABLED`), `limit` (1 – 200, default 50), `cursor`. Newest first (`created_at`, then id), keyset-paged with the §5 signed cursor. An unknown parameter is `422 unknown_field`. Scope is applied **in the SQL**: a target is returned when the caller holds `deployment:read` over the target's `environment` **and** its `application` (the matcher's two dimensions that a target has); one outside reach is absent, not forbidden. Retired targets are never listed. **Reader shape** — deliberately without the parameter template or the approval-policy id:
 
 ```json
 {
@@ -796,7 +796,7 @@ Every line passes through redaction. Errors: `403`, `422 query_limit_exceeded`, 
       "updated_at": "2026-01-15T10:00:00Z"
     }
   ],
-  "next_cursor": null,
+  "page": { "limit": 50, "next_cursor": null, "has_more": false, "total": null },
   "jenkins": { "status": "not_configured", "demo_mode": false }
 }
 ```
@@ -823,9 +823,11 @@ Every line passes through redaction. Errors: `403`, `422 query_limit_exceeded`, 
 
 Validation, each a `422` naming the rule and never echoing the value: the application exists and is not retired (`404` otherwise); `pipeline_reference` and `rollback_pipeline_reference` match the job-path grammar (`OPEN-120`); the template has the shape above, parameter names match `[A-Za-z_][A-Za-z0-9_]{0,63}`, at most 20 in all, none twice, `fixed` values are strings of at most 256 characters that redaction would not alter, and there is exactly one `ref` slot when `allowed_ref_patterns` is non-empty and none otherwise (`OPEN-121`); each pattern is at most 200 ASCII characters, at most 10 in all, compiles, and uses no look-around, back-reference, inline flag or quantified group (`OPEN-122`); `approval_policy_id` names a policy with `applies_to = DEPLOYMENT` and the same environment (`422 not_permitted`), and **is required for `production`** (`422 approval_policy_required`) (`OPEN-123`); `health_check_config` is `{}` (`422 not_permitted` otherwise, `OPEN-124`); `rollback_supported` is true exactly when a rollback reference is given. `409 duplicate_resource` when a non-retired target already exists for the pair. Audit `DEPLOYMENT_TARGET_REGISTERED` (target type `deployment_target`; metadata is the application id, the environment and the **names** of the fields set, never the reference or the template).
 
-**21.11** `If-Unmodified-Since` required (`428` without it, `412`/`409` on a stale one as for servers). Body: any of `pipeline_reference`, `parameter_template`, `allowed_ref_patterns`, `approval_policy_id`, `rollback_supported`, `rollback_pipeline_reference`, `status` (`ACTIVE` | `DISABLED`). **`application_id`, `environment` and `health_check_config` are not editable** (`422 unknown_field`). The merged result is validated as a whole by the 21.10 rules. Audit `DEPLOYMENT_TARGET_CHANGED` with the changed field **names** only.
+**21.11** `If-Unmodified-Since` optional, **exactly as §14.4**: absent skips the check, malformed is `422`, a row modified after it is `409 conflict` (message "The deployment target was modified after the time given in If-Unmodified-Since."). Body: any of `pipeline_reference`, `parameter_template`, `allowed_ref_patterns`, `approval_policy_id`, `rollback_supported`, `rollback_pipeline_reference`, `status` (`ACTIVE` | `DISABLED`). **`application_id`, `environment` and `health_check_config` are not editable** (`422 unknown_field`). The merged result is validated as a whole by the 21.10 rules. Audit `DEPLOYMENT_TARGET_CHANGED` with the changed field **names** only.
 
 **21.12** `204`. Soft delete: `deleted_at` set and `status → DISABLED`; the pair is free again. History is retained. **The refusal while a non-terminal deployment exists (`409 invalid_state_transition`) arrives with the `deployments` table in M5.2**; M5.1 has none to count. Audit `DEPLOYMENT_TARGET_RETIRED`.
+
+**Archiving an application (§18.5) is refused (`409 invalid_state_transition`) while it has a registered, non-retired deployment target**; retire the targets first. A policy whose environment is `*` is accepted for any environment's target.
 
 All of 21.10 – 21.12 are blocked in read-only mode (`423`). Nothing in §21.8 – §21.12 triggers a Jenkins call; the only Jenkins traffic an endpoint causes in M5.1 is §26.1's probe.
 

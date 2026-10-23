@@ -62,6 +62,7 @@ from app.authz.matcher import (
     covers_every_environment,
     normalise_scope,
 )
+from app.deployments.models import DeploymentTarget
 from app.inventory.models import Server
 from app.operations.models import Operation
 
@@ -80,6 +81,7 @@ class ScopeColumns:
     environment_nullable: bool = False
     cloud_account: QueryableAttribute[Any] | None = None
     server: QueryableAttribute[Any] | None = None
+    application: QueryableAttribute[Any] | None = None
 
 
 SERVER_COLUMNS = ScopeColumns(
@@ -90,6 +92,11 @@ OPERATION_COLUMNS = ScopeColumns(
     environment=Operation.environment, cloud_account=Server.cloud_account_id, server=Server.id
 )
 AUDIT_COLUMNS = ScopeColumns(environment=AuditEvent.environment, environment_nullable=True)
+#: A deployment target (M5.1, ``OPEN-126``) has an environment and an application, and no account
+#: or server: a grant naming a specific account or server reaches no target (A-09).
+DEPLOYMENT_TARGET_COLUMNS = ScopeColumns(
+    environment=DeploymentTarget.environment, application=DeploymentTarget.application_id
+)
 
 
 def _uuids(values: Iterable[str]) -> list[uuid.UUID]:
@@ -148,11 +155,12 @@ def _scope_predicate(
 
     applications = scope.get("application", frozenset())
     if applications and WILDCARD not in applications:
-        # A-09: none of these rows has an `application` dimension, so a grant
-        # constraining one to specific ids reaches nothing. ``["*"]``
-        # constrains nothing and is satisfied -- the M1.5 amendment, see
-        # ``matcher.py``.
-        return false()
+        # A-09: a row with no `application` dimension is reached by no grant that constrains one
+        # to specific ids. ``["*"]`` constrains nothing and is satisfied -- the M1.5 amendment,
+        # see ``matcher.py``. A deployment target (M5.1) does have one.
+        if columns.application is None:
+            return false()
+        conditions.append(columns.application.in_(_uuids(applications)))
 
     return and_(*conditions) if conditions else true()
 
@@ -214,3 +222,10 @@ def readable_operations(
 def readable_audit_events(grants: Sequence[Grant]) -> ColumnElement[bool]:
     """The audit events ``audit:read`` reaches (``OPEN-109``): by environment alone."""
     return _readable(grants, "audit", "read", AUDIT_COLUMNS)
+
+
+def readable_deployment_targets(
+    grants: Sequence[Grant], resource_type: str, action: str
+) -> ColumnElement[bool]:
+    """The deployment targets these grants reach: environment and application (``OPEN-126``)."""
+    return _readable(grants, resource_type, action, DEPLOYMENT_TARGET_COLUMNS)

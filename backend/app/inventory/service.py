@@ -52,6 +52,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError, field_error
 from app.core.logging import get_logger
 from app.db.types import uuid7
+from app.deployments.models import DeploymentTarget
 from app.inventory.models import (
     Application,
     ApplicationServer,
@@ -720,6 +721,21 @@ async def archive_application(db: AsyncSession, application: Application) -> App
     """§18.5 — archive, which is the soft delete for this table."""
     if application.status == "ARCHIVED":
         raise InvalidStateTransitionError("That application is already archived.")
+    # A registered pipeline for an archived application would be a target nobody can reach (M5.1).
+    live_targets = (
+        await db.execute(
+            select(func.count())
+            .select_from(DeploymentTarget)
+            .where(
+                DeploymentTarget.application_id == application.id,
+                DeploymentTarget.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one()
+    if live_targets:
+        raise InvalidStateTransitionError(
+            "That application still has registered deployment targets; retire them first."
+        )
     application.status = "ARCHIVED"
     application.deleted_at = datetime.now(UTC)
     await db.flush()
