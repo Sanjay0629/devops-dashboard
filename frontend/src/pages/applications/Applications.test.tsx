@@ -34,7 +34,7 @@ const DETAIL = {
   ...APPLICATION,
   health_check_config: { checks: [] },
   registered_service_count: 0,
-  deployment_targets: { data_state: 'not_configured', unavailable_reason: 'no_table' },
+  deployment_targets: { data_state: 'ok', source: 'postgresql', items: [] },
   servers: [
     {
       id: 's1',
@@ -156,6 +156,55 @@ describe('ApplicationDetail', () => {
     // (PRD §4.2, CLAUDE.md §5). `description` and `repository_reference` are
     // both null in the fixture.
     expect(screen.getAllByText('Not recorded')).toHaveLength(2);
+  });
+
+  it('lists the registered pipelines, and says when approval is required', async () => {
+    mockOne(200, {
+      ...DETAIL,
+      deployment_targets: {
+        data_state: 'ok',
+        source: 'postgresql',
+        items: [
+          {
+            id: 't1',
+            environment: 'production',
+            pipeline_reference: 'team/checkout-deploy',
+            allowed_ref_patterns: ['^main$'],
+            requires_approval: true,
+            rollback_supported: false,
+            status: 'ACTIVE',
+            updated_at: '2026-10-23T08:00:00Z',
+          },
+        ],
+      },
+    });
+    renderDetail();
+    await screen.findByRole('heading', { name: 'Checkout' });
+    expect(screen.getByText('team/checkout-deploy')).toBeInTheDocument();
+    expect(screen.getByText(/approval required/)).toBeInTheDocument();
+  });
+
+  it('says none are registered, or none the reader may see, which is not "not configured"', async () => {
+    mockOne(200, DETAIL);
+    renderDetail();
+    await screen.findByRole('heading', { name: 'Checkout' });
+    expect(screen.getByText(/or none that you may see/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not configured/)).toBeNull();
+  });
+
+  it('says it cannot tell when the reader holds no deployment permission', async () => {
+    mockOne(200, {
+      ...DETAIL,
+      deployment_targets: {
+        data_state: 'unavailable',
+        source: 'postgresql',
+        unavailable_reason: 'deployment_read_not_permitted',
+        items: null,
+      },
+    });
+    renderDetail();
+    await screen.findByRole('heading', { name: 'Checkout' });
+    expect(screen.getByText(/deployment_read_not_permitted/)).toBeInTheDocument();
   });
 
   it('reports a missing application rather than an empty page', async () => {

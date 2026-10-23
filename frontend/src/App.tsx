@@ -14,6 +14,7 @@ import { OperationHistory, ServerOperations } from '@/pages/operations/Operation
 import { AlertDetail } from '@/pages/alerts/AlertDetail';
 import { AlertList } from '@/pages/alerts/AlertList';
 import { Dashboard } from '@/pages/dashboard/Dashboard';
+import { DeploymentTargets } from '@/pages/deployments/DeploymentTargets';
 import { ApplicationDetail } from '@/pages/applications/ApplicationDetail';
 import { ApplicationList } from '@/pages/applications/ApplicationList';
 import { ServerDetail } from '@/pages/servers/ServerDetail';
@@ -58,6 +59,9 @@ function Navigation(): React.JSX.Element {
     ...(canRender(state, PERMISSIONS.logsReadApplication) ? [{ to: '/logs', label: 'Logs' }] : []),
     ...(canRender(state, PERMISSIONS.alertRead) ? [{ to: '/alerts', label: 'Alerts' }] : []),
     { to: '/applications', label: 'Applications' },
+    ...(canRender(state, PERMISSIONS.deploymentRead)
+      ? [{ to: '/deployment-targets', label: 'Deployment targets' }]
+      : []),
     ...(canRender(state, PERMISSIONS.operationRead)
       ? [{ to: '/operations', label: 'Operations' }]
       : []),
@@ -248,6 +252,7 @@ function Shell(): React.JSX.Element {
         <Route path="/alerts" element={<AlertList />} />
         <Route path="/alerts/:alertId" element={<AlertDetail />} />
         <Route path="/notifications/channels" element={<ChannelList />} />
+        <Route path="/deployment-targets" element={<DeploymentTargets />} />
         <Route path="/applications" element={<ApplicationList />} />
         <Route path="/applications/:applicationId" element={<ApplicationDetail />} />
         <Route

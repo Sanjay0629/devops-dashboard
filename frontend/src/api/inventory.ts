@@ -25,7 +25,12 @@ type Schemas = components['schemas'];
 
 export type CursorPage = Schemas['CursorPage'];
 /** The §4 partial-data envelope. `null` is unknown and never a substitute. */
-export type DataSection = Schemas['DataSection'];
+export type DataSection = Pick<
+  // The base class has no schema of its own once no endpoint returns it bare; every section
+  // that extends it carries these five fields, so any one of them names the envelope.
+  Schemas['DeploymentTargetsSection'],
+  'data_state' | 'collected_at' | 'source' | 'stale_after_seconds' | 'unavailable_reason'
+>;
 export type ServerSummary = Schemas['ServerSummary'];
 export type ServerDetail = Schemas['ServerDetail'];
 export type AssociatedApplication = Schemas['AssociatedApplication'];
