@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.alerts.status import alertmanager_status
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError, field_error
+from app.deployments.status import jenkins_row
 from app.logs.status import loki_status
 from app.metrics import templates
 from app.metrics.client import PrometheusClient, PrometheusUnavailableError, breaker
@@ -163,7 +164,8 @@ _PENDING: Final[tuple[tuple[str, str, str], ...]] = (
     # Replaced by a live probe (M3.3) at this position, so the page keeps the contract's
     # order; it stays in the list so a name can never be dropped from the page by accident.
     ("Alertmanager", "alerts", "Alertmanager is probed live (M3.3)."),
-    ("Jenkins", "ci", "Deployment integration is not implemented yet (M5.1)."),
+    # Replaced by a live probe (M5.1) at this position, for the same reason as Alertmanager.
+    ("Jenkins", "ci", "Jenkins is probed live (M5.1)."),
     ("Secret store", "secrets", "No secret store backend is selected yet (OPEN-06)."),
     ("Notification channels", "notifications", "Read from the database (M3.4)."),
 )
@@ -239,6 +241,9 @@ async def integration_status(db: AsyncSession | None = None) -> IntegrationStatu
     for name, kind, reason in _PENDING:
         if name == "Alertmanager":
             rows.append(await alertmanager_status())
+            continue
+        if name == "Jenkins":
+            rows.append(await jenkins_row())
             continue
         if name == "Notification channels" and db is not None:
             rows.extend(await notification_status.channel_rows(db))

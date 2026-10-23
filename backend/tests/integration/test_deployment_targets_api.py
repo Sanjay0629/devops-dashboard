@@ -655,3 +655,48 @@ async def test_writes_are_refused_in_read_only_mode(world: World) -> None:
     finally:
         await call(world.client, "POST", path, {"enabled": False})
     assert world.stored(app_id) == 1
+
+
+# --- the application page's section (§18.3, ``OPEN-127``) ------------------------------------
+
+
+async def test_the_application_page_lists_the_targets_the_caller_may_see(world: World) -> None:
+    app_id = await world.application()
+    staging = (await world.register(app_id)).json()
+    production = (
+        await world.register(
+            app_id, environment="production", approval_policy_id=world.production_policy()
+        )
+    ).json()
+
+    async def section() -> dict[str, Any]:
+        response = await call(world.client, "GET", f"{APPLICATIONS}/{app_id}")
+        assert response.status_code == 200, response.text
+        return dict(response.json()["deployment_targets"])
+
+    full = await section()
+    assert full["data_state"] == "ok" and full["source"] == "postgresql"
+    assert {item["id"] for item in full["items"]} == {staging["id"], production["id"]}
+    item = full["items"][0]
+    assert "parameter_template" not in item and "application_id" not in item
+
+    world.as_role("VIEWER", '{"environment":["staging"]}')
+    narrow = await section()
+    assert [i["id"] for i in narrow["items"]] == [staging["id"]]
+
+    # Nothing you may see is `ok` with no items; it is not `not_configured` and not an error.
+    world.as_role("VIEWER", f'{{"environment":["staging"],"application":["{uuid.uuid4()}"]}}')
+    assert (await section())["items"] == []
+
+
+async def test_without_deployment_read_the_section_is_unavailable_not_empty(world: World) -> None:
+    from app.db.session import get_session_factory
+    from app.inventory import service as inventory
+
+    app_id = await world.application()
+    await world.register(app_id)
+    async with get_session_factory()() as db:
+        application = await inventory.get_application(db, uuid.UUID(app_id))
+        section = (await inventory.application_detail(db, application)).deployment_targets
+    assert section.data_state == "unavailable" and section.items is None
+    assert section.unavailable_reason == "deployment_read_not_permitted"

@@ -8,13 +8,9 @@ Jenkins'. The real network path is ``scripts/smoke_jenkins.py``.
 
 from __future__ import annotations
 
-import importlib.util
 import inspect
 import logging
 import uuid
-from collections.abc import Iterator
-from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import httpx
@@ -31,90 +27,7 @@ from app.deployments.jenkins import (
 )
 from app.deployments.template import render_parameters
 from app.metrics.client import FAILURE_THRESHOLD, CircuitBreaker
-
-TOKEN = "mock-jenkins-token-for-tests"
-JOB = "demo/hello-pipeline"
-
-
-def _load_mock() -> ModuleType:
-    path = Path(__file__).parents[3] / "infra" / "compose" / "mock-jenkins" / "mock_jenkins.py"
-    spec = importlib.util.spec_from_file_location("mock_jenkins", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-mock_module = _load_mock()
-
-
-@pytest.fixture
-def mock() -> Any:
-    return mock_module.MockJenkins(user="dcp", token=TOKEN)
-
-
-@pytest.fixture
-def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
-    for key, value in {
-        "DCP_JENKINS_URL": "http://mock-jenkins:8080",
-        "DCP_JENKINS_USER": "dcp",
-        "DCP_JENKINS_TOKEN_REFERENCE": "env://JENKINS_TOKEN",
-        "DCPSECRET_JENKINS_TOKEN": TOKEN,
-        "DCP_SSRF_HOST_ALLOWLIST": "mock-jenkins",
-        "DCP_SSRF_INSECURE_HOSTS": "mock-jenkins",
-        "DCP_SSRF_ALLOWED_NETWORKS": "10.0.0.0/8",
-    }.items():
-        monkeypatch.setenv(key, value)
-    get_settings.cache_clear()
-    return get_settings()
-
-
-class Harness:
-    def __init__(self, settings: Settings, mock: Any, transport: httpx.BaseTransport) -> None:
-        self.sleeps: list[float] = []
-        self.mock = mock
-        self.circuit = CircuitBreaker()
-        self.client = JenkinsClient(
-            settings,
-            transport=transport,
-            resolver=lambda host, port: ["10.1.2.3"],
-            circuit=self.circuit,
-            sleep=self.sleeps.append,
-        )
-
-    def requests(self, method: str | None = None) -> list[dict[str, Any]]:
-        return [r for r in self.mock.requests if method is None or r["method"] == method]
-
-
-@pytest.fixture
-def harness(settings: Settings, mock: Any) -> Harness:
-    return Harness(settings, mock, httpx.WSGITransport(app=mock))
-
-
-class Flaky(httpx.BaseTransport):
-    """Delegates to the mock but lets a test replace what one method answers."""
-
-    def __init__(self, mock: Any, *, post: Any = None, get: Any = None) -> None:
-        self._inner = httpx.WSGITransport(app=mock)
-        self._post, self._get = post, get
-        self.calls: list[tuple[str, str]] = []
-
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
-        self.calls.append((request.method, request.url.path))
-        override = self._post if request.method == "POST" else self._get
-        if override is not None and not request.url.path.startswith("/crumbIssuer"):
-            result = override(request)
-            if isinstance(result, Exception):
-                raise result
-            if result is not None:
-                return result
-        return self._inner.handle_request(request)
-
-
-def flaky(settings: Settings, mock: Any, **kwargs: Any) -> tuple[Harness, Flaky]:
-    transport = Flaky(mock, **kwargs)
-    return Harness(settings, mock, transport), transport
-
+from tests.deployments.harness import JOB, TOKEN, Harness, flaky
 
 PARAMS = {"GIT_REF": "main", "DCP_DEPLOYMENT_ID": "d-1"}
 
@@ -566,12 +479,3 @@ def test_the_module_level_breaker_is_its_own_instance() -> None:
 
     assert jenkins.breaker() is not loki.breaker()
     assert jenkins.breaker() is not prometheus.breaker()
-
-
-@pytest.fixture(autouse=True)
-def _fresh_breaker() -> Iterator[None]:
-    from app.deployments.jenkins import reset_breaker
-
-    reset_breaker()
-    yield
-    reset_breaker()

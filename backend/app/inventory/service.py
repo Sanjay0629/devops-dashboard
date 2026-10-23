@@ -46,8 +46,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alerts import counts as alert_counts
 from app.authz.dependencies import Authorized
-from app.authz.matcher import Grant, Target
-from app.authz.queries import readable_servers
+from app.authz.matcher import Grant, Target, permits
+from app.authz.queries import readable_deployment_targets, readable_servers
 from app.core.config import get_settings
 from app.core.errors import AppError, field_error
 from app.core.logging import get_logger
@@ -64,13 +64,14 @@ from app.inventory.schemas import (
     PROVIDER_MANAGEMENT_METHODS,
     PROVIDER_RESOURCE_ID_PATTERNS,
     ApplicationCreateRequest,
+    ApplicationDeploymentTarget,
     ApplicationDetail,
     ApplicationSummary,
     ApplicationUpdateRequest,
     AssociateApplicationRequest,
     AssociatedApplication,
     AssociatedServer,
-    DataSection,
+    DeploymentTargetsSection,
     HealthCheckConfig,
     HealthSection,
     ManagementCapabilitiesSection,
@@ -584,8 +585,62 @@ async def get_application(db: AsyncSession, application_id: uuid.UUID) -> Applic
     return application
 
 
-async def application_detail(db: AsyncSession, application: Application) -> ApplicationDetail:
-    """§18.3: servers, services, targets."""
+DEPLOYMENT_READ_NOT_PERMITTED = "deployment_read_not_permitted"
+
+
+async def _deployment_targets_section(
+    db: AsyncSession, application: Application, grants: Sequence[Grant]
+) -> DeploymentTargetsSection:
+    """The caller's scoped registered pipelines (``OPEN-127``), in the §21.8 reader shape."""
+    if not permits(grants, "deployment", "read").allowed:
+        return DeploymentTargetsSection(
+            data_state="unavailable",
+            source="postgresql",
+            unavailable_reason=DEPLOYMENT_READ_NOT_PERMITTED,
+        )
+    rows = (
+        (
+            await db.execute(
+                select(DeploymentTarget)
+                .where(
+                    DeploymentTarget.application_id == application.id,
+                    DeploymentTarget.deleted_at.is_(None),
+                    DeploymentTarget.status.in_(("ACTIVE", "DISABLED")),
+                    readable_deployment_targets(grants, "deployment", "read"),
+                )
+                .order_by(DeploymentTarget.environment, DeploymentTarget.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return DeploymentTargetsSection(
+        data_state="ok",
+        source="postgresql",
+        items=[
+            ApplicationDeploymentTarget(
+                id=row.id,
+                environment=row.environment,  # type: ignore[arg-type]
+                pipeline_reference=row.pipeline_reference,
+                allowed_ref_patterns=list(row.allowed_ref_patterns),
+                requires_approval=row.approval_policy_id is not None,
+                rollback_supported=row.rollback_supported,
+                status=row.status,  # type: ignore[arg-type]
+                updated_at=row.updated_at,
+            )
+            for row in rows
+        ],
+    )
+
+
+async def application_detail(
+    db: AsyncSession, application: Application, grants: Sequence[Grant] = ()
+) -> ApplicationDetail:
+    """§18.3: servers, services, targets.
+
+    ``grants`` decide the targets section only. The default is *no grants*, which is the
+    fail-closed answer (``unavailable``), never an unfiltered list.
+    """
     servers = (
         await db.execute(
             select(Server, ApplicationServer.role_on_server)
@@ -624,10 +679,7 @@ async def application_detail(db: AsyncSession, application: Application) -> Appl
             for server, role in servers
         ],
         registered_service_count=service_count,
-        deployment_targets=DataSection(
-            data_state="not_configured",
-            unavailable_reason="Deployment targets are not implemented yet (M5).",
-        ),
+        deployment_targets=await _deployment_targets_section(db, application, grants),
     )
 
 

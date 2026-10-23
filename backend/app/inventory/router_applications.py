@@ -114,7 +114,7 @@ async def register_application(
     )
     if replayed:
         response.status_code = 200
-        detail = await service.application_detail(db, application)
+        detail = await service.application_detail(db, application, authorized.grants)
         return ApplicationCreated(**detail.model_dump(), idempotent_replay=True)
 
     audit.record(
@@ -132,7 +132,7 @@ async def register_application(
     await db.commit()
     await db.refresh(application)
     logger.info("application_registered", application_id=str(application.id))
-    detail = await service.application_detail(db, application)
+    detail = await service.application_detail(db, application, authorized.grants)
     return ApplicationCreated(**detail.model_dump(), idempotent_replay=False)
 
 
@@ -145,11 +145,11 @@ async def register_application(
     summary="Application detail: servers, services, targets",
 )
 async def read_application(
-    application_id: ApplicationId, db: Db, _authorized: ReadApplications
+    application_id: ApplicationId, db: Db, authorized: ReadApplications
 ) -> ApplicationDetail:
     """§18.3."""
     application = await service.get_application(db, application_id)
-    return await service.application_detail(db, application)
+    return await service.application_detail(db, application, authorized.grants)
 
 
 # --- 18.4 --------------------------------------------------------------------
@@ -181,7 +181,7 @@ async def update_application(
         )
     await db.commit()
     await db.refresh(application)
-    return await service.application_detail(db, application)
+    return await service.application_detail(db, application, authorized.grants)
 
 
 # --- 18.5 --------------------------------------------------------------------

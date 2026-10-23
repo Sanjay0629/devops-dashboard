@@ -97,9 +97,10 @@ async def test_register_read_and_list_an_application(
     body = created.json()
     assert body["status"] == "ACTIVE"
     assert body["idempotent_replay"] is False
-    # No deployment targets exist until M5, and "none registered" is not the
-    # same claim as "this product cannot tell you yet".
-    assert body["deployment_targets"]["data_state"] == "not_configured"
+    # Since M5.1 the section is real: "none you may see" is `ok` with no items, which is not the
+    # same claim as "this product cannot tell you" (`unavailable`).
+    assert body["deployment_targets"]["data_state"] == "ok"
+    assert body["deployment_targets"]["items"] == []
 
     detail = await call(client, "GET", f"{APPLICATIONS}/{body['id']}")
     assert detail.status_code == 200, detail.text

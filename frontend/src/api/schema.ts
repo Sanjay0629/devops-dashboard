@@ -1697,7 +1697,7 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
-      deployment_targets: components['schemas']['DataSection'];
+      deployment_targets: components['schemas']['DeploymentTargetsSection'];
       /** Description */
       description: string | null;
       health_check_config: components['schemas']['HealthCheckConfig'];
@@ -1732,13 +1732,48 @@ export interface components {
       updated_at: string;
     };
     /**
+     * ApplicationDeploymentTarget
+     * @description One registered pipeline, as an application page shows it: the §21.8 reader shape without the
+     *     application's own id and name, which the page already has. No parameter template.
+     */
+    ApplicationDeploymentTarget: {
+      /** Allowed Ref Patterns */
+      allowed_ref_patterns: string[];
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other';
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Pipeline Reference */
+      pipeline_reference: string;
+      /** Requires Approval */
+      requires_approval: boolean;
+      /** Rollback Supported */
+      rollback_supported: boolean;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: 'ACTIVE' | 'DISABLED';
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /**
      * ApplicationDetail
      * @description §18.3: "servers, services, targets".
      *
-     *     ``deployment_targets`` has no rows and no endpoint until M5.1, so the field
-     *     is reported as an explicitly not-configured section rather than as an empty
-     *     list — "none registered" and "this product cannot tell you yet" are
-     *     different answers (CLAUDE.md §5).
+     *     ``deployment_targets`` (M5.1) is the caller's **scoped** list of registered pipelines
+     *     (``ok``, with ``[]`` meaning none they may see), or ``unavailable`` with a reason when they
+     *     hold no ``deployment:read`` at all. ``not_configured`` is no longer reported here: the
+     *     registry exists, and "none registered" and "this product cannot tell you" stay distinct.
      */
     ApplicationDetail: {
       /**
@@ -1746,7 +1781,7 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
-      deployment_targets: components['schemas']['DataSection'];
+      deployment_targets: components['schemas']['DeploymentTargetsSection'];
       /** Description */
       description: string | null;
       health_check_config: components['schemas']['HealthCheckConfig'];
@@ -2389,29 +2424,6 @@ export interface components {
       utilisation: components['schemas']['UtilisationSection'];
     };
     /**
-     * DataSection
-     * @description The §4 partial-data envelope, for a section with no value to give.
-     *
-     *     ``value`` is absent rather than ``null``-and-meaningless: §4 rule 2 says
-     *     ``unavailable`` and ``stale`` never carry substitute values, and the
-     *     subclasses below spell out what the missing value *would* have been.
-     */
-    DataSection: {
-      /** Collected At */
-      collected_at?: string | null;
-      /**
-       * Data State
-       * @enum {string}
-       */
-      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
-      /** Source */
-      source?: string | null;
-      /** Stale After Seconds */
-      stale_after_seconds?: number | null;
-      /** Unavailable Reason */
-      unavailable_reason?: string | null;
-    };
-    /**
      * DecisionRequest
      * @description §22.3 / §22.4. Optional on approve, **required on reject** (checked in the service).
      */
@@ -2495,6 +2507,27 @@ export interface components {
        * @enum {string}
        */
       status: 'PENDING' | 'SENT' | 'FAILED' | 'ABANDONED';
+    };
+    /**
+     * DeploymentTargetsSection
+     * @description ``items`` is ``null`` unless ``data_state`` is ``ok``; ``[]`` then means none you may see.
+     */
+    DeploymentTargetsSection: {
+      /** Collected At */
+      collected_at?: string | null;
+      /**
+       * Data State
+       * @enum {string}
+       */
+      data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
+      /** Items */
+      items?: components['schemas']['ApplicationDeploymentTarget'][] | null;
+      /** Source */
+      source?: string | null;
+      /** Stale After Seconds */
+      stale_after_seconds?: number | null;
+      /** Unavailable Reason */
+      unavailable_reason?: string | null;
     };
     /** ExportAccepted */
     ExportAccepted: {
