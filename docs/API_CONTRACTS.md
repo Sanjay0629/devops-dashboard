@@ -1192,7 +1192,7 @@ Response: `{ "read_only_mode": true }`. `reason` is **required when enabling** (
 | Connectivity / credential verify | < 15 s | Provider 10–15 s | `504` |
 | Operation / deployment **creation** | < 1 s | — | Work is asynchronous |
 | Operation execution | n/a | Action policy, default 300 s | `TIMED_OUT` |
-| Deployment execution | n/a | Target policy, default 3 600 s | `FAILED` with `failure_reason = DEPLOYMENT_TIMED_OUT` |
+| Deployment execution | n/a | `DCP_DEPLOYMENT_DEADLINE_SECONDS` (60 – 21 600, default 3 600 s; one value for every target, M5.2 `OPEN-136`) | `FAILED` with `failure_reason = DEPLOYMENT_TIMED_OUT` |
 | Health check (single) | n/a | 10 s, 3 attempts | Check fails |
 
 Performance figures are PRD §10 design budgets, explicitly **not** measured results.

@@ -75,6 +75,11 @@ CONSOLE_LIMIT_BYTES: Final = 256 * 1024
 
 _RETRYABLE_STATUS: Final = frozenset({429, 502, 503, 504})
 _QUEUE_ITEM: Final = re.compile(r"/queue/item/(\d{1,12})/?")
+_PARAMETER_NAME: Final = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+_PARAMETER_VALUE: Final = re.compile(r"[A-Za-z0-9-]{1,64}")
+#: How many recent builds ``find_by_parameter`` looks through. A build older than this is not
+#: found, which is the honest answer (``None``) and not a guess.
+RECENT_BUILDS: Final = 50
 _CRUMB_FIELD: Final = re.compile(r"[A-Za-z0-9-]{1,64}")
 _CRUMB_VALUE: Final = re.compile(r"[A-Za-z0-9._:+=/-]{1,512}")
 _SHA: Final = re.compile(r"[0-9a-f]{40}")
@@ -144,6 +149,15 @@ class BuildState:
     started_at: datetime | None
     duration_ms: int | None
     commit_sha: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class Located:
+    """What :meth:`JenkinsClient.find_by_parameter` found: a queue item or a started build."""
+
+    kind: Literal["queue", "build"]
+    #: The queue item id, or the build number.
+    number: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +301,48 @@ class JenkinsClient:
             else None,
             commit_sha=_commit_sha(data.get("actions")),
         )
+
+    def find_by_parameter(self, job_path: str, name: str, value: str) -> Located | None:
+        """Look, **read-only**, for the one queue item or build carrying ``name=value``.
+
+        How an unknown trigger outcome is reconciled (``OPEN-137``): ``value`` is the UUID DCP
+        itself generated for the deployment, so nothing a request supplied is searched for, and
+        a find is followed, never a second trigger. The queue is read **first**: an item that
+        starts between the two reads is then in the build list, whereas the other order could
+        miss it in both.
+
+        ``None`` means *not found in what Jenkins showed* -- including a Jenkins that does not
+        expose parameters, or a build older than :data:`RECENT_BUILDS` -- and the caller says so.
+        More than one match is ``provider_error``: it means a double trigger happened, and
+        guessing which build is DCP's would hide it. A garbled list is also ``provider_error``,
+        never ``None``: "I could not read it" must not read as "there is no build".
+        """
+        if _PARAMETER_NAME.fullmatch(name) is None:
+            raise ValueError("name must match [A-Za-z_][A-Za-z0-9_]{0,63}")
+        if _PARAMETER_VALUE.fullmatch(value) is None:
+            raise ValueError("value must match [A-Za-z0-9-]{1,64}")
+        builds_path = f"{job_url_path(job_path)}/api/json"  # validates job_path before any call
+        queue = self._json(
+            self._call(
+                "GET",
+                "/queue/api/json",
+                params={"tree": "items[id,actions[parameters[name,value]]]"},
+            )
+        )
+        found = _matches(queue, "items", "id", name, value)
+        if found:
+            return Located("queue", found)
+        builds = self._json(
+            self._call(
+                "GET",
+                builds_path,
+                params={
+                    "tree": f"builds[number,actions[parameters[name,value]]]{{0,{RECENT_BUILDS}}}"
+                },
+            )
+        )
+        found = _matches(builds, "builds", "number", name, value)
+        return Located("build", found) if found else None
 
     def console(self, job_path: str, number: int, offset: int = 0) -> ConsoleChunk:
         """Console text from byte ``offset``, at most 256 KiB, raw."""
@@ -519,6 +575,36 @@ class _RetryableError(Exception):
         super().__init__(error.reason)
         self.error = error
         self.retry_after = retry_after
+
+
+def _matches(data: object, listing: str, key: str, name: str, value: str) -> int | None:
+    """The one entry of ``data[listing]`` whose parameters include ``name=value``, by its ``key``.
+
+    Every entry must be a dict with a positive integer ``key`` -- a list that is not what Jenkins
+    sends is ``provider_error``, not an empty answer. Entries' ``actions`` may be anything (a real
+    queue item carries many kinds); what is not a parameter list is skipped.
+    """
+    entries = data.get(listing) if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        raise JenkinsError("provider_error")
+    hits: list[int] = []
+    for entry in entries:
+        number = entry.get(key) if isinstance(entry, dict) else None
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise JenkinsError("provider_error")
+        actions = entry.get("actions")
+        for action in actions if isinstance(actions, list) else ():
+            parameters = action.get("parameters") if isinstance(action, dict) else None
+            for parameter in parameters if isinstance(parameters, list) else ():
+                if (
+                    isinstance(parameter, dict)
+                    and parameter.get("name") == name
+                    and parameter.get("value") == value
+                ):
+                    hits.append(number)
+    if len(set(hits)) > 1:
+        raise JenkinsError("provider_error")
+    return hits[0] if hits else None
 
 
 def _commit_sha(actions: object) -> str | None:

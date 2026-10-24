@@ -13,6 +13,13 @@ version and plugin set (CLAUDE.md section 7, `docs/TESTING.md`).
 - Known jobs: `demo/hello-pipeline`, `demo/hello-rollback`. Any other job is `404`.
 - Control (only here, no real Jenkins has them): `POST /__mock/mode` `{"mode": ..., "crumb": ...,
   "delay": ...}`, `GET /__mock/requests`, `POST /__mock/reset`. Modes: `ok`, `outage`, `slow`,
-  `queue_cancelled`, `build_failure`, `lose_queue_item`, `redirect`. Crumb: `off`, `issue`, `enforce`.
+  `queue_cancelled`, `build_failure`, `lose_queue_item`, `redirect`, `hide_parameters`. Crumb:
+  `off`, `issue`, `enforce`.
+- Read-only listings for reconciling an unknown trigger outcome (M5.2): `GET /queue/api/json` (the
+  items still waiting, with their parameters) and `GET /job/<path>/api/json` (recent builds, newest
+  first, with their parameters). `lose_queue_item` makes a waiting item start its build, which is
+  what Jenkins losing a queue item means; `hide_parameters` removes the parameters from both, as a
+  Jenkins without the plugin that exposes them would. Both listings ignore `tree=`, so they are not
+  evidence about the query a real Jenkins accepts.
 - The console contains a planted fake secret (`DEPLOY_PASSWORD=mock-canary-jenkins-0001`) so the
   log-redaction test (M5.3) has something to fail on.

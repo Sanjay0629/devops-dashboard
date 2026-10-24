@@ -157,6 +157,12 @@ class Settings(BaseSettings):
     jenkins_token_reference: str | None = None
     #: Read deadline for one Jenkins call. The connect deadline is fixed at 3 s.
     jenkins_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    #: How long a deployment may run, from the request, before the reaper ends it as
+    #: ``DEPLOYMENT_TIMED_OUT`` (M5.2, ``OPEN-136``; API_CONTRACTS §27: "default 3 600 s"). One
+    #: setting for every target: a per-target deadline would need a column and a contract change.
+    #: The bounds and default are ``app.deployments.states``'; ``core`` does not import a feature
+    #: package, so they are copied here and ``tests/test_config.py`` pins that they agree.
+    deployment_deadline_seconds: int = Field(default=3_600, ge=60, le=21_600)
 
     # --- AWS SSM (M4.3, OPEN-81) ------------------------------------------------
     #: The version of the registered ``DCP-ServiceControl`` document DCP invokes. A version
