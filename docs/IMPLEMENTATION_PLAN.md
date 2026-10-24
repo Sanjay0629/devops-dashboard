@@ -739,6 +739,8 @@ backend/tests/dashboard/test_summary.py
 
 ## M5.2 — Deployment lifecycle
 
+**Status: proposed (2026-10-24), branch `phase-M5.2`; commit 1 (this documentation) only.** Plan: [`M5.2_PLAN.md`](M5.2_PLAN.md); decisions `OPEN-132` – `OPEN-144` closed before code at the owner's instruction to take the recommended option. **Adjustments to the tasks below:** **endpoints 21.4 and 21.5 (approve, reject) move to M5.4** — nothing can decide an approval before it, so a request that needs one is refused (`503 approval_workflow_unavailable`, no row) and **no production deployment can be requested until M5.4**; 21.1, 21.2, 21.3 and 21.6 are built here; the dashboard's `recent_deployments` becomes real; an unknown trigger outcome is reconciled by `deployment_id` and never re-triggered; a deployment-failure alert producer is **not** built (it ships with something that can fail for real, `OPEN-40`).
+
 **Tasks:** endpoints 21.1–21.6; the state machine; `external_execution_id` persisted before polling; the polling task with backoff and deadline; `last_poll_error` surfaced; idempotency; one-active-deployment-per-application+environment; frontend deployment page per PRD §8 (application, environment, ref, requester, approval status, pipeline status, build logs, health results, rollback availability).
 
 **Acceptance (PRD §4.10 criteria):** an authorised user triggers a registered non-production pipeline; progress and result are visible; every deployment has a complete audit record; failures show useful diagnostics.
