@@ -108,4 +108,4 @@ def test_how_much_is_driven_here_is_stated_so_it_cannot_shrink_unnoticed() -> No
     by_kind: dict[str, int] = {}
     for entry in REGISTRY.values():
         by_kind[entry.kind] = by_kind.get(entry.kind, 0) + 1
-    assert by_kind == {"driven": 31, "elsewhere": 8, "read_only": 2, "own": 1}, by_kind
+    assert by_kind == {"driven": 33, "elsewhere": 8, "read_only": 2, "own": 1}, by_kind

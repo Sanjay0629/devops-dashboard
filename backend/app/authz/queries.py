@@ -62,7 +62,7 @@ from app.authz.matcher import (
     covers_every_environment,
     normalise_scope,
 )
-from app.deployments.models import DeploymentTarget
+from app.deployments.models import Deployment, DeploymentTarget
 from app.inventory.models import Server
 from app.operations.models import Operation
 
@@ -96,6 +96,13 @@ AUDIT_COLUMNS = ScopeColumns(environment=AuditEvent.environment, environment_nul
 #: or server: a grant naming a specific account or server reaches no target (A-09).
 DEPLOYMENT_TARGET_COLUMNS = ScopeColumns(
     environment=DeploymentTarget.environment, application=DeploymentTarget.application_id
+)
+
+
+#: A deployment (M5.2, ``OPEN-140``) is scoped as its target is: by the **stored** environment and
+#: application. It has no account or server: a grant naming a specific one reaches no deployment.
+DEPLOYMENT_COLUMNS = ScopeColumns(
+    environment=Deployment.environment, application=Deployment.application_id
 )
 
 
@@ -229,3 +236,10 @@ def readable_deployment_targets(
 ) -> ColumnElement[bool]:
     """The deployment targets these grants reach: environment and application (``OPEN-126``)."""
     return _readable(grants, resource_type, action, DEPLOYMENT_TARGET_COLUMNS)
+
+
+def readable_deployments(
+    grants: Sequence[Grant], resource_type: str, action: str
+) -> ColumnElement[bool]:
+    """The deployments these grants reach: stored environment and application (``OPEN-140``)."""
+    return _readable(grants, resource_type, action, DEPLOYMENT_COLUMNS)

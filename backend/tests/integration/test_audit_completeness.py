@@ -291,6 +291,10 @@ def _remove_application_later(c: Ctx, application: str) -> None:
     def remove() -> None:
         with c.rig.engine.begin() as connection:
             connection.execute(
+                text("DELETE FROM deployments WHERE application_id = :a"),
+                {"a": uuid.UUID(application)},
+            )
+            connection.execute(
                 text("DELETE FROM deployment_targets WHERE application_id = :a"),
                 {"a": uuid.UUID(application)},
             )
@@ -341,6 +345,64 @@ async def deployment_target_edit(c: Ctx) -> None:
 
 async def deployment_target_retire(c: Ctx) -> None:
     await c.act("DELETE", f"/api/v1/deployment-targets/{await _new_target(c)}")
+
+
+async def _deployable(c: Ctx) -> str:
+    """An application with a staging target, a Jenkins configured (never called) and no worker."""
+    from app.deployments import lifecycle
+
+    for name, value in {
+        "DCP_JENKINS_URL": "http://mock-jenkins:8080",
+        "DCP_JENKINS_USER": "dcp",
+        "DCP_JENKINS_TOKEN_REFERENCE": "env://JENKINS_TOKEN",
+        "DCPSECRET_JENKINS_TOKEN": "mock-jenkins-token-for-completeness",
+        "DCP_SSRF_HOST_ALLOWLIST": "hooks.example.test,mock-jenkins",
+        "DCP_SSRF_INSECURE_HOSTS": "mock-jenkins",
+        "DCP_SSRF_ALLOWED_NETWORKS": "10.0.0.0/8",
+    }.items():
+        c.rig.monkeypatch.setenv(name, value)
+    get_settings.cache_clear()
+
+    async def nothing(_deployment: uuid.UUID) -> None:
+        return None
+
+    c.rig.monkeypatch.setattr(lifecycle, "enqueue_execution", nothing)
+    application = await _new_application(c)
+    _remove_application_later(c, application)
+    await c.setup(
+        "POST",
+        "/api/v1/deployment-targets",
+        {
+            "application_id": application,
+            "environment": "staging",
+            "pipeline_reference": "team/completeness",
+            "parameter_template": {"slots": {"GIT_REF": "ref"}},
+            "allowed_ref_patterns": ["^main$"],
+        },
+        headers=key(),
+    )
+    return application
+
+
+async def deployment_request(c: Ctx) -> None:
+    application = await _deployable(c)
+    await c.act(
+        "POST",
+        "/api/v1/deployments",
+        {"application_id": application, "environment": "staging", "ref": "main"},
+        headers=key(),
+    )
+
+
+async def deployment_cancel(c: Ctx) -> None:
+    application = await _deployable(c)
+    created = await c.setup(
+        "POST",
+        "/api/v1/deployments",
+        {"application_id": application, "environment": "staging", "ref": "main"},
+        headers=key(),
+    )
+    await c.act("POST", f"/api/v1/deployments/{created.json()['deployment_id']}/cancel")
 
 
 async def operation_request(c: Ctx) -> None:
@@ -431,6 +493,8 @@ DRIVERS: dict[tuple[str, str], Driver] = {
     ("POST", "/api/v1/deployment-targets"): deployment_target_register,
     ("PATCH", "/api/v1/deployment-targets/{target_id}"): deployment_target_edit,
     ("DELETE", "/api/v1/deployment-targets/{target_id}"): deployment_target_retire,
+    ("POST", "/api/v1/deployments"): deployment_request,
+    ("POST", "/api/v1/deployments/{deployment_id}/cancel"): deployment_cancel,
     ("POST", "/api/v1/applications"): application_register,
     ("PATCH", "/api/v1/applications/{application_id}"): application_edit,
     ("DELETE", "/api/v1/applications/{application_id}"): application_archive,
