@@ -310,8 +310,8 @@ def test_downgrading_past_0013_refuses_while_an_export_is_ready(
             command.downgrade(alembic_config, "0012")
         with rebuilt.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        # The refusal rolled the whole command back, 0014's step included (it ran first).
-        assert revision == "0014"
+        # The refusal rolled the whole command back, 0015's and 0014's steps included.
+        assert revision == ScriptDirectory.from_config(alembic_config).get_current_head()
         assert "audit_exports" in inspect(rebuilt).get_table_names()
         assert "deployment_targets" in inspect(rebuilt).get_table_names()
         with rebuilt.begin() as connection:  # once nothing is waiting, the downgrade is clean
@@ -336,12 +336,38 @@ def test_downgrading_past_0014_refuses_while_a_target_is_registered(
             command.downgrade(alembic_config, "0013")
         with rebuilt.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert revision == "0014"
+        # 0015 came off first and the refusal rolled it back with the rest.
+        assert revision == ScriptDirectory.from_config(alembic_config).get_current_head()
         assert "deployment_targets" in inspect(rebuilt).get_table_names()
         with rebuilt.begin() as connection:  # once it is retired, the downgrade is clean
             connection.execute(text("UPDATE deployment_targets SET deleted_at = now()"))
         command.downgrade(alembic_config, "0013")
         assert "deployment_targets" not in inspect(rebuilt).get_table_names()
+    finally:
+        _drop_everything(rebuilt)
+        command.upgrade(alembic_config, "head")
+
+
+def test_downgrading_past_0015_refuses_while_a_deployment_exists(
+    rebuilt: Engine, alembic_config: Config
+) -> None:
+    """A deployment is the audit record of what was deployed; it is never deleted silently."""
+    from tests.integration.test_deployments_schema import Setup
+
+    with rebuilt.begin() as connection:
+        Setup(connection).failed()
+    try:
+        with pytest.raises(RuntimeError, match="never deleted"):
+            command.downgrade(alembic_config, "0014")
+        with rebuilt.connect() as connection:
+            revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert revision == ScriptDirectory.from_config(alembic_config).get_current_head()
+        assert "deployments" in inspect(rebuilt).get_table_names()
+        with rebuilt.begin() as connection:  # once the table is empty, the downgrade is clean
+            connection.execute(text("DELETE FROM deployments"))
+        command.downgrade(alembic_config, "0014")
+        assert "deployments" not in inspect(rebuilt).get_table_names()
+        assert "deployment_targets" in inspect(rebuilt).get_table_names()
     finally:
         _drop_everything(rebuilt)
         command.upgrade(alembic_config, "head")

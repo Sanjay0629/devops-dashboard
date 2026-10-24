@@ -111,6 +111,8 @@ class TestModelMetadata:
             "AuditExport",
             # M5.1: the registered pipelines a deployment may name (OPEN-18, OPEN-118).
             "DeploymentTarget",
+            # M5.2: the record of every deployment (OPEN-135).
+            "Deployment",
             # M1.4: the durable read-only switch (docs/SECURITY.md §27).
             "SystemSetting",
         }
@@ -185,18 +187,6 @@ class TestModelMetadata:
                     f"{index.name} must survive a soft delete, or a replayed "
                     "Idempotency-Key would create a second row"
                 )
-
-    @pytest.mark.parametrize(
-        "table",
-        ["deployments"],
-    )
-    def test_history_tables_are_not_created_early(self, table: str) -> None:
-        """These arrive with the milestones that write to them (M5).
-
-        ``alert_events`` left this list when M3.3 created it, ``notification_deliveries`` when
-        M3.4 did, ``operations`` when M4.2 did and ``approvals`` when M4.5 did.
-        """
-        assert table not in Base.metadata.tables
 
 
 class TestEnumSets:

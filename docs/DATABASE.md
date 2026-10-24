@@ -417,9 +417,12 @@ Policies are seeded with a conservative default and edited only by Administrator
 | `next_poll_at` | **†** `timestamptz` | NULL | When the poller may next look; also its lease. NULL once terminal |
 | `poll_attempts` | **†** `integer` | NOT NULL DEFAULT 0, CHECK `>= 0` | Consecutive failed polls; drives backoff, reset on a success |
 | `last_polled_at` | **†** `timestamptz` | NULL | Written on every attempt so a page can say how stale it is |
+| `requested_reason` | **†** `text` | NULL, CHECK `char_length <= 500` | The contract's `reason` (API_CONTRACTS §21.2), which this table had no column for. Audited by its length only. *Found while writing migration `0015`* |
 
 - `CREATE UNIQUE INDEX uq_deployments_single_inflight ON deployments (application_id, environment) WHERE execution_status IN ('REQUESTED','AWAITING_APPROVAL','APPROVED','QUEUED','RUNNING')` — **one active deployment per application and environment is a storage guarantee**, not a check that races (`OPEN-135`).
 - Poller index: `(next_poll_at) WHERE execution_status IN ('QUEUED','RUNNING')`.
+- **The target key is composite:** `FOREIGN KEY (deployment_target_id, application_id, environment) REFERENCES deployment_targets (id, application_id, environment) ON DELETE RESTRICT`, with `uq_deployment_targets_id_application_id_environment` added to `deployment_targets` for it to point at. A deployment therefore cannot name another application's target, nor store an environment that is not its target's — the stored environment is the authorisation basis for reading it, so it must be the pipeline's, not merely claimed (found while writing the schema tests; a † beyond `OPEN-135` as first written).
+- Further CHECKs: `char_length(requested_ref) BETWEEN 1 AND 200`; `commit_sha ~ '^[0-9a-f]{7,40}$'`; `pipeline_reference` obeys the job-path grammar (as the target's); `target_digest ~ '^[0-9a-f]{64}$'`; a `FAILED` row has a `failure_reason` and no other row does; a terminal row (`SUCCEEDED`, `FAILED`, `CANCELLED`, `ROLLED_BACK`) has `completed_at`. The column lengths (`requested_ref` 200, `commit_sha` 40, `target_digest` 64) refuse an over-long value as a `DataError` before any CHECK.
 - `CHECK (execution_status NOT IN ('RUNNING','SUCCEEDED') OR external_execution_id IS NOT NULL)` — a build in progress or finished has its build number.
 - `health_check_result` for a `SUCCEEDED` row is **never a bare `{}`**: with no checks configured the application records `{"policy":"all_must_pass","configured":false,"checks":[],"passed":true}` (`OPEN-138`); the existing `<> '{}'` CHECK stays.
 
