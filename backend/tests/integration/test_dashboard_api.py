@@ -22,6 +22,7 @@ What this covers, from M1.6's test list and security checks:
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -34,6 +35,7 @@ from tests.integration.inventory_helpers import (
     call,
     grant,
     register,
+    retire_servers,
     revoke_all,
     user_id,
 )
@@ -68,7 +70,7 @@ FIXTURE = [
 async def dashboard(
     auth_app: tuple[httpx.AsyncClient, FakeIdp],  # noqa: F811
     migrated: Engine,
-) -> tuple[httpx.AsyncClient, uuid.UUID, str]:
+) -> AsyncIterator[tuple[httpx.AsyncClient, uuid.UUID, str]]:
     """A full-scope Administrator and six servers across three environments.
 
     The servers share an ``owner_team`` unique to this test, and it is handed
@@ -76,7 +78,10 @@ async def dashboard(
     schema is rebuilt once per session, not per test, so by the time this file
     is halfway through, the table also holds every server the earlier tests
     registered — and a test that asserts something about "every row" would be
-    asserting it about those too.
+    asserting it about those too. They are retired when the test ends for the same reason from
+    the other side: a log search by environment refuses past 200 servers, so a test file that
+    leaves six per test behind eventually breaks an unrelated suite (found in M5.2, when this
+    file grew past the point where the leftovers did).
     """
     client, provider = auth_app
     await _login(client, provider)
@@ -84,17 +89,20 @@ async def dashboard(
     grant(migrated, caller, "ADMINISTRATOR")
     account = account_id(migrated)
     team = f"team-{uuid.uuid4().hex[:10]}"
+    registered: list[str] = []
 
     for environment, status in FIXTURE:
         response = await register(client, account, environment=environment, owner_team=team)
         assert response.status_code == 201, response.text
+        registered.append(response.json()["id"])
         if status != "PENDING":
             with migrated.begin() as connection:
                 connection.execute(
                     text("UPDATE servers SET status = :s WHERE id = :id"),
                     {"s": status, "id": uuid.UUID(response.json()["id"])},
                 )
-    return client, caller, team
+    yield client, caller, team
+    retire_servers(migrated, registered)
 
 
 @pytest.fixture
@@ -341,8 +349,9 @@ async def test_every_section_without_a_source_is_null_and_says_why(
 ) -> None:
     """The acceptance criterion, over the wire, for the sources that are absent.
 
-    ``recent_health_changes`` (M2.5) and ``recent_operations`` (M4.6) used to be here and no longer
-    are: each reads a real table, so ``[]`` is a true "nothing recorded". The health
+    ``recent_health_changes`` (M2.5), ``recent_operations`` (M4.6) and ``recent_deployments``
+    (M5.2) used to be here and no longer are: each reads a real table, so ``[]`` is a true
+    "nothing recorded". The health
     rollup is absent here only because these tests configure no Prometheus; its
     other states are in ``test_health_read.py``.
     """
@@ -360,7 +369,6 @@ async def test_every_section_without_a_source_is_null_and_says_why(
                 "network_bytes_per_second",
             ),
         ),
-        ("recent_deployments", ("items",)),
     ):
         section = body[name]
         assert section["data_state"] == "not_configured", name
@@ -745,3 +753,149 @@ async def test_recent_operations_is_capped_at_ten(
     _operations_on(migrated, team, {f"staging:{i}": "staging" for i in range(12)})
     items = (await _summary(client, owner_team=team))["recent_operations"]["items"]
     assert len(items) == 10
+
+
+# --- recent_deployments (M5.2, OPEN-140) --------------------------------------------------------
+
+
+@pytest.fixture
+def deployed(migrated: Engine) -> Any:
+    """Finished deployments written straight to the table, removed again afterwards.
+
+    Committed rows: other suites count applications, so every application, target and deployment
+    this creates is deleted when the test ends.
+    """
+    from tests.integration.test_deployment_targets_schema import a_target
+    from tests.integration.test_deployments_schema import Setup
+
+    applications: list[uuid.UUID] = []
+
+    def make(
+        spec: list[tuple[str, int]], *, requested_by: uuid.UUID | None = None
+    ) -> tuple[uuid.UUID, list[str]]:
+        """One application; one finished deployment per ``(environment, minutes_ago)``."""
+        ids: list[str] = []
+        with migrated.begin() as connection:
+            setup = Setup(connection, "staging")
+            applications.append(setup.application)
+            targets = {"staging": setup.target}
+            for index, (environment, minutes) in enumerate(spec):
+                if environment not in targets:
+                    targets[environment] = a_target(
+                        connection, setup.application, environment=environment
+                    )
+                row = setup.failed(
+                    environment=environment,
+                    target_id=targets[environment],
+                    ref=f"ref-{index}",
+                    **({"user": requested_by} if requested_by else {}),
+                )
+                connection.execute(
+                    text(
+                        "UPDATE deployments SET created_at = now() - :m * interval '1 minute'"
+                        " WHERE id = :i"
+                    ),
+                    {"m": minutes, "i": row},
+                )
+                ids.append(str(row))
+        return setup.application, ids
+
+    yield make
+    with migrated.begin() as connection:
+        for application in applications:
+            for table in ("deployments", "deployment_targets"):
+                connection.execute(
+                    text(f"DELETE FROM {table} WHERE application_id = :a"),  # noqa: S608
+                    {"a": application},
+                )
+            connection.execute(text("DELETE FROM applications WHERE id = :a"), {"a": application})
+
+
+async def test_recent_deployments_lists_the_newest_first_with_the_stored_environment(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str], deployed: Any, uncached: None
+) -> None:
+    client, _caller, _team = dashboard
+    application, ids = deployed([("staging", 3), ("development", 1), ("staging", 2)])
+    section = (await _summary(client, application_id=str(application)))["recent_deployments"]
+
+    assert section["data_state"] == "ok" and section["source"] == "postgresql"
+    assert section["collected_at"] and section["unavailable_reason"] is None
+    assert [i["deployment_id"] for i in section["items"]] == [ids[1], ids[2], ids[0]]
+    first = section["items"][0]
+    assert set(first) == {
+        "deployment_id", "application_id", "application_name", "environment", "requested_ref",
+        "execution_status", "requested_by", "created_at",
+    }  # fmt: skip
+    assert first["environment"] == "development" and first["requested_ref"] == "ref-1"
+    assert first["execution_status"] == "FAILED"
+    # No reason, no result, no build number, no Jenkins anything: those are 21.3's.
+    assert "failure_reason" not in first and "external_execution_id" not in first
+
+
+async def test_recent_deployments_is_an_empty_list_not_null_when_nothing_matches(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str], uncached: None
+) -> None:
+    client, _caller, _team = dashboard
+    section = (await _summary(client, application_id=str(uuid.uuid4())))["recent_deployments"]
+    assert section["data_state"] == "ok" and section["items"] == []  # distinct from not_configured
+
+
+async def test_recent_deployments_is_scoped_by_the_stored_environment_and_not_by_who_asked(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str],
+    migrated: Engine,
+    deployed: Any,
+    uncached: None,
+) -> None:
+    client, caller, _team = dashboard
+    # Requested by the caller themselves, in an environment their grant does not reach.
+    application, ids = deployed([("staging", 2), ("development", 1)], requested_by=caller)
+    revoke_all(migrated, caller)
+    grant(migrated, caller, "VIEWER", STAGING_SCOPE)
+    section = (await _summary(client, application_id=str(application)))["recent_deployments"]
+    # The staging one only. "Your own" is not added: the cache is keyed by scope, not by person, so
+    # a row visible to one caller alone could not be cached safely.
+    assert [i["deployment_id"] for i in section["items"]] == [ids[0]]
+
+
+async def test_recent_deployments_is_capped_at_ten(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str], deployed: Any, uncached: None
+) -> None:
+    client, _caller, _team = dashboard
+    application, _ids = deployed([("staging", i) for i in range(12)])
+    items = (await _summary(client, application_id=str(application)))["recent_deployments"]["items"]
+    assert len(items) == 10
+
+
+async def test_the_environment_filter_applies_to_deployments(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str], deployed: Any, uncached: None
+) -> None:
+    client, _caller, _team = dashboard
+    application, ids = deployed([("staging", 2), ("development", 1)])
+    section = (await _summary(client, application_id=str(application), environment="staging"))[
+        "recent_deployments"
+    ]
+    assert [i["deployment_id"] for i in section["items"]] == [ids[0]]
+
+
+@pytest.mark.parametrize(
+    "filter_",
+    [
+        {"owner_team": "anyone"},
+        {"provider": "AWS"},
+        {"region": "eu-west-1"},
+        {"operating_system": "LINUX"},
+    ],
+)
+async def test_a_server_only_filter_makes_the_section_unavailable_not_empty(
+    dashboard: tuple[httpx.AsyncClient, uuid.UUID, str],
+    deployed: Any,
+    uncached: None,
+    filter_: dict[str, str],
+) -> None:
+    """A deployment has no server, so the question cannot be asked; ``[]`` would answer it."""
+    client, _caller, _team = dashboard
+    deployed([("staging", 1)])
+    section = (await _summary(client, **filter_))["recent_deployments"]
+    assert section["data_state"] == "unavailable" and section["items"] is None
+    assert "no provider, region, operating system or owner team" in section["unavailable_reason"]
+    assert section["collected_at"] is None

@@ -3,9 +3,10 @@
  *
  * What this page owes the reader:
  *
- * 1. **A registered pipeline is not a deployable one.** Nothing deploys in this milestone (there
- *    is no Deploy button, on purpose), and when Jenkins is not configured on this deployment the
- *    page says so above the list rather than leaving a registered target to read as ready.
+ * 1. **A registered pipeline is not a deployable one.** When Jenkins is not configured on this
+ *    deployment (or the portal is in demonstration mode) the page says so above the list and the
+ *    Deploy action is disabled with the reason, rather than leaving a registered target to read
+ *    as ready. The action opens a confirmation dialog (`DeployDialog`); the backend decides.
  * 2. **It never asks for, and cannot send, a Jenkins URL, a node label, a credential or a
  *    command.** The form has a job path and a parameter template; a pasted URL is refused before
  *    it is sent, and the backend refuses it too.
@@ -43,6 +44,7 @@ import { useCanRender, useIsReadOnly } from '@/auth/useSession';
 import { EmptyState, LoadingState } from '@/components/EmptyState';
 import { ErrorState } from '@/components/ErrorState';
 import { Pager } from '@/components/Pager';
+import { DeployDialog } from '@/pages/deployments/DeployDialog';
 import { StatusBadge } from '@/components/StatusBadge';
 import { useCursorPaging } from '@/components/useCursorPaging';
 import { useLatestResponse } from '@/components/useLatestResponse';
@@ -497,7 +499,10 @@ function refSummary(target: TargetSummary): React.JSX.Element {
 
 export function DeploymentTargets(): React.JSX.Element {
   const mayManage = useCanRender(PERMISSIONS.adminIntegrations);
+  // Advisory, like every control: the backend answers 403 on its own account, per environment.
+  const mayDeploy = useCanRender(PERMISSIONS.deploymentCreate);
   const readOnly = useIsReadOnly();
+  const [deploying, setDeploying] = useState<TargetSummary | null>(null);
   const paging = useCursorPaging();
   const {
     value: loaded,
@@ -619,6 +624,9 @@ export function DeploymentTargets(): React.JSX.Element {
   };
 
   const data = loaded?.kind === 'ok' ? loaded.value : null;
+  // A registered pipeline can be run only where a Jenkins is configured and DCP is not showing
+  // synthetic data. Advisory: the backend refuses either case itself.
+  const deployable = data?.jenkins.status === 'configured' && !data.jenkins.demo_mode;
 
   return (
     <section aria-labelledby="targets-heading">
@@ -672,6 +680,17 @@ export function DeploymentTargets(): React.JSX.Element {
         </p>
       )}
 
+      {deploying !== null && (
+        <DeployDialog
+          // A fresh dialog, and so a fresh idempotency key, for each target.
+          key={deploying.id}
+          target={deploying}
+          onClose={() => {
+            setDeploying(null);
+          }}
+        />
+      )}
+
       {notice !== null && (
         <div
           role="alert"
@@ -723,6 +742,11 @@ export function DeploymentTargets(): React.JSX.Element {
               <th className="py-1 pr-3">Approval</th>
               <th className="py-1 pr-3">Rollback</th>
               <th className="py-1 pr-3">Status</th>
+              {mayDeploy && (
+                <th className="py-1 pr-3">
+                  <span className="sr-only">Deploy</span>
+                </th>
+              )}
               {mayManage && (
                 <th className="py-1">
                   <span className="sr-only">Actions</span>
@@ -752,6 +776,31 @@ export function DeploymentTargets(): React.JSX.Element {
                 <td className="py-2 pr-3">
                   <StatusBadge value={target.status} />
                 </td>
+                {mayDeploy && (
+                  <td className="py-2 pr-3">
+                    {target.status === 'ACTIVE' && (
+                      <button
+                        type="button"
+                        disabled={readOnly || !deployable}
+                        title={
+                          readOnly
+                            ? 'The portal is in read-only mode.'
+                            : !deployable
+                              ? 'Jenkins is not configured on this deployment, or the portal is in demonstration mode.'
+                              : undefined
+                        }
+                        onClick={() => {
+                          setDeploying(target);
+                        }}
+                        className="rounded border px-2 py-0.5 text-xs disabled:opacity-50"
+                        style={{ borderColor: 'var(--c-border)' }}
+                        aria-label={`Deploy ${target.application_name} ${target.environment}`}
+                      >
+                        Deploy
+                      </button>
+                    )}
+                  </td>
+                )}
                 {mayManage && (
                   <td className="py-2">
                     {retiring === target.id ? (

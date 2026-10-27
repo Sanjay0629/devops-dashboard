@@ -91,12 +91,12 @@ const SUMMARY = {
     pipeline: 'confirmed',
   },
   recent_deployments: {
-    items: null,
-    data_state: 'not_configured',
-    collected_at: null,
-    source: null,
+    items: [],
+    data_state: 'ok',
+    collected_at: '2026-10-27T09:30:00Z',
+    source: 'postgresql',
     stale_after_seconds: null,
-    unavailable_reason: 'Deployments are not implemented yet (M5.1).',
+    unavailable_reason: null,
   },
   recent_operations: {
     items: null,
@@ -211,7 +211,8 @@ describe('Dashboard', () => {
     expect(
       (await screen.findAllByText(/Metrics collection is not implemented yet/)).length,
     ).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Deployments are not implemented yet/).length).toBeGreaterThan(0);
+    // Deployments are a real section now (M5.2): no "not implemented" reason is left for them.
+    expect(screen.queryByText(/Deployments are not implemented yet/)).toBeNull();
   });
 
   it('shows a real zero where there is a real source', async () => {
@@ -600,6 +601,63 @@ describe('Dashboard', () => {
       'href',
       '/operations',
     );
+  });
+
+  it('lists the deployments the caller may see, each linking to its page', async () => {
+    mockApi({
+      summary: {
+        ...SUMMARY,
+        recent_deployments: {
+          ...SUMMARY.recent_deployments,
+          items: [
+            {
+              deployment_id: 'dep-1',
+              application_id: 'app-1',
+              application_name: 'Billing API',
+              environment: 'staging',
+              requested_ref: 'release/1.4',
+              execution_status: 'SUCCEEDED',
+              requested_by: { id: 'u1', display_name: 'Riley' },
+              created_at: '2026-10-27T09:00:00Z',
+            },
+          ],
+        },
+      },
+    });
+    renderDashboard();
+    const link = await screen.findByRole('link', { name: /Billing API to staging/ });
+    expect(link).toHaveAttribute('href', '/deployments/dep-1');
+    expect(screen.getByRole('link', { name: 'All deployments' })).toHaveAttribute(
+      'href',
+      '/deployments',
+    );
+    expect(screen.getByText('release/1.4')).toBeInTheDocument();
+  });
+
+  it('says "none in your scope" for an empty deployments list, which is a fact', async () => {
+    mockApi();
+    renderDashboard();
+    expect(await screen.findByText('No deployments within your access scope.')).toBeInTheDocument();
+  });
+
+  it('says a filter made the deployments unanswerable rather than "none"', async () => {
+    mockApi({
+      summary: {
+        ...SUMMARY,
+        recent_deployments: {
+          items: null,
+          data_state: 'unavailable',
+          collected_at: null,
+          source: 'postgresql',
+          stale_after_seconds: null,
+          unavailable_reason:
+            'Deployments have no provider, region, operating system or owner team.',
+        },
+      },
+    });
+    renderDashboard();
+    expect(await screen.findByText(/Unavailable — Deployments have no provider/)).toBeVisible();
+    expect(screen.queryByText('No deployments within your access scope.')).toBeNull();
   });
 
   it('says "none in your scope" for an empty operations list, which is a fact', async () => {

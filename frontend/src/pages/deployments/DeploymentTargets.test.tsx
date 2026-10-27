@@ -232,9 +232,9 @@ describe('DeploymentTargets', () => {
     expect(screen.queryByRole('button', { name: /^Retire/ })).toBeNull();
   });
 
-  it('offers no way to deploy', async () => {
+  it('offers no way to deploy to someone who does not hold deployment:create', async () => {
     mockApi();
-    renderPage();
+    renderPage(); // an administrator: register, edit, retire -- and no deployment:create
     await screen.findByText('team/payments-deploy');
     expect(screen.queryByRole('button', { name: /deploy/i })).toBeNull();
   });

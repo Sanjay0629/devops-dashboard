@@ -2498,7 +2498,7 @@ export interface components {
       demo_mode: boolean;
       failed_services: components['schemas']['FailedServicesSection'];
       filters_applied: components['schemas']['DashboardFilters'];
-      recent_deployments: components['schemas']['RecentActivitySection'];
+      recent_deployments: components['schemas']['RecentDeploymentsSection'];
       recent_health_changes: components['schemas']['RecentHealthChangesSection'];
       recent_operations: components['schemas']['RecentOperationsSection'];
       server_health: components['schemas']['ServerHealthRollup'];
@@ -3980,14 +3980,46 @@ export interface components {
       status: string;
     };
     /**
-     * RecentActivitySection
-     * @description A recent-activity list whose table does not exist yet.
-     *
-     *     ``items`` is ``null``, never ``[]``: "we have no record" and "nothing
-     *     happened" are different answers and the operator has to be able to tell
-     *     them apart.
+     * RecentDeployment
+     * @description One deployment on the dashboard (§13.1). The reason, the result and the build are §21.3's.
      */
-    RecentActivitySection: {
+    RecentDeployment: {
+      /**
+       * Application Id
+       * Format: uuid
+       */
+      application_id: string;
+      /** Application Name */
+      application_name: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Deployment Id
+       * Format: uuid
+       */
+      deployment_id: string;
+      /** Environment */
+      environment: string;
+      /** Execution Status */
+      execution_status: string;
+      requested_by: components['schemas']['ActorView'];
+      /** Requested Ref */
+      requested_ref: string;
+    };
+    /**
+     * RecentDeploymentsSection
+     * @description The caller's most recent deployments (M5.2, ``OPEN-140``): a real list, so ``[]`` is true.
+     *
+     *     ``[]`` means "nothing happened that you may see" and is distinct from ``not_configured`` with
+     *     ``null``. The rows are the ones ``deployment:read`` reaches -- **not** "and the caller's own",
+     *     because this section rides a cache keyed by scope and not by person. With a server-only filter
+     *     applied the section is ``unavailable`` with a reason, never ``[]``: an empty list would say
+     *     nothing happened, when the truth is that the question cannot be asked.
+     */
+    RecentDeploymentsSection: {
       /** Collected At */
       collected_at?: string | null;
       /**
@@ -3996,11 +4028,7 @@ export interface components {
        */
       data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
       /** Items */
-      items?:
-        | {
-            [key: string]: unknown;
-          }[]
-        | null;
+      items?: components['schemas']['RecentDeployment'][] | null;
       /** Source */
       source?: string | null;
       /** Stale After Seconds */

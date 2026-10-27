@@ -15,7 +15,7 @@ import uuid
 from app.authz.matcher import Grant
 from app.dashboard.schemas import (
     ActiveAlertsSection,
-    RecentActivitySection,
+    RecentDeploymentsSection,
     ServerHealthRollup,
     UtilisationSection,
 )
@@ -85,9 +85,24 @@ def test_the_operation_read_scope_is_part_of_the_cache_key() -> None:
 def test_a_grant_that_is_not_a_scope_input_does_not_split_the_cache() -> None:
     filters = DashboardFilterSet().cache_part()
     servers = read_grant(FULL_SCOPE)
-    unrelated = Grant("deployment", "read", "ALLOW", STAGING_SCOPE)
+    unrelated = Grant("alert", "read", "ALLOW", STAGING_SCOPE)
     assert cache_key("summary", [servers], filters) == cache_key(
         "summary", [servers, unrelated], filters
+    )
+
+
+def test_the_deployment_read_scope_is_part_of_the_cache_key() -> None:
+    """``recent_deployments`` is scoped by ``deployment:read`` (M5.2): two callers who read the
+    same servers but different deployments must not share an entry."""
+    filters = DashboardFilterSet().cache_part()
+    servers = read_grant(FULL_SCOPE)
+    wide = Grant("deployment", "read", "ALLOW", FULL_SCOPE)
+    narrow = Grant("deployment", "read", "ALLOW", STAGING_SCOPE)
+    assert cache_key("summary", [servers, wide], filters) != cache_key(
+        "summary", [servers, narrow], filters
+    )
+    assert cache_key("summary", [servers], filters) != cache_key(
+        "summary", [servers, wide], filters
     )
 
 
@@ -184,9 +199,9 @@ def test_a_section_with_no_source_defaults_to_null_never_zero() -> None:
     assert (alerts.critical, alerts.warning, alerts.info) == (None, None, None)
 
 
-def test_recent_activity_with_no_table_is_null_not_an_empty_list() -> None:
-    """``[]`` would claim "nothing happened recently". There is no table to ask."""
-    section = RecentActivitySection(data_state="not_configured")
+def test_a_recent_list_that_cannot_be_answered_is_null_not_an_empty_list() -> None:
+    """``[]`` would claim "nothing happened recently". A section that cannot be asked says so."""
+    section = RecentDeploymentsSection(data_state="unavailable")
     assert section.items is None
 
 

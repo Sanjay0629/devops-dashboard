@@ -14,6 +14,8 @@ import { OperationHistory, ServerOperations } from '@/pages/operations/Operation
 import { AlertDetail } from '@/pages/alerts/AlertDetail';
 import { AlertList } from '@/pages/alerts/AlertList';
 import { Dashboard } from '@/pages/dashboard/Dashboard';
+import { DeploymentDetailPage } from '@/pages/deployments/DeploymentDetail';
+import { DeploymentList } from '@/pages/deployments/DeploymentList';
 import { DeploymentTargets } from '@/pages/deployments/DeploymentTargets';
 import { ApplicationDetail } from '@/pages/applications/ApplicationDetail';
 import { ApplicationList } from '@/pages/applications/ApplicationList';
@@ -60,7 +62,10 @@ function Navigation(): React.JSX.Element {
     ...(canRender(state, PERMISSIONS.alertRead) ? [{ to: '/alerts', label: 'Alerts' }] : []),
     { to: '/applications', label: 'Applications' },
     ...(canRender(state, PERMISSIONS.deploymentRead)
-      ? [{ to: '/deployment-targets', label: 'Deployment targets' }]
+      ? [
+          { to: '/deployments', label: 'Deployments' },
+          { to: '/deployment-targets', label: 'Deployment targets' },
+        ]
       : []),
     ...(canRender(state, PERMISSIONS.operationRead)
       ? [{ to: '/operations', label: 'Operations' }]
@@ -157,18 +162,20 @@ function Shell(): React.JSX.Element {
         <div>
           <h1 className="text-2xl font-semibold">DevOps Control Plane</h1>
           <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            Milestone M5.1 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
+            Milestone M5.2 — inventory, a PostgreSQL dashboard, per-server host metrics, systemd
             service state, host health from Prometheus, log search, alerts (Prometheus rules through
             Alertmanager, with acknowledge and assign) and notifications (channels, delivery status
             and retry), service operations (start, stop and restart a registered service: the
             request, an approval where a policy requires one, its state machine and its verified
             result), and the operations history and audit log (who did what, with the result, an
-            execution id and an approval reference; reading the trail is itself recorded) and the
-            registry of deployment targets, the pipelines DCP may run. An AWS adapter exists but has
-            been exercised only against test providers, so nothing here has yet been shown to act on
-            a real server; a Jenkins client exists but has been exercised only against a mock, and
-            deployments themselves are not implemented, so every section that depends on them says
-            so rather than showing a zero.
+            execution id and an approval reference; reading the trail is itself recorded), the
+            registry of deployment targets (the pipelines DCP may run) and deployments of them: a
+            request, one trigger of the registered Jenkins pipeline, and its progress to a result. A
+            production deployment cannot be requested yet, because the approvals it needs are not
+            built. An AWS adapter exists but has been exercised only against test providers, so
+            nothing here has yet been shown to act on a real server; the Jenkins client and the
+            deployment worker have been exercised only against a mock, so no real Jenkins has been
+            called.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -255,6 +262,8 @@ function Shell(): React.JSX.Element {
         <Route path="/alerts/:alertId" element={<AlertDetail />} />
         <Route path="/notifications/channels" element={<ChannelList />} />
         <Route path="/deployment-targets" element={<DeploymentTargets />} />
+        <Route path="/deployments" element={<DeploymentList />} />
+        <Route path="/deployments/:deploymentId" element={<DeploymentDetailPage />} />
         <Route path="/applications" element={<ApplicationList />} />
         <Route path="/applications/:applicationId" element={<ApplicationDetail />} />
         <Route

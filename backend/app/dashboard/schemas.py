@@ -22,8 +22,8 @@ the rest are counts of a stored column, and one envelope cannot carry one
 ``data_state`` for both. They are a sibling section, :class:`ServerHealthRollup`,
 with the same field names. Recorded in docs/API_CONTRACTS.md §13.1.
 
-For the same reason ``recent_deployments`` (and, until M4.6, ``recent_operations``) and
-``recent_health_changes`` are **sections carrying a null list**, not the bare
+For the same reason ``recent_health_changes`` (and, until M5.2, ``recent_deployments``, and until
+M4.6 ``recent_operations``) were **sections carrying a null list**, not the bare
 ``[]`` the example shows. There is no deployments table, no operations table
 and no health-event table; an empty array would say "nothing happened
 recently", which is a claim this milestone cannot make. PRD §4.2's acceptance
@@ -51,7 +51,12 @@ UTILISATION_REASON = (
 )
 #: A caller with no ``alert:read`` is told so, not shown a zero.
 ALERTS_NOT_PERMITTED = "alert_read_not_permitted"
-DEPLOYMENTS_REASON = "Deployments are not implemented yet (M5.1)."
+#: A deployment has an environment and an application and no server, so the four server-only
+#: dashboard filters cannot be applied to it (``OPEN-140``).
+DEPLOYMENTS_FILTER_REASON = (
+    "Deployments have no provider, region, operating system or owner team, so a dashboard "
+    "filtered by one of those cannot list them."
+)
 
 
 class ServerCounts(DataSection):
@@ -136,17 +141,6 @@ class ActiveAlertsSection(DataSection):
     pipeline: Literal["confirmed", "not_confirmed", "unknown"] | None = None
 
 
-class RecentActivitySection(DataSection):
-    """A recent-activity list whose table does not exist yet.
-
-    ``items`` is ``null``, never ``[]``: "we have no record" and "nothing
-    happened" are different answers and the operator has to be able to tell
-    them apart.
-    """
-
-    items: list[dict[str, object]] | None = None
-
-
 class RecentOperation(BaseModel):
     """One operation on the dashboard (§13.1). The detail, the reason and the result are §17.2's."""
 
@@ -173,6 +167,35 @@ class RecentOperationsSection(DataSection):
     """
 
     items: list[RecentOperation] | None = None
+
+
+class RecentDeployment(BaseModel):
+    """One deployment on the dashboard (§13.1). The reason, the result and the build are §21.3's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    deployment_id: uuid.UUID
+    application_id: uuid.UUID
+    application_name: str
+    #: The environment stored on the deployment when it was requested.
+    environment: str
+    requested_ref: str
+    execution_status: str
+    requested_by: ActorView
+    created_at: datetime
+
+
+class RecentDeploymentsSection(DataSection):
+    """The caller's most recent deployments (M5.2, ``OPEN-140``): a real list, so ``[]`` is true.
+
+    ``[]`` means "nothing happened that you may see" and is distinct from ``not_configured`` with
+    ``null``. The rows are the ones ``deployment:read`` reaches -- **not** "and the caller's own",
+    because this section rides a cache keyed by scope and not by person. With a server-only filter
+    applied the section is ``unavailable`` with a reason, never ``[]``: an empty list would say
+    nothing happened, when the truth is that the question cannot be asked.
+    """
+
+    items: list[RecentDeployment] | None = None
 
 
 class HealthChange(BaseModel):
@@ -223,7 +246,7 @@ class DashboardSummary(BaseModel):
     utilisation: UtilisationSection
     failed_services: FailedServicesSection
     active_alerts: ActiveAlertsSection
-    recent_deployments: RecentActivitySection
+    recent_deployments: RecentDeploymentsSection
     recent_operations: RecentOperationsSection
     recent_health_changes: RecentHealthChangesSection
     filters_applied: DashboardFilters
