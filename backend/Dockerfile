@@ -10,8 +10,12 @@ ENV PYTHONUNBUFFERED=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     PATH="/opt/venv/bin:$PATH"
 
-# curl is needed by HEALTHCHECK; nothing else is installed.
+# curl is needed by HEALTHCHECK; nothing else is installed. `upgrade` pulls in Debian
+# security fixes that landed after the pinned base was built (CI's Trivy gate fails on a
+# fixable HIGH, e.g. libssl3 and libbrotli1; PROGRESS.md issue 126 is the same fix for the
+# frontend's Alpine). The base is still not digest-pinned (AD-16).
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
