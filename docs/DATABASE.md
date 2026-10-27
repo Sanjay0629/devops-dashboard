@@ -407,6 +407,25 @@ Policies are seeded with a conservative default and edited only by Administrator
 
 **† = addition beyond PRD §6**, each one required by a PRD §4.10 feature or security requirement that the listed columns cannot express.
 
+**Additions in M5.2 (migration `0015`, `OPEN-135`; each † is beyond the table above):**
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `failure_reason` | **†** `text` | NULL; `CHECK ((execution_status = 'FAILED') = (failure_reason IS NOT NULL))` | A closed code (API_CONTRACTS §21.3). `API_CONTRACTS` returns it and this table did not have it |
+| `queue_item_id` | **†** `bigint` | NULL | The Jenkins queue item, persisted **before** polling. A `QUEUED` row with none means the trigger may have been sent (reconcile, never re-trigger) |
+| `target_digest` | **†** `text` | NOT NULL, CHECK `~ '^[0-9a-f]{64}$'` | SHA-256 of the canonical JSON of the target's `pipeline_reference` and `parameter_template` at request time. The worker refuses to trigger if the live target no longer matches (`TARGET_CHANGED`) |
+| `next_poll_at` | **†** `timestamptz` | NULL | When the poller may next look; also its lease. NULL once terminal |
+| `poll_attempts` | **†** `integer` | NOT NULL DEFAULT 0, CHECK `>= 0` | Consecutive failed polls; drives backoff, reset on a success |
+| `last_polled_at` | **†** `timestamptz` | NULL | Written on every attempt so a page can say how stale it is |
+| `requested_reason` | **†** `text` | NULL, CHECK `char_length <= 500` | The contract's `reason` (API_CONTRACTS §21.2), which this table had no column for. Audited by its length only. *Found while writing migration `0015`* |
+
+- `CREATE UNIQUE INDEX uq_deployments_single_inflight ON deployments (application_id, environment) WHERE execution_status IN ('REQUESTED','AWAITING_APPROVAL','APPROVED','QUEUED','RUNNING')` — **one active deployment per application and environment is a storage guarantee**, not a check that races (`OPEN-135`).
+- Poller index: `(next_poll_at) WHERE execution_status IN ('QUEUED','RUNNING')`.
+- **The target key is composite:** `FOREIGN KEY (deployment_target_id, application_id, environment) REFERENCES deployment_targets (id, application_id, environment) ON DELETE RESTRICT`, with `uq_deployment_targets_id_application_id_environment` added to `deployment_targets` for it to point at. A deployment therefore cannot name another application's target, nor store an environment that is not its target's — the stored environment is the authorisation basis for reading it, so it must be the pipeline's, not merely claimed (found while writing the schema tests; a † beyond `OPEN-135` as first written).
+- Further CHECKs: `char_length(requested_ref) BETWEEN 1 AND 200`; `commit_sha ~ '^[0-9a-f]{7,40}$'`; `pipeline_reference` obeys the job-path grammar (as the target's); `target_digest ~ '^[0-9a-f]{64}$'`; a `FAILED` row has a `failure_reason` and no other row does; a terminal row (`SUCCEEDED`, `FAILED`, `CANCELLED`, `ROLLED_BACK`) has `completed_at`. The column lengths (`requested_ref` 200, `commit_sha` 40, `target_digest` 64) refuse an over-long value as a `DataError` before any CHECK.
+- `CHECK (execution_status NOT IN ('RUNNING','SUCCEEDED') OR external_execution_id IS NOT NULL)` — a build in progress or finished has its build number.
+- `health_check_result` for a `SUCCEEDED` row is **never a bare `{}`**: with no checks configured the application records `{"policy":"all_must_pass","configured":false,"checks":[],"passed":true}` (`OPEN-138`); the existing `<> '{}'` CHECK stays.
+
 - `UNIQUE (requested_by, idempotency_key)`.
 - `CHECK (execution_status <> 'SUCCEEDED' OR health_check_result <> '{}')` — the schema itself refuses a success with no health-check evidence (AD-10, mandatory rule 8). *(Accepted limitation: this enforces presence, not pass/fail; the pass/fail invariant is enforced in the state machine and tested.)*
 - `CHECK ((kind = 'ROLLBACK') = (rollback_of_deployment_id IS NOT NULL))`.

@@ -116,6 +116,20 @@ def create_celery_app() -> Celery:
                 "schedule": 30.0,
                 "options": {"queue": "maintenance"},
             },
+            # M5.2 (OPEN-136). Leases the deployments whose next look has come: one tick is a
+            # batch of reads. Ten seconds is the latency a finished build can add.
+            "poll-due-deployments": {
+                "task": "dcp.deployments.poll_due",
+                "schedule": 10.0,
+                "options": {"queue": "deployments"},
+            },
+            # M5.2 (OPEN-136). Ends a deployment at its deadline and hands an unclaimed one back
+            # to the queue. On maintenance so a saturated deployments queue cannot stop it.
+            "reap-deployments": {
+                "task": "dcp.deployments.reap",
+                "schedule": 30.0,
+                "options": {"queue": "maintenance"},
+            },
             # M4.6 (OPEN-112). Deletes an export nobody downloaded after 24 hours and fails one a
             # dead worker abandoned, which would otherwise block its requester for good.
             "sweep-audit-exports": {
@@ -136,6 +150,7 @@ def create_celery_app() -> Celery:
             "app.workers.tasks.monitoring",
             "app.workers.tasks.notifications",
             "app.workers.tasks.operations",
+            "app.workers.tasks.deployments",
             "app.workers.tasks.cloud",
             "app.workers.tasks.audit",
         ),

@@ -332,3 +332,37 @@ def test_the_jenkins_error_does_not_echo_the_url_or_reference(
     with pytest.raises(ConfigurationError) as caught:
         load_settings()
     assert "canary-token-value-xyz" not in str(caught.value)
+
+
+# --- the deployment deadline (M5.2, OPEN-136) ----------------------------------------------
+
+
+def test_the_deployment_deadline_defaults_to_an_hour(settings: Settings) -> None:
+    assert settings.deployment_deadline_seconds == 3_600
+
+
+@pytest.mark.parametrize("value", ["60", "3600", "21600"])
+def test_a_deadline_inside_the_bounds_loads(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("DCP_DEPLOYMENT_DEADLINE_SECONDS", value)
+    assert load_settings().deployment_deadline_seconds == int(value)
+
+
+@pytest.mark.parametrize("value", ["59", "21601", "0", "-1", "abc", "36.5", "1e3", " "])
+def test_a_deadline_outside_the_bounds_does_not_start(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Validated at start-up: a deadline nobody intended must not become every row's deadline."""
+    monkeypatch.setenv("DCP_DEPLOYMENT_DEADLINE_SECONDS", value)
+    with pytest.raises(ConfigurationError) as caught:
+        load_settings()
+    assert "deadline" in str(caught.value).lower()
+
+
+def test_the_setting_mirrors_the_state_machines_bounds() -> None:
+    """``core`` does not import a feature package, so the literals are copied and pinned here."""
+    from app.deployments import states
+
+    field = Settings.model_fields["deployment_deadline_seconds"]
+    bounds = {type(m).__name__: getattr(m, type(m).__name__.lower()) for m in field.metadata}
+    assert field.default == states.DEFAULT_DEADLINE_SECONDS
+    assert bounds == {"Ge": states.MIN_DEADLINE_SECONDS, "Le": states.MAX_DEADLINE_SECONDS}

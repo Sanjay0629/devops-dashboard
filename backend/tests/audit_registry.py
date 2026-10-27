@@ -80,6 +80,8 @@ REGISTRY: dict[tuple[str, str], Entry] = {
     ("POST", "/api/v1/deployment-targets"): driven("DEPLOYMENT_TARGET_REGISTERED"),
     ("PATCH", "/api/v1/deployment-targets/{target_id}"): driven("DEPLOYMENT_TARGET_CHANGED"),
     ("DELETE", "/api/v1/deployment-targets/{target_id}"): driven("DEPLOYMENT_TARGET_RETIRED"),
+    ("POST", "/api/v1/deployments"): driven("DEPLOYMENT_REQUESTED"),
+    ("POST", "/api/v1/deployments/{deployment_id}/cancel"): driven("DEPLOYMENT_CANCELLED"),
     ("POST", "/api/v1/cloud-accounts"): elsewhere(
         "test_cloud_accounts_admin.py::test_an_aws_account_is_registered_with_a_role_arn_and_shows_no_secret",
         "CLOUD_ACCOUNT_REGISTERED",

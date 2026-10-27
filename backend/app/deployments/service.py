@@ -23,7 +23,7 @@ from app.approvals.models import ENVIRONMENTS, ApprovalPolicy
 from app.authz.matcher import Target
 from app.core.config import get_settings
 from app.core.errors import AppError, FieldValidationError
-from app.deployments.models import DeploymentTarget
+from app.deployments.models import Deployment, DeploymentTarget
 from app.deployments.schemas import (
     JenkinsConfiguration,
     TargetCreate,
@@ -32,10 +32,12 @@ from app.deployments.schemas import (
     TargetUpdate,
     cross_field_problems,
 )
+from app.deployments.states import IN_FLIGHT
 from app.deployments.template import ParameterTemplate
 from app.inventory.models import Application
 from app.inventory.service import (
     DuplicateResourceError,
+    InvalidStateTransitionError,
     NotFoundError,
     _idempotency_conflict,
     get_application,
@@ -268,7 +270,23 @@ async def update_target(
 
 
 async def retire_target(db: AsyncSession, target: DeploymentTarget) -> DeploymentTarget:
-    """§21.12: soft delete. The in-flight-deployment guard arrives with ``deployments`` (M5.2)."""
+    """§21.12: soft delete, refused while a deployment through this target is not finished.
+
+    A row nobody can finish honestly would hold the application's one slot: the worker
+    re-validates the target and would refuse it (``OPEN-141``).
+    """
+    live = await db.execute(
+        select(Deployment.id)
+        .where(
+            Deployment.deployment_target_id == target.id,
+            Deployment.execution_status.in_(IN_FLIGHT),
+        )
+        .limit(1)
+    )
+    if live.first() is not None:
+        raise InvalidStateTransitionError(
+            "A deployment through this target has not finished; retire the target after it has."
+        )
     target.status = "DISABLED"
     target.deleted_at = datetime.now(UTC)
     await db.flush()

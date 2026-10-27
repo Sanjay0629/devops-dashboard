@@ -44,14 +44,14 @@ from app.alerts import queries as alert_queries
 from app.audit.models import AuditEvent
 from app.auth.models import User
 from app.authz.matcher import Grant, normalise_scope
-from app.authz.queries import readable_operations, readable_servers
+from app.authz.queries import readable_deployments, readable_operations, readable_servers
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.pagination import Cursor, encode_cursor
 from app.core.redis import get_redis
 from app.dashboard.schemas import (
     ALERTS_NOT_PERMITTED,
-    DEPLOYMENTS_REASON,
+    DEPLOYMENTS_FILTER_REASON,
     UTILISATION_REASON,
     ActiveAlertsSection,
     DashboardFilters,
@@ -59,7 +59,8 @@ from app.dashboard.schemas import (
     DashboardSummary,
     FailedServicesSection,
     HealthChange,
-    RecentActivitySection,
+    RecentDeployment,
+    RecentDeploymentsSection,
     RecentHealthChangesSection,
     RecentOperation,
     RecentOperationsSection,
@@ -68,7 +69,8 @@ from app.dashboard.schemas import (
     ServerHealthRow,
     UtilisationSection,
 )
-from app.inventory.models import CloudAccount, Server, Service
+from app.deployments.models import Deployment
+from app.inventory.models import Application, CloudAccount, Server, Service
 from app.inventory.queries import SERVER_SORTS, server_filter_conditions
 from app.inventory.schemas import CursorPage
 from app.monitoring.health import HealthState
@@ -131,7 +133,7 @@ class DashboardFilterSet:
         ]
 
 
-_SCOPE_GRANTS = frozenset({("server", "read"), ("operation", "read")})
+_SCOPE_GRANTS = frozenset({("server", "read"), ("operation", "read"), ("deployment", "read")})
 
 
 def _scope_fingerprint(grants: Sequence[Grant]) -> str:
@@ -159,6 +161,7 @@ def _scope_fingerprint(grants: Sequence[Grant]) -> str:
         for grant in grants
         # ``operation:read`` is digested too (M4.6): ``recent_operations`` is scoped by it, and
         # two callers who read the same servers but different operations must not share an entry.
+        # So is ``deployment:read`` (M5.2) for ``recent_deployments``.
         if (grant.resource_type, grant.action) in _SCOPE_GRANTS
     )
     payload = json.dumps(relevant, separators=(",", ":"), default=str)
@@ -400,6 +403,64 @@ async def _recent_operations(
     )
 
 
+#: How many deployments the dashboard lists.
+_RECENT_DEPLOYMENTS_LIMIT = 10
+
+
+async def _recent_deployments(
+    db: AsyncSession, grants: Sequence[Grant], filters: DashboardFilterSet, collected_at: datetime
+) -> RecentDeploymentsSection:
+    """The latest deployments ``deployment:read`` reaches (``OPEN-140``), newest first.
+
+    Scope is the stored environment and application (``readable_deployments``). Of the dashboard's
+    filters, ``environment`` and ``application_id`` apply; the other four describe a *server*, and
+    a deployment has none, so with one of them set the section says it cannot answer instead of
+    listing nothing. Not "and the caller's own": the dashboard cache is keyed by scope, and a row
+    visible to one person only would leak through it.
+    """
+    if filters.provider or filters.region or filters.operating_system or filters.owner_team:
+        return RecentDeploymentsSection(
+            data_state="unavailable",
+            source="postgresql",
+            unavailable_reason=DEPLOYMENTS_FILTER_REASON,
+        )
+    statement = (
+        select(Deployment, Application.name, User.display_name)
+        .join(Application, Application.id == Deployment.application_id)
+        .join(User, User.id == Deployment.requested_by)
+        .where(readable_deployments(grants, "deployment", "read"))
+    )
+    if filters.environment:
+        statement = statement.where(Deployment.environment.in_(filters.environment))
+    if filters.application_id:
+        statement = statement.where(Deployment.application_id.in_(filters.application_id))
+    rows: Sequence[Any] = (
+        await db.execute(
+            statement.order_by(Deployment.created_at.desc(), Deployment.id.desc()).limit(
+                _RECENT_DEPLOYMENTS_LIMIT
+            )
+        )
+    ).all()
+    return RecentDeploymentsSection(
+        items=[
+            RecentDeployment(
+                deployment_id=deployment.id,
+                application_id=deployment.application_id,
+                application_name=application,
+                environment=deployment.environment,
+                requested_ref=deployment.requested_ref,
+                execution_status=deployment.execution_status,
+                requested_by=ActorView(id=deployment.requested_by, display_name=requester),
+                created_at=deployment.created_at,
+            )
+            for deployment, application, requester in rows
+        ],
+        data_state="ok",
+        collected_at=collected_at,
+        source="postgresql",
+    )
+
+
 async def _alerts_section(
     db: AsyncSession, grants: Sequence[Grant], filters: DashboardFilterSet
 ) -> ActiveAlertsSection:
@@ -464,9 +525,7 @@ async def summary(
             source="postgresql",
         ),
         active_alerts=await _alerts_section(db, grants, filters),
-        recent_deployments=RecentActivitySection(
-            data_state="not_configured", unavailable_reason=DEPLOYMENTS_REASON
-        ),
+        recent_deployments=await _recent_deployments(db, grants, filters, collected_at),
         recent_operations=await _recent_operations(db, grants, filters, collected_at),
         recent_health_changes=changes,
         filters_applied=filters.echoed(),

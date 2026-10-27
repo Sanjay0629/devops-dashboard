@@ -74,6 +74,18 @@ const APPEARANCE: Record<string, { glyph: string; label: string; colour: string 
   SENT: { glyph: '●', label: 'Sent', colour: 'var(--c-healthy)' },
   ABANDONED: { glyph: '✕', label: 'Gave up (retries used)', colour: 'var(--c-critical)' },
 
+  // Deployment and operation lifecycle (`execution_status`, M4.2 / M5.2). Waiting states are
+  // neutral, a build in flight is attention-coloured, and only SUCCEEDED is drawn as healthy:
+  // a success is a claim, so nothing else may borrow its look. ROLLED_BACK is not a success.
+  REQUESTED: { glyph: '◌', label: 'Requested', colour: 'var(--c-unknown)' },
+  AWAITING_APPROVAL: { glyph: '◔', label: 'Awaiting approval', colour: 'var(--c-warning)' },
+  APPROVED: { glyph: '◔', label: 'Approved', colour: 'var(--c-unknown)' },
+  QUEUED: { glyph: '◔', label: 'Queued in Jenkins', colour: 'var(--c-unknown)' },
+  RUNNING: { glyph: '▶', label: 'Running', colour: 'var(--c-warning)' },
+  SUCCEEDED: { glyph: '●', label: 'Succeeded', colour: 'var(--c-healthy)' },
+  CANCELLED: { glyph: '—', label: 'Cancelled', colour: 'var(--c-unknown)' },
+  ROLLED_BACK: { glyph: '↺', label: 'Rolled back', colour: 'var(--c-stale)' },
+
   // Application status.
   ACTIVE: { glyph: '●', label: 'Active', colour: 'var(--c-healthy)' },
   ARCHIVED: { glyph: '—', label: 'Archived', colour: 'var(--c-unknown)' },

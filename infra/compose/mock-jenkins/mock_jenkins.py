@@ -16,6 +16,8 @@ Modes (``mode``): ``ok``; ``outage`` (every call ``503``); ``slow`` (each call w
 seconds); ``queue_cancelled``; ``build_failure``; ``lose_queue_item`` (the queue item ``404``s, as
 Jenkins' does once an item leaves its queue); ``redirect`` (``buildWithParameters`` answers ``302``
 to the cloud metadata address, which a client must not follow).
+``hide_parameters`` (M5.2): the queue and build lists carry no parameters, as a Jenkins without the
+plugin that exposes them would -- DCP's reconciliation then finds nothing and must say so.
 Crumb (``crumb``): ``off`` (no issuer, ``404``); ``issue`` (issued, not enforced); ``enforce``
 (issued, and a POST without it is ``403``).
 """
@@ -45,6 +47,7 @@ MODES = {
     "build_failure",
     "lose_queue_item",
     "redirect",
+    "hide_parameters",
 }
 CRUMBS = {"off", "issue", "enforce"}
 
@@ -142,6 +145,8 @@ class MockJenkins:
             return self._reply("200 OK", {"crumb": CRUMB_VALUE, "crumbRequestField": CRUMB_FIELD})
         if match := re.fullmatch(r"/queue/item/(\d+)/api/json", path):
             return self._queue_item(int(match.group(1)))
+        if path == "/queue/api/json":
+            return self._queue_list()
         job = re.fullmatch(rf"((?:/job/{JOB_SEGMENT})+)(/.*)", path)
         if job is None:
             return self._reply("404 Not Found", text="not found")
@@ -151,6 +156,8 @@ class MockJenkins:
         rest = job.group(2)
         if rest == "/buildWithParameters" and method == "POST":
             return self._trigger(environ, job_path, params)
+        if rest == "/api/json":
+            return self._builds(job_path)
         if match := re.fullmatch(r"/(\d+)/api/json", rest):
             return self._build(job_path, int(match.group(1)))
         if match := re.fullmatch(r"/(\d+)/logText/progressiveText", rest):
@@ -195,12 +202,7 @@ class MockJenkins:
             item["reads"] += 1
             if item["reads"] <= self.queue_polls:
                 return self._reply("200 OK", {"cancelled": False, "why": "waiting", "id": queue_id})
-            if "build" not in item:
-                number = self.next_build.get(item["job"], 0) + 1
-                self.next_build[item["job"]] = number
-                item["build"] = number
-                self.builds[(item["job"], number)] = {"reads": 0, "params": item["params"]}
-            number = item["build"]
+            number = self._start(item)
         return self._reply(
             "200 OK",
             {
@@ -209,6 +211,57 @@ class MockJenkins:
                 "executable": {"number": number, "url": f"/job/{item['job']}/{number}/"},
             },
         )
+
+    def _start(self, item: dict[str, Any]) -> int:
+        """The item leaves the queue and becomes a build. Called with the lock held."""
+        if "build" not in item:
+            number = self.next_build.get(item["job"], 0) + 1
+            self.next_build[item["job"]] = number
+            item["build"] = number
+            self.builds[(item["job"], number)] = {"reads": 0, "params": item["params"]}
+        return int(item["build"])
+
+    def _actions(self, params: dict[str, str]) -> list[dict[str, Any]]:
+        """How Jenkins lists a build's parameters (``hide_parameters``: it does not)."""
+        if self.mode == "hide_parameters":
+            return [{"_class": "hudson.model.CauseAction"}]
+        return [
+            {
+                "_class": "hudson.model.ParametersAction",
+                "parameters": [
+                    {"_class": "hudson.model.StringParameterValue", "name": k, "value": v}
+                    for k, v in params.items()
+                ],
+            }
+        ]
+
+    def _queue_list(self) -> tuple[str, dict[str, str], bytes]:
+        """``/queue/api/json``: the items still waiting. One that was lost left the queue."""
+        with self._lock:
+            items = [
+                {"id": queue_id, "actions": self._actions(item["params"])}
+                for queue_id, item in sorted(self.queue.items())
+                if "build" not in item and self.mode != "lose_queue_item"
+            ]
+        return self._reply("200 OK", {"items": items})
+
+    def _builds(self, job_path: str) -> tuple[str, dict[str, str], bytes]:
+        """``/job/.../api/json``: recent builds, newest first.
+
+        In ``lose_queue_item`` an item that was waiting has, by now, started a build -- which is
+        what losing a queue item means -- so it appears here and not in the queue.
+        """
+        with self._lock:
+            if self.mode == "lose_queue_item":
+                for item in self.queue.values():
+                    if item["job"] == job_path:
+                        self._start(item)
+            builds = [
+                {"number": number, "actions": self._actions(build["params"])}
+                for (job, number), build in sorted(self.builds.items(), reverse=True)
+                if job == job_path
+            ]
+        return self._reply("200 OK", {"builds": builds})
 
     def _build(self, job_path: str, number: int) -> tuple[str, dict[str, str], bytes]:
         with self._lock:

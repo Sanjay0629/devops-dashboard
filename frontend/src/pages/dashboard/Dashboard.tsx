@@ -4,8 +4,7 @@
  * **What this page is about is what it does not know.** Four sections have a
  * source: the registration-status counts and the failed-unit count (both out
  * of PostgreSQL), the host-health rollup (from `last_seen_at`, M2.5) and the
- * recent health changes (from the audit trail). Utilisation, alerts and the
- * other two recent-activity lists have none, and render as "Not configured"
+ * recent health changes (from the audit trail). Utilisation has none and renders as "Not configured"
  * with the milestone that will fill them. A value that is absent is never
  * rendered as `0`: PRD §4.2 makes "must not silently replace unavailable data
  * with zero values" an acceptance criterion, and a zero on a dashboard is a
@@ -183,6 +182,51 @@ function HealthChanges({
         </li>
       ))}
     </ul>
+  );
+}
+
+function RecentDeployments({
+  section,
+}: {
+  section: DashboardSummary['recent_deployments'];
+}): React.JSX.Element {
+  const items = section.items;
+  // `null` is "cannot be answered" (a server-only filter is applied, say): never "none".
+  if (items == null) return <DataStateBanner section={section} />;
+  if (items.length === 0) {
+    // A real list from a real table, so "none" is true: none that this access scope reaches.
+    return (
+      <p className="text-sm" style={{ color: 'var(--c-text-muted)' }}>
+        No deployments within your access scope.
+      </p>
+    );
+  }
+  return (
+    <>
+      <ul className="space-y-1 text-sm">
+        {items.map((deployment) => (
+          <li key={deployment.deployment_id}>
+            <Link to={`/deployments/${deployment.deployment_id}`} className="underline">
+              {deployment.application_name} to {deployment.environment}
+            </Link>{' '}
+            <code className="text-xs">{deployment.requested_ref}</code>{' '}
+            <StatusBadge value={deployment.execution_status} />{' '}
+            <time
+              dateTime={deployment.created_at}
+              className="text-xs"
+              style={{ color: 'var(--c-text-muted)' }}
+            >
+              {new Date(deployment.created_at).toLocaleString()}
+            </time>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1 text-xs">
+        <Link to="/deployments" className="underline">
+          All deployments
+        </Link>
+      </p>
+    </>
   );
 }
 
@@ -519,9 +563,7 @@ export function Dashboard(): React.JSX.Element {
               <h3 className="mb-1 text-sm" style={{ color: 'var(--c-text-muted)' }}>
                 Deployments
               </h3>
-              {/* `items` is null, never []. An empty list here would claim nothing has
-                  happened; there is no table to ask. */}
-              <DataStateBanner section={summary.value.recent_deployments} />
+              <RecentDeployments section={summary.value.recent_deployments} />
             </div>
             <div>
               <h3 className="mb-1 text-sm" style={{ color: 'var(--c-text-muted)' }}>

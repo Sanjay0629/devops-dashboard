@@ -758,6 +758,70 @@ export interface paths {
     patch: operations['update_target_api_v1_deployment_targets__target_id__patch'];
     trace?: never;
   };
+  '/api/v1/deployments': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Deployment history
+     * @description §21.1. Your own requests, plus those you may read; filters never widen that.
+     */
+    get: operations['list_deployments_api_v1_deployments_get'];
+    put?: never;
+    /**
+     * Request a deployment
+     * @description §21.2. ``202`` for a new deployment, ``200`` for an idempotent replay.
+     */
+    post: operations['request_deployment_api_v1_deployments_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/deployments/{deployment_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Deployment status
+     * @description §21.3. Unknown, or out of scope for a caller who is not the requester ⇒ ``404``.
+     */
+    get: operations['read_deployment_api_v1_deployments__deployment_id__get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/deployments/{deployment_id}/cancel': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Cancel before execution
+     * @description §21.6. Legal only from ``REQUESTED``; a queued or running one is ``409``.
+     */
+    post: operations['cancel_deployment_api_v1_deployments__deployment_id__cancel_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/integrations/status': {
     parameters: {
       query?: never;
@@ -1970,6 +2034,24 @@ export interface components {
       page: components['schemas']['CursorPage'];
     };
     /**
+     * ApprovalPending
+     * @description The pending approval (M5.4). Always ``null`` in M5.2: nothing is queued behind one.
+     */
+    ApprovalPending: {
+      /**
+       * Approval Id
+       * Format: uuid
+       */
+      approval_id: string;
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /** Required Approvals */
+      required_approvals: number;
+    };
+    /**
      * ApprovalSummary
      * @description The operation's approval request (M4.5); ``null`` on an operation that never needed one.
      */
@@ -2416,7 +2498,7 @@ export interface components {
       demo_mode: boolean;
       failed_services: components['schemas']['FailedServicesSection'];
       filters_applied: components['schemas']['DashboardFilters'];
-      recent_deployments: components['schemas']['RecentActivitySection'];
+      recent_deployments: components['schemas']['RecentDeploymentsSection'];
       recent_health_changes: components['schemas']['RecentHealthChangesSection'];
       recent_operations: components['schemas']['RecentOperationsSection'];
       server_health: components['schemas']['ServerHealthRollup'];
@@ -2507,6 +2589,242 @@ export interface components {
        * @enum {string}
        */
       status: 'PENDING' | 'SENT' | 'FAILED' | 'ABANDONED';
+    };
+    /**
+     * DeploymentAccepted
+     * @description §21.2. ``200`` on an idempotent replay, ``202`` otherwise.
+     */
+    DeploymentAccepted: {
+      approval?: components['schemas']['ApprovalPending'] | null;
+      /**
+       * Approval Status
+       * @enum {string}
+       */
+      approval_status: 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+      /**
+       * Correlation Id
+       * Format: uuid
+       */
+      correlation_id: string;
+      /**
+       * Deadline At
+       * Format: date-time
+       */
+      deadline_at: string;
+      /**
+       * Deployment Id
+       * Format: uuid
+       */
+      deployment_id: string;
+      /**
+       * Execution Status
+       * @enum {string}
+       */
+      execution_status:
+        | 'REQUESTED'
+        | 'AWAITING_APPROVAL'
+        | 'APPROVED'
+        | 'QUEUED'
+        | 'RUNNING'
+        | 'SUCCEEDED'
+        | 'FAILED'
+        | 'CANCELLED'
+        | 'ROLLED_BACK';
+      /** Idempotent Replay */
+      idempotent_replay: boolean;
+      /** Poll After Seconds */
+      poll_after_seconds: number | null;
+      target: components['schemas']['TargetEcho'];
+    };
+    /**
+     * DeploymentDetail
+     * @description §21.3.
+     */
+    DeploymentDetail: {
+      /**
+       * Application Id
+       * Format: uuid
+       */
+      application_id: string;
+      /** Application Name */
+      application_name: string;
+      /**
+       * Approval Status
+       * @enum {string}
+       */
+      approval_status: 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+      /** Approvals */
+      approvals?: {
+        [key: string]: unknown;
+      }[];
+      /** Commit Sha */
+      commit_sha: string | null;
+      /** Completed At */
+      completed_at: string | null;
+      /**
+       * Correlation Id
+       * Format: uuid
+       */
+      correlation_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Deadline At
+       * Format: date-time
+       */
+      deadline_at: string;
+      /**
+       * Deployment Id
+       * Format: uuid
+       */
+      deployment_id: string;
+      /** Environment */
+      environment: string;
+      /**
+       * Execution Status
+       * @enum {string}
+       */
+      execution_status:
+        | 'REQUESTED'
+        | 'AWAITING_APPROVAL'
+        | 'APPROVED'
+        | 'QUEUED'
+        | 'RUNNING'
+        | 'SUCCEEDED'
+        | 'FAILED'
+        | 'CANCELLED'
+        | 'ROLLED_BACK';
+      /** External Execution Id */
+      external_execution_id: string | null;
+      /** Failure Reason */
+      failure_reason: string | null;
+      /** Health Check Result */
+      health_check_result?: {
+        [key: string]: unknown;
+      };
+      /**
+       * Kind
+       * @enum {string}
+       */
+      kind: 'DEPLOY' | 'ROLLBACK';
+      /** Last Poll Error */
+      last_poll_error: string | null;
+      /** Last Polled At */
+      last_polled_at: string | null;
+      /** Pipeline Result */
+      pipeline_result: ('SUCCESS' | 'FAILURE' | 'UNSTABLE' | 'ABORTED' | 'NOT_BUILT') | null;
+      /** Poll After Seconds */
+      poll_after_seconds: number | null;
+      requested_by: components['schemas']['ActorView'];
+      /** Requested Reason */
+      requested_reason: string | null;
+      /** Requested Ref */
+      requested_ref: string;
+      /** Rollback Of Deployment Id */
+      rollback_of_deployment_id: string | null;
+      /** Sanitized Result */
+      sanitized_result?: {
+        [key: string]: unknown;
+      };
+      /** Started At */
+      started_at: string | null;
+      target: components['schemas']['TargetEcho'];
+    };
+    /**
+     * DeploymentItem
+     * @description One row of §21.1. No result, no poll error, no template: those are §21.3's.
+     */
+    DeploymentItem: {
+      /**
+       * Application Id
+       * Format: uuid
+       */
+      application_id: string;
+      /** Application Name */
+      application_name: string;
+      /**
+       * Approval Status
+       * @enum {string}
+       */
+      approval_status: 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+      /** Commit Sha */
+      commit_sha: string | null;
+      /** Completed At */
+      completed_at: string | null;
+      /**
+       * Correlation Id
+       * Format: uuid
+       */
+      correlation_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Deadline At
+       * Format: date-time
+       */
+      deadline_at: string;
+      /**
+       * Deployment Id
+       * Format: uuid
+       */
+      deployment_id: string;
+      /** Environment */
+      environment: string;
+      /**
+       * Execution Status
+       * @enum {string}
+       */
+      execution_status:
+        | 'REQUESTED'
+        | 'AWAITING_APPROVAL'
+        | 'APPROVED'
+        | 'QUEUED'
+        | 'RUNNING'
+        | 'SUCCEEDED'
+        | 'FAILED'
+        | 'CANCELLED'
+        | 'ROLLED_BACK';
+      /** Failure Reason */
+      failure_reason: string | null;
+      /**
+       * Kind
+       * @enum {string}
+       */
+      kind: 'DEPLOY' | 'ROLLBACK';
+      requested_by: components['schemas']['ActorView'];
+      /** Requested Ref */
+      requested_ref: string;
+      /** Started At */
+      started_at: string | null;
+    };
+    /** DeploymentList */
+    DeploymentList: {
+      /** Items */
+      items: components['schemas']['DeploymentItem'][];
+      page: components['schemas']['CursorPage'];
+    };
+    /** DeploymentRequest */
+    DeploymentRequest: {
+      /**
+       * Application Id
+       * Format: uuid
+       */
+      application_id: string;
+      /**
+       * Environment
+       * @enum {string}
+       */
+      environment: 'development' | 'staging' | 'production' | 'other';
+      /** Reason */
+      reason?: string | null;
+      /** Ref */
+      ref: string;
     };
     /**
      * DeploymentTargetsSection
@@ -3662,14 +3980,46 @@ export interface components {
       status: string;
     };
     /**
-     * RecentActivitySection
-     * @description A recent-activity list whose table does not exist yet.
-     *
-     *     ``items`` is ``null``, never ``[]``: "we have no record" and "nothing
-     *     happened" are different answers and the operator has to be able to tell
-     *     them apart.
+     * RecentDeployment
+     * @description One deployment on the dashboard (§13.1). The reason, the result and the build are §21.3's.
      */
-    RecentActivitySection: {
+    RecentDeployment: {
+      /**
+       * Application Id
+       * Format: uuid
+       */
+      application_id: string;
+      /** Application Name */
+      application_name: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Deployment Id
+       * Format: uuid
+       */
+      deployment_id: string;
+      /** Environment */
+      environment: string;
+      /** Execution Status */
+      execution_status: string;
+      requested_by: components['schemas']['ActorView'];
+      /** Requested Ref */
+      requested_ref: string;
+    };
+    /**
+     * RecentDeploymentsSection
+     * @description The caller's most recent deployments (M5.2, ``OPEN-140``): a real list, so ``[]`` is true.
+     *
+     *     ``[]`` means "nothing happened that you may see" and is distinct from ``not_configured`` with
+     *     ``null``. The rows are the ones ``deployment:read`` reaches -- **not** "and the caller's own",
+     *     because this section rides a cache keyed by scope and not by person. With a server-only filter
+     *     applied the section is ``unavailable`` with a reason, never ``[]``: an empty list would say
+     *     nothing happened, when the truth is that the question cannot be asked.
+     */
+    RecentDeploymentsSection: {
       /** Collected At */
       collected_at?: string | null;
       /**
@@ -3678,11 +4028,7 @@ export interface components {
        */
       data_state: 'ok' | 'stale' | 'unavailable' | 'unsupported' | 'not_configured';
       /** Items */
-      items?:
-        | {
-            [key: string]: unknown;
-          }[]
-        | null;
+      items?: components['schemas']['RecentDeployment'][] | null;
       /** Source */
       source?: string | null;
       /** Stale After Seconds */
@@ -4729,6 +5075,30 @@ export interface components {
        * Format: date-time
        */
       updated_at: string;
+    };
+    /**
+     * TargetEcho
+     * @description The exact deployment target, shown before and after submission (PRD §4.10).
+     *
+     *     ``pipeline_reference`` is the job path an administrator registered, as §21.8 shows it to any
+     *     reader; it is not a URL and is not built from anything the caller sent.
+     */
+    TargetEcho: {
+      /**
+       * Application Id
+       * Format: uuid
+       */
+      application_id: string;
+      /** Application Name */
+      application_name: string;
+      /** Environment */
+      environment: string;
+      /** Pipeline Reference */
+      pipeline_reference: string;
+      /** Requested Ref */
+      requested_ref: string;
+      /** Rollback Supported */
+      rollback_supported: boolean;
     };
     /** TargetList */
     TargetList: {
@@ -6566,6 +6936,171 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['TargetDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_deployments_api_v1_deployments_get: {
+    parameters: {
+      query?: {
+        application_id?: string | null;
+        environment?: ('development' | 'staging' | 'production' | 'other')[] | null;
+        execution_status?:
+          | (
+              | 'REQUESTED'
+              | 'AWAITING_APPROVAL'
+              | 'APPROVED'
+              | 'QUEUED'
+              | 'RUNNING'
+              | 'SUCCEEDED'
+              | 'FAILED'
+              | 'CANCELLED'
+              | 'ROLLED_BACK'
+            )[]
+          | null;
+        requested_by?: string | null;
+        kind?: ('DEPLOY' | 'ROLLBACK') | null;
+        from?: string | null;
+        to?: string | null;
+        limit?: number;
+        cursor?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeploymentList'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  request_deployment_api_v1_deployments_post: {
+    parameters: {
+      query?: never;
+      header: {
+        /** @description Client-generated key, unique per logical intent (§7). */
+        'Idempotency-Key': string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['DeploymentRequest'];
+      };
+    };
+    responses: {
+      /** @description An idempotent replay: the original deployment, nothing re-run. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeploymentAccepted'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+      /** @description Demonstration mode, no Jenkins, or an approval that cannot be given. */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  read_deployment_api_v1_deployments__deployment_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Deployment identifier */
+        deployment_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeploymentDetail'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  cancel_deployment_api_v1_deployments__deployment_id__cancel_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Deployment identifier */
+        deployment_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeploymentDetail'];
         };
       };
       /** @description Validation Error */
