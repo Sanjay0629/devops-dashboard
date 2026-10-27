@@ -62,6 +62,7 @@ export DCP_HEALTH_THRESHOLDS='{"default":{"warning_after_seconds":30,"stale_afte
 # private address, so the SSRF policy is configured to allow exactly that host and the Docker
 # bridge ranges; the retry delays are short so "four attempts, then abandoned" is asserted in a
 # minute; and the worker is made to see all of it (the same passthrough proof as above).
+# M5.2, step 18j: the deployment routes over HTTP, and the worker over the same real network path.
 # M5.1, step 18i: the Jenkins client, against the `mock-jenkins` mock (a development aid, NOT Jenkins).
 # Jenkins' host must be on the same allowlist (the app refuses to start otherwise), and its token is a
 # reference, `env://JENKINS_TOKEN`, whose value the mock also accepts.
@@ -1140,6 +1141,40 @@ log "18i. The Jenkins client over the real network path, against the mock (M5.1)
 # Inside the backend container, so it uses the backend's own settings and reaches `mock-jenkins` over
 # the project network. See the script's docstring for what it proves that the unit suite cannot.
 "${COMPOSE[@]}" exec -T backend python - < scripts/smoke_jenkins.py   || { "${COMPOSE[@]}" logs --tail=40 backend mock-jenkins; fail "the Jenkins client assertions failed"; }
+
+log "18j. Deployments: the routes over HTTP, and the worker over the real network path (M5.2)"
+# This stack runs in demonstration mode, so a deployment cannot be *requested* here: that refusal is
+# the honest answer, and the worker test below asserts it. What can be shown over HTTP is that the
+# new routes exist behind the session, the CSRF check and the permission, and that the dashboard's
+# recent_deployments is a real section. The worker is then driven in the backend container.
+authorize_url="$(hop "$FRONTEND/api/v1/auth/login?next=/dashboard")"
+callback_url="$(hop "${authorize_url}&user=admin")"
+hop "$callback_url" >/dev/null
+[[ "$(api /auth/session)" == *"$ADMIN_EMAIL"* ]] || fail "could not log in again for step 18j"
+csrf="$(grep dcp_csrf "$JAR" | awk '{print $NF}')"
+[[ -n "$csrf" ]] || fail "no CSRF cookie in the jar for step 18j"
+deployments_status() {  # method path [json-body]
+  curl -sS -c "$JAR" -b "$JAR" --max-time 20 -o /dev/null -w '%{http_code}' -X "$1" \
+    -H "Origin: $FRONTEND" -H "X-CSRF-Token: $csrf" -H "Content-Type: application/json" \
+    -H "Idempotency-Key: smoke-18j-$RANDOM$RANDOM$RANDOM" \
+    ${3:+--data "$3"} "$FRONTEND/api/v1$2"
+}
+list_body="$(api /deployments)" || fail "the deployments list is not reachable"
+grep -q '"items"' <<<"$list_body" || fail "the deployments list has no items field: $list_body"
+summary_body="$(api /dashboard/summary)" || fail "the dashboard summary is not reachable"
+recent="$(grep -o '"recent_deployments":{.*"recent_operations"' <<<"$summary_body" || true)"
+grep -q '"data_state":"ok"' <<<"$recent" && ! grep -q 'not_configured' <<<"$recent" \
+  || fail "recent_deployments is not a real section: $recent"
+missing="00000000-0000-4000-8000-000000000e18"
+[[ "$(deployments_status GET "/deployments/$missing")" == "404" ]] || fail "an unknown deployment is not 404"
+[[ "$(deployments_status POST /deployments "{\"application_id\":\"$missing\",\"environment\":\"staging\",\"ref\":\"main\"}")" == "404" ]] \
+  || fail "a deployment of an unknown application is not 404"
+[[ "$(deployments_status POST /deployments "{\"application_id\":\"$missing\",\"environment\":\"staging\",\"ref\":\"main\",\"jenkins_url\":\"http://evil.example/\"}")" == "422" ]] \
+  || fail "a request carrying a Jenkins URL was not refused with 422"
+[[ "$(deployments_status POST "/deployments/$missing/cancel")" == "404" ]] || fail "cancelling an unknown deployment is not 404"
+printf 'deployment routes answer over HTTP; the dashboard section is real\n'
+"${COMPOSE[@]}" exec -T backend python - < scripts/smoke_deployment.py \
+  || { "${COMPOSE[@]}" logs --tail=40 backend worker mock-jenkins; fail "the deployment worker assertions failed"; }
 
 log "19. A database outage degrades honestly, with no zeros (§11.10)"
 "${COMPOSE[@]}" stop postgres >/dev/null
