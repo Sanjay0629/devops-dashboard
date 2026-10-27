@@ -15,7 +15,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.db.base import all_models
 from app.deployments import policy, states
-from app.deployments.store import transition_statement
+from app.deployments.store import poll_statement, transition_statement
 
 all_models()
 ID = uuid.uuid4()
@@ -168,3 +168,73 @@ def test_the_settable_fields_are_exactly_the_documented_ones() -> None:
         "approval_status",
     }
     assert expected == _SETTABLE
+
+
+# --- poll_after_seconds: a move that keeps the row in flight ----------------------------------
+
+
+def test_a_claim_schedules_the_next_look_and_clears_the_failure_counters() -> None:
+    statement = transition_statement(ID, "REQUESTED", "QUEUED", poll_after_seconds=60)
+    sql = _sql(statement).replace(" ", "")
+    assert "next_poll_at=(now()+" in sql and "poll_attempts=" in sql and "last_poll_error=" in sql
+    params = _params(statement)
+    assert params["poll_attempts"] == 0 and params["last_poll_error"] is None
+
+
+def test_a_finished_deployment_cannot_be_scheduled() -> None:
+    with pytest.raises(ValueError, match="not polled"):
+        transition_statement(ID, "REQUESTED", "CANCELLED", poll_after_seconds=5)
+
+
+# --- poll_statement: keeps the status ---------------------------------------------------------
+
+
+def test_a_poll_statement_is_guarded_by_the_status_it_expects_and_never_moves_it() -> None:
+    statement = poll_statement(ID, "RUNNING", delay_seconds=5)
+    sql = _sql(statement)
+    assert "deployments.execution_status = %(execution_status_1)s" in sql
+    assert _params(statement)["execution_status_1"] == "RUNNING"
+    assigned = sql.replace(" ", "").split("WHERE")[0]
+    assert "execution_status=" not in assigned
+
+
+def test_a_good_poll_resets_the_count_and_a_failed_one_adds_to_it() -> None:
+    good = _params(poll_statement(ID, "RUNNING", delay_seconds=5))
+    assert good["poll_attempts"] == 0 and good["last_poll_error"] is None
+    bad = poll_statement(ID, "RUNNING", delay_seconds=10, error="provider_error", failed=True)
+    assert "poll_attempts=(deployments.poll_attempts+" in _sql(bad).replace(" ", "")
+    assert _params(bad)["last_poll_error"] == "provider_error"
+
+
+@pytest.mark.parametrize("current", ["REQUESTED", "AWAITING_APPROVAL", "APPROVED", "SUCCEEDED"])
+def test_only_queued_and_running_rows_are_polled(current: str) -> None:
+    with pytest.raises(ValueError, match="polled"):
+        poll_statement(ID, current, delay_seconds=5)
+
+
+@pytest.mark.parametrize(
+    "error", ["", "Provider Error", "a sentence from jenkins", "x" * 65, "1abc"]
+)
+def test_a_poll_error_must_be_a_closed_reason_code(error: str) -> None:
+    with pytest.raises(ValueError, match="closed reason"):
+        poll_statement(ID, "RUNNING", delay_seconds=5, error=error, failed=True)
+
+
+def test_a_failed_poll_must_say_why() -> None:
+    with pytest.raises(ValueError, match="names its reason"):
+        poll_statement(ID, "RUNNING", delay_seconds=5, failed=True)
+
+
+def test_the_queue_item_is_recorded_once_and_only_on_a_queued_row() -> None:
+    statement = poll_statement(ID, "QUEUED", delay_seconds=2, queue_item_id=100)
+    assert "deployments.queue_item_id IS NULL" in _sql(statement)
+    assert _params(statement)["queue_item_id"] == 100
+    with pytest.raises(ValueError, match="queued"):
+        poll_statement(ID, "RUNNING", delay_seconds=2, queue_item_id=100)
+
+
+def test_a_poll_can_merge_closed_fields_into_the_result() -> None:
+    statement = poll_statement(
+        ID, "QUEUED", delay_seconds=10, result={"trigger": "outcome_unknown"}
+    )
+    assert _params(statement)["param_1"] == {"trigger": "outcome_unknown"}

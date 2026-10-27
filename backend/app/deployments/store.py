@@ -14,8 +14,10 @@ behind each of them.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Mapping
+from datetime import timedelta
 from typing import Any, Final
 
 from sqlalchemy import Update, func, literal, update
@@ -39,6 +41,7 @@ def transition_statement(
     pipeline_result: str | None = None,
     health_check_result: Mapping[str, Any] | None = None,
     result: Mapping[str, Any] | None = None,
+    poll_after_seconds: int | None = None,
     **fields: Any,
 ) -> Update:
     """``UPDATE deployments … WHERE id = :id AND execution_status = <current> RETURNING id``.
@@ -51,6 +54,8 @@ def transition_statement(
     * ``new = RUNNING`` needs the build number as ``external_execution_id`` and sets ``started_at``.
     * ``result`` is merged into ``sanitized_result`` (closed fields only).
     * A finished row stops being polled: ``next_poll_at`` is cleared and ``completed_at`` set.
+    * ``poll_after_seconds`` is for a move that keeps the row in flight: when the poller may next
+      look, and a clean slate for the failure counters (the move is itself good news).
     """
     states.require_transition(current, new)
     unknown = set(fields) - _SETTABLE
@@ -78,8 +83,15 @@ def transition_statement(
 
     values["execution_status"] = new
     if new in states.TERMINAL:
+        if poll_after_seconds is not None:
+            raise ValueError("a finished deployment is not polled")
         values["completed_at"] = func.now()
         values["next_poll_at"] = None
+    elif poll_after_seconds is not None:
+        values["next_poll_at"] = func.now() + timedelta(seconds=poll_after_seconds)
+        values["poll_attempts"] = 0
+        values["last_poll_error"] = None
+        values["last_polled_at"] = func.now()
     if merged:
         values["sanitized_result"] = Deployment.sanitized_result.op("||", return_type=JSONB)(
             literal(merged, type_=JSONB)
@@ -91,3 +103,48 @@ def transition_statement(
         .values(**values)
         .returning(Deployment.id)
     )
+
+
+_REASON: Final = re.compile(r"[a-z][a-z_]{0,63}")
+
+
+def poll_statement(
+    deployment_id: uuid.UUID,
+    current: str,
+    *,
+    delay_seconds: int,
+    error: str | None = None,
+    failed: bool = False,
+    queue_item_id: int | None = None,
+    result: Mapping[str, Any] | None = None,
+) -> Update:
+    """A move that **keeps** the status: when to look next, and what the last look found.
+
+    Guarded by ``execution_status = current`` (a row the reaper finished meanwhile is not touched).
+    ``failed`` counts a failed read toward the backoff; a good one resets the count. ``error`` is a
+    closed Jenkins reason, never a sentence. ``queue_item_id`` is the recorded answer to a trigger,
+    written only while none is recorded.
+    """
+    if current not in states.POLLED:
+        raise ValueError("only a queued or running deployment is polled")
+    if error is not None and _REASON.fullmatch(error) is None:
+        raise ValueError("error must be a closed reason code")
+    if failed and error is None:
+        raise ValueError("a failed poll names its reason")
+    values: dict[str, Any] = {
+        "next_poll_at": func.now() + timedelta(seconds=delay_seconds),
+        "last_polled_at": func.now(),
+        "last_poll_error": error,
+        "poll_attempts": Deployment.poll_attempts + 1 if failed else 0,
+    }
+    conditions = [Deployment.id == deployment_id, Deployment.execution_status == current]
+    if queue_item_id is not None:
+        if current != states.QUEUED:
+            raise ValueError("a queue item belongs to a queued deployment")
+        values["queue_item_id"] = queue_item_id
+        conditions.append(Deployment.queue_item_id.is_(None))
+    if result:
+        values["sanitized_result"] = Deployment.sanitized_result.op("||", return_type=JSONB)(
+            literal(dict(result), type_=JSONB)
+        )
+    return update(Deployment).where(*conditions).values(**values).returning(Deployment.id)
